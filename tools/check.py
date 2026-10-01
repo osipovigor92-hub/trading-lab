@@ -17,3 +17,4 @@ for component, script in [('scalp-paper','paper.py'),('trading-live','live.py'),
     subprocess.run([sys.executable, str(ROOT/'src'/component/script), '--selftest'], env=env, check=True)
 print('Offline checks passed')
 subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', str(ROOT/'tools'), '-p', 'test_*.py', '-v'], check=True)
+subprocess.run(['node', '--test', str(ROOT/'tools/test_alerts.cjs'), str(ROOT/'tools/test_client.cjs')], check=True)

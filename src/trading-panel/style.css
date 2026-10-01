@@ -114,3 +114,20 @@ footer{margin-top:22px}
 .b-monitor .b-neutral>summary{color:#bbc8dc}.b-monitor .b-quick{font-size:13px;color:#bbc8dc;line-height:1.6;margin-top:8px}
 .b-monitor p{line-height:1.6;overflow-wrap:anywhere}.b-monitor summary:focus-visible{outline:2px solid #8caeff;outline-offset:5px}
 @media(max-width:750px){.b-monitor .b-card{padding:12px}.b-monitor{padding:15px!important}}
+
+/* ALERTS_DASHBOARD_V1 */
+.dashboard-tabs{grid-template-columns:repeat(6,minmax(0,1fr))}
+.alerts-head h2{margin-top:8px}
+.alerts-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:18px 0}
+.alerts-stats>div{border:1px solid var(--line);border-radius:12px;padding:12px;min-width:0}
+.alerts-stats strong,.alerts-stats span{display:block}.alerts-stats strong{font-size:27px;font-variant-numeric:tabular-nums}.alerts-stats span{font-size:12px;color:var(--muted)}
+.alerts-filter,.alerts-clear{font:inherit;color:#e8eef8;background:#17243d;border:1px solid #536684;border-radius:10px;padding:10px 12px;min-height:44px;max-width:100%}
+.alerts-filter:focus-visible,.alerts-clear:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.alerts-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.alert-card{min-width:0;border-left:4px solid #718096}.alert-card h3{margin:8px 0}.alert-label{font-weight:650}
+.alert-long{border-left-color:#63dfae;background:#102822}.alert-long h3{color:#84f2bf}
+.alert-short{border-left-color:#ff8b91;background:#2c1a24}.alert-short h3{color:#ffacb6}
+.alert-watch{border-left-color:#f5c96a;background:#272319}.alert-watch h3{color:#ffdb86}
+.alert-metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px;font-variant-numeric:tabular-nums}.alert-metrics span,.alert-metrics b{display:block;overflow-wrap:anywhere}.alert-metrics span{font-size:12px;color:var(--muted)}.alert-metrics b{font-size:14px;margin-top:4px}
+.alert-event{border-bottom:1px solid var(--line);padding-bottom:10px;font-size:13px}.event-long{color:#84f2bf}.event-short{color:#ffacb6}.event-watch{color:#ffdb86}
+@media(max-width:600px){.dashboard-tabs{grid-template-columns:repeat(3,minmax(0,1fr));position:static}.alerts-list{grid-template-columns:1fr}.alerts-stats>div{padding:10px 8px}.alert-metrics{gap:10px}}

@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   h.textContent='Модель '+model;root.append(h,status,body);box.append(root);
   async function refresh(){
    try{
-    const response=await fetch('/api/journal-'+model.toLowerCase(),{cache:'no-store',signal:AbortSignal.timeout(8000)});
+    const response=await labFetch('/api/journal-'+model.toLowerCase(),{cache:'no-store',signal:AbortSignal.timeout(8000)});
     if(!response.ok)throw new Error('HTTP '+response.status);const s=await response.json(),now=Date.now()/1000;
     const reportFresh=now-s.updated>=-3&&now-s.updated<=150;
     const sourceAtBuild=s.updated-s.source_updated,sourceFresh=sourceAtBuild>=-3&&sourceAtBuild<=15;

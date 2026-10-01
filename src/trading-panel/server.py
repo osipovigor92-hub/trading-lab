@@ -7,6 +7,8 @@ from urllib.parse import urlsplit
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
 FILES = {
+    "/data-client.js": ("data-client.js", "text/javascript; charset=utf-8"),
+    "/alerts.js": ("alerts.js", "text/javascript; charset=utf-8"),
     "/model-journals.js": ("model-journals.js", "text/javascript; charset=utf-8"),
     "/api/journal-a": ("/var/lib/trading-report/journal-a.json", "application/json"),
     "/api/journal-b": ("/var/lib/trading-report/journal-b.json", "application/json"),

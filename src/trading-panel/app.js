@@ -20,7 +20,7 @@ function rows(id, values) {
 
 async function refresh() {
   try {
-    const response = await fetch('/api/state', {
+    const response = await labFetch('/api/state', {
       cache:'no-store', signal:AbortSignal.timeout(8000)
     });
     if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -104,7 +104,7 @@ refresh();
     const old = [...main.children];
     const footer = main.querySelector('footer');
     const pages = {};
-    const names = {overview:'Обзор',market:'Рынок',live:'LIVE',grid:'Grid',tests:'Тесты'};
+    const names = {overview:'Обзор',alerts:'Алерты',market:'Рынок',live:'LIVE',grid:'Grid',tests:'Тесты'};
     const nav = make('nav','dashboard-tabs');
     nav.id = 'dashboard-tabs';
     nav.setAttribute('aria-label','Разделы панели');
@@ -131,6 +131,9 @@ refresh();
     } else main.prepend(nav);
     const buttons = {};
     function activate(key) {
+      if (!names[key]) key='overview';
+      try { sessionStorage.setItem('lab-tab',key); } catch (_) {}
+      document.dispatchEvent(new CustomEvent('lab-tab',{detail:key}));
       for (const k of Object.keys(names)) {
         pages[k].hidden = k !== key;
         buttons[k].classList.toggle('selected',k===key);
@@ -176,7 +179,7 @@ refresh();
     function line(parent,text,cls='') { parent.append(make('p',cls,text)); }
     const labels={running:'Эксперимент работает',waiting:'Ожидание данных',halted:'Эксперимент остановлен'};
     const get = async path => {
-      const r=await fetch(path,{cache:'no-store',signal:AbortSignal.timeout(5000)});
+      const r=await labFetch(path,{cache:'no-store',signal:AbortSignal.timeout(5000)});
       if (!r.ok) throw new Error('HTTP '+r.status);
       return r.json();
     };
@@ -222,7 +225,7 @@ refresh();
           ' / стоп −'+s.config.stop_loss+' USDT · удержание до '+s.config.max_hold+' сек.');
         line(testing,'Комиссия '+fmt(s.config.fee*100,3)+'% и проскальзывание '+
           fmt(s.config.slippage*100,3)+'% на сторону. Funding приблизительный.');
-        line(testing,'Сравнительная модель B ещё не запущена. Изменения правил следует проверять на последующих данных.','muted');
+        line(testing,'Текущее состояние модели B показано в её блоке. Изменения правил проверяются на последующих данных.','muted');
       } catch (error) {
         state.textContent='PAPER недоступен: '+error.message;
         state.className='negative';
@@ -256,7 +259,9 @@ refresh();
       }
       setTimeout(updateLedger,10000);
     }
-    activate('overview');
+    let selected='overview';
+    try { selected=sessionStorage.getItem('lab-tab')||selected; } catch (_) {}
+    activate(selected);
     updatePaper(); updateHealth(); updateLedger();
   });
 })();

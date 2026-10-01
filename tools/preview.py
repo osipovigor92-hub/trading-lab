@@ -28,8 +28,15 @@ def fixtures():
       equity=600.2,peak=600.6,fees=.22,funding=0,closed=2,wins=1,losses=1,position=None,events=[],cooldown_until=0)
     grid=dict(paper,server_time=now,last_seen=now,halted=False,position=0,fills=0,average=0,
               funding_estimate=0,orders=[],levels=[])
+    observations=[]
+    for symbol,signal,side,reasons in [('DEMO-LONG','LONG',1,[]),('DEMO-SHORT','SHORT',-1,[]),('DEMO-WATCH','WAIT',1,['Нет пробоя локального экстремума последних секунд'])]:
+        observations.append(dict(symbol=symbol,signal=signal,time=now,price=10,spread=.012,ready=True,
+          trade_age=.2,warmup_remaining=0,roundtrip_pct=.222,reasons=reasons,
+          bands={'0.001':dict(bid=32000,ask=26000,covered=True,imbalance=.1)},
+          chart=dict(end=now-30,side=side,atr_pct=.3,rvol5=1.8),chart_error='',ofi5=side*5000,
+          **{f'flow{n}':dict(buy=10000,sell=3000,count=25,ratio=side*.54) for n in (5,15,60)}))
     data={'/api/state':grid,'/api/paper':paper,
-      '/api/model-b':dict(paper,trades=trades,observations=[],started=now-600),
+      '/api/model-b':dict(paper,trades=[dict(t,side=1 if t['side']=='LONG' else -1) for t in trades],observations=observations,started=now-600),
       '/api/live':dict(status='live',updated=now,message='ДЕМОНСТРАЦИЯ: поток не подключён',rows=[]),
       '/api/signals':dict(status='ok',updated=now,rows=[]),
       '/api/scanner':dict(status='ok',server_time=now,finished=now,quote_time=now,universe=0,eligible=0,selected=0,analyzed=0,candidates=0,rows=[],errors=[]),
@@ -60,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
             body=allowed[name].read_bytes()
             kind={'.html':'text/html','.js':'text/javascript','.css':'text/css'}[allowed[name].suffix]+'; charset=utf-8'
             if name=='index.html':
-                body=body.replace(b'<main>', '<main><p class="notice bad">ДЕМО · СИНТЕТИЧЕСКИЕ ДАННЫЕ · НЕ СЕРВЕР</p>'.encode())
+                body=body.replace(b'<body>', '<body><aside class="notice bad">ДЕМО · СИНТЕТИЧЕСКИЕ ДАННЫЕ · НЕ СЕРВЕР</aside>'.encode())
         self.send_response(200)
         self.send_header('Content-Type',kind)
         self.send_header('Content-Length',str(len(body)))
