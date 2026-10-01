@@ -1,0 +1,7 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const vm=require('node:vm');const fs=require('node:fs');const path=require('node:path');
+function setup(hidden=false){const listeners=new Set();let calls=0;
+const document={hidden,addEventListener:(name,fn)=>listeners.add(fn),removeEventListener:(name,fn)=>listeners.delete(fn)};
+const window={};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/trading-panel/data-client.js'),'utf8'),{document,window,performance,AbortSignal,fetch:async()=>{calls++;await Promise.resolve();return new Response('{"ok":true}')},Map,Promise});
+return {document,window,listeners,calls:()=>calls};}
+test('duplicate requests share network and bodies can be read independently',async()=>{const s=setup();const [a,b]=await Promise.all([s.window.labFetch('/api/x'),s.window.labFetch('/api/x')]);assert.equal(s.calls(),1);assert.deepEqual(await a.json(),{ok:true});assert.deepEqual(await b.json(),{ok:true});await (await s.window.labFetch('/api/x')).json();assert.equal(s.calls(),1);});
+test('background requests wait until page becomes visible',async()=>{const s=setup(true);const p=s.window.labFetch('/api/x');await Promise.resolve();assert.equal(s.calls(),0);s.document.hidden=false;for(const fn of [...s.listeners])fn();await p;assert.equal(s.calls(),1);});

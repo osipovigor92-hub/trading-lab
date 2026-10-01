@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   async function refresh(){
     try{
-      const res=await fetch('/api/model-b',{cache:'no-store',signal:AbortSignal.timeout(5000)});
+      const res=await labFetch('/api/model-b',{cache:'no-store',signal:AbortSignal.timeout(5000)});
       if(!res.ok) throw new Error('HTTP '+res.status);
       const s=await res.json(), now=Date.now()/1000;
       const fresh=now-s.updated>=-3 && now-s.updated<=8;

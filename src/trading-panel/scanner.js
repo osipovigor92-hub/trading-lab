@@ -22,7 +22,7 @@
   }
   async function update() {
     try {
-      const response = await fetch('/api/scanner', {
+      const response = await labFetch('/api/scanner', {
         cache:'no-store', signal:AbortSignal.timeout(8000)
       });
       if (!response.ok) throw new Error('HTTP ' + response.status);

@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function refresh() {
     try {
-      const response = await fetch('/api/signals',{
+      const response = await labFetch('/api/signals',{
         cache:'no-store', signal:AbortSignal.timeout(5000)
       });
       if (!response.ok) throw new Error('HTTP '+response.status);

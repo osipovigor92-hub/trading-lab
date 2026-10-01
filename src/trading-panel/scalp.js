@@ -29,7 +29,7 @@
 
   async function update() {
     try {
-      const response = await fetch('/api/scalp',{
+      const response = await labFetch('/api/scalp',{
         cache:'no-store',signal:AbortSignal.timeout(8000)
       });
       if (!response.ok) throw new Error('HTTP '+response.status);

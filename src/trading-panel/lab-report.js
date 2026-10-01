@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded',()=>{
  const line=(parent,text)=>{const p=document.createElement('p');p.textContent=text;parent.append(p);};
  async function refresh(){
   try{
-   const res=await fetch('/api/lab-report',{cache:'no-store',signal:AbortSignal.timeout(8000)});
+   const res=await labFetch('/api/lab-report',{cache:'no-store',signal:AbortSignal.timeout(8000)});
    if(!res.ok)throw new Error('HTTP '+res.status);const s=await res.json();
    const age=Date.now()/1000-s.updated,fresh=age>=-3&&age<=150;
    status.textContent=(!fresh?'ОТЧЁТ УСТАРЕЛ':s.status==='ok'?'Отчёт обновляется':s.status==='partial'?'Неполные или устаревшие исходные данные':'Ожидание / ошибка')+' · '+dt(s.updated);

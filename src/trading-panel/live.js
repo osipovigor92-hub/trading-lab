@@ -32,7 +32,7 @@
 
   async function refresh() {
     try {
-      const response = await fetch('/api/live',{
+      const response = await labFetch('/api/live',{
         cache:'no-store',signal:AbortSignal.timeout(5000)
       });
       if (!response.ok) throw new Error('HTTP '+response.status);
