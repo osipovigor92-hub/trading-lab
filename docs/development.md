@@ -1,22 +1,11 @@
-# Trading lab: development workflow
+# Development workflow
 
-This repository is for the PAPER-only trading laboratory, separate from VPN services.
+This repository contains the current PAPER-only server source, including trading-signals. No production balances, credentials or history databases are stored here.
 
-## Initial import
+Work on feature branches. Run `python tools/check.py` with Python 3.12, Node.js and requirements-dev.txt installed. Start the synthetic localhost dashboard with `python tools/preview.py`. Synthetic data tests rendering and transport only; it is not a backtest.
 
-Import the current server source before implementing further updates. Local historical installers are not authoritative copies of deployed files. Review the source for secrets before committing. Do not import runtime state, trading history, SQLite databases, environment files, SSH keys or backups.
+GitHub Actions checks each push and pull request. Browser visual verification is still pending because the local browser download failed.
 
-## Development
+For updates, see [deployment.md](deployment.md). The initial updater supports only panel/report/signals code, with version checks, backup and error rollback. Model/LIVE/scanner/unit changes require a separate migration. Never reset state or restart a model with an open PAPER position. VPN services are outside this repository's scope.
 
-- Work on feature branches; keep main as the reviewed baseline.
-- Run accounting, market feed, stale-data, journal and report tests offline.
-- Preview the dashboard against synthetic fixtures on localhost; do not connect a preview to production state.
-- Keep model A and B results and journals separate.
-
-## Releases
-
-The deployment command and rollback mechanism are not implemented yet. They must be built against the imported current services and tested before use.
-
-Deploy a reviewed immutable commit with a source backup and rollback. Never reset balances, journals or open positions. A model restart must be deferred while that model has an open PAPER position. Panel/report changes should not restart trading models. Do not restart or modify VPN services.
-
-GitHub access does not provide SSH access to the running server.
+GitHub access does not provide SSH access to the server. Production deployment remains an explicit command run by the user.
