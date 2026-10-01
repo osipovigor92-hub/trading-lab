@@ -1,0 +1,24 @@
+[Unit]
+Description=Bybit scalping screener and sampled orderbook analysis
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=tradingbot
+Group=tradingbot
+ExecStart=/usr/bin/python3 -u /opt/trading-scalp/scalp.py
+TimeoutStartSec=8min
+CPUQuota=15%
+MemoryHigh=96M
+MemoryMax=160M
+TasksMax=8
+Nice=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trading-scalp
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Environment=PYTHONDONTWRITEBYTECODE=1

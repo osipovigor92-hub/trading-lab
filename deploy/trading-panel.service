@@ -1,0 +1,29 @@
+[Unit]
+Description=Local read-only trading dashboard
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=tradingbot
+Group=tradingbot
+WorkingDirectory=/opt/trading-panel
+ExecStart=/usr/bin/python3 -u /opt/trading-panel/server.py
+Restart=on-failure
+RestartSec=10
+CPUQuota=10%
+MemoryMax=96M
+TasksMax=24
+Nice=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/trading-bot
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+[Install]
+WantedBy=multi-user.target

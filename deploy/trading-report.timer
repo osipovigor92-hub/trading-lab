@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh PAPER comparison report
+[Timer]
+OnActiveSec=5s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=trading-report.service
+[Install]
+WantedBy=timers.target
