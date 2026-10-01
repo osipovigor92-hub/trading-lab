@@ -23,7 +23,14 @@
     if(direction!=='—'&&Array.isArray(r.reasons)&&!r.reasons.length)return {kind:'watch',tone:'watch',label:'Стакан · только наблюдение',direction,reasons:[]};
     return {kind:'wait',tone:'neutral',label:'Стакан · ожидание',direction,reasons:r.reasons||[]};
   }
-  if(typeof module!=='undefined')module.exports={classifyB,classifyWatch,fresh};
+  function transition(previous,kind,direction){
+    const signature=kind+':'+direction;
+    if(previous===signature)return {signature,event:null};
+    const event=['entry','watch'].includes(kind)?kind:previous?.startsWith('entry:')?'cancel':null;
+    return {signature,event};
+  }
+  scope.LabAlerts={classifyB,classifyWatch,fresh,transition};
+  if(typeof module!=='undefined')module.exports=scope.LabAlerts;
   if(typeof document==='undefined')return;
   document.addEventListener('DOMContentLoaded',()=>{
     const page=document.getElementById('page-alerts');if(!page)return;
@@ -41,12 +48,25 @@
     const list=make('div','alerts-list');page.append(list);
     const history=make('section','box');const log=make('div','alerts-log');
     const clear=make('button','alerts-clear','Очистить историю');clear.type='button';
-    history.append(make('h2','','История алертов'),make('p','muted','До 50 событий с открытия панели. Обновление страницы очищает историю. Старое событие не является действующим сигналом.'),clear,log);page.append(history);
+    history.append(make('h2','','История алертов'),make('p','muted','До 50 событий за 24 часа в этом браузере. История сохраняется после обновления страницы. Пока страница закрыта, новые события здесь не записываются. Старый алерт не является действующим сигналом.'),clear,log);page.append(history);
     let b=null,w=null,errors={b:'Подключение',w:'Подключение'},busy=false,events=[],states=new Map(),lastPosition=null;
-    const addEvent=(key,state,text,now,tone)=>{
-      const previous=states.get(key);states.set(key,state);
-      if(previous===state||!['entry','watch','open'].includes(state))return;
-      events.unshift({time:now,text,tone});events=events.slice(0,50);
+    const storeKey='lab-alert-history-v2';
+    let sound=false,audio=null;
+    const soundButton=make('button','alerts-clear','Звук: выключен');soundButton.type='button';soundButton.setAttribute('aria-pressed','false');head.append(soundButton);
+    const storageNote=make('p','muted','Звук работает только при открытой активной странице. Уведомления в фоне iPhone не гарантируются.');head.append(storageNote);
+    try {const data=JSON.parse(localStorage.getItem(storeKey)||'null');if(data){
+      events=(Array.isArray(data.events)?data.events:[]).filter(e=>Number.isFinite(e.time)&&e.time<=Date.now()/1000+1&&Date.now()/1000-e.time<86400&&typeof e.text==='string'&&['long','short','watch','neutral'].includes(e.tone)).slice(0,50);
+      if(Array.isArray(data.states))states=new Map(data.states.filter(x=>Array.isArray(x)&&x.length===2&&x.every(v=>typeof v==='string')));
+      lastPosition=Number.isFinite(data.lastPosition)?data.lastPosition:null;
+    }}catch(_) {storageNote.textContent+=' Сохранение истории недоступно.';}
+    function persist(){try{localStorage.setItem(storeKey,JSON.stringify({events,states:[...states],lastPosition}));}catch(_){storageNote.textContent='История только в памяти: браузер запретил сохранение. Звук — при открытой странице.';}}
+    function beep(){if(!sound||!audio||document.hidden)return;try{const o=audio.createOscillator(),g=audio.createGain();o.connect(g);g.connect(audio.destination);o.frequency.value=740;g.gain.setValueAtTime(.035,audio.currentTime);g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+.2);o.start();o.stop(audio.currentTime+.2);}catch(_) {}}
+    soundButton.addEventListener('click',async()=>{try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();await audio.resume();sound=!sound;soundButton.textContent='Звук: '+(sound?'включён':'выключен');soundButton.setAttribute('aria-pressed',String(sound));if(sound)beep();}catch(_){soundButton.textContent='Звук недоступен';}});
+    const addEvent=(key,kind,direction,text,now,tone)=>{
+      const previous=states.get(key),next=transition(previous,kind,direction);states.set(key,next.signature);
+      if(!next.event)return;
+      const cancel=next.event==='cancel';events.unshift({time:now,text:cancel?key+' · условия входа сняты / заблокированы':text,tone:cancel?'neutral':tone});events=events.slice(0,50);persist();
+      if(!cancel&&kind==='entry'&&previous!==undefined)beep();
     };
     const line=(parent,text,cls='')=>parent.append(make('p',cls,text));
     function render(){
@@ -62,10 +82,10 @@
         const item=make('div','');item.append(make('strong','',String(rows.filter(x=>x.view.kind===kind).length)),make('span','',label));stats.append(item);
       }
       const keys=new Set();
-      for(const {source,r,view} of rows){const key=source+':'+r.symbol;keys.add(key);addEvent(key,view.kind,source+' · '+r.symbol+' '+view.direction+' · '+view.label,now,view.tone);}
-      for(const key of states.keys())if(!keys.has(key))states.delete(key);
+      for(const {source,r,view} of rows){const key=source+':'+r.symbol;keys.add(key);addEvent(key,view.kind,view.direction,source+' · '+r.symbol+' '+view.direction+' · '+view.label,now,view.tone);}
+      for(const key of states.keys())if(!keys.has(key)&&!states.get(key).startsWith('stale:'))addEvent(key,'stale','—',key+' · поток недоступен',now,'neutral');
       position.replaceChildren(make('h3','','Позиция модели B'));
-      if(b&&fresh(b.updated,now,8)&&b.position){const p=b.position;const direction=p.side===1?'LONG':'SHORT';line(position,p.symbol+' · '+direction+' · PAPER вход '+fmt(p.entry,8),'position-name');line(position,'Открыта '+stamp(p.opened)+'. Это уже открытая виртуальная позиция, не новый сигнал.');if(lastPosition!==p.opened){events.unshift({time:now,text:p.symbol+' '+direction+' · PAPER вход выполнен',tone:p.side===1?'long':'short'});events=events.slice(0,50);lastPosition=p.opened;}}
+      if(b&&fresh(b.updated,now,8)&&b.position){const p=b.position;const direction=p.side===1?'LONG':'SHORT';line(position,p.symbol+' · '+direction+' · PAPER вход '+fmt(p.entry,8),'position-name');line(position,'Открыта '+stamp(p.opened)+'. Это уже открытая виртуальная позиция, не новый сигнал.');if(lastPosition!==p.opened){events.unshift({time:now,text:p.symbol+' '+direction+' · PAPER вход выполнен',tone:p.side===1?'long':'short'});events=events.slice(0,50);lastPosition=p.opened;persist();beep();}}
       else line(position,b&&fresh(b.updated,now,8)?'Открытой позиции нет.':'Состояние позиции неизвестно: нет свежего снимка.');
       const opened=new Set([...list.querySelectorAll('details[open]')].map(e=>e.dataset.key));list.replaceChildren();
       const visible=rows.filter(x=>filter.value==='all'||x.view.kind===filter.value);
@@ -81,8 +101,9 @@
         for(const reason of v.reasons)line(d,reason);
         if(!v.reasons.length)line(d,source==='B'?'Условия выполнены на этом снимке. Фактический PAPER-вход подтверждается позицией и журналом.':'Условия наблюдения за стаканом выполнены. Это не сигнал входа модели B.');
         if(source==='B')line(d,'Лента 5 / 15 сек.: '+fmt(r.flow5?.ratio*100,1)+'% / '+fmt(r.flow15?.ratio*100,1)+'% · OFI 5 сек. '+fmt(r.ofi5,0));
-        card.append(d);list.append(card);
+        const chartButton=make('button','text-button','График и стакан ↗');chartButton.type='button';chartButton.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('lab-symbol',{detail:r.symbol})));card.append(d,chartButton);list.append(card);
       }
+      events=events.filter(e=>now-e.time<86400);
       log.replaceChildren();if(!events.length)line(log,'Новых событий пока нет.','muted');
       for(const e of events){const p=make('p','alert-event event-'+e.tone,stamp(e.time)+' · '+e.text);log.append(p);}
     }
@@ -92,7 +113,7 @@
       for(let i=0;i<2;i++){const result=results[i],key=i?'w':'b';if(result.status==='fulfilled'){errors[key]='';if(i)w=result.value;else b=result.value;}else{errors[key]='недоступен';if(i)w=null;else b=null;}}
       busy=false;render();setTimeout(poll,2000);
     }
-    clear.addEventListener('click',()=>{events=[];render();});filter.addEventListener('change',render);
+    clear.addEventListener('click',()=>{events=[];persist();render();});filter.addEventListener('change',render);
     document.addEventListener('visibilitychange',render);
     setInterval(render,1000);poll();
   });

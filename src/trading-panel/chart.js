@@ -1,0 +1,17 @@
+'use strict';
+const params=new URLSearchParams(location.search);
+const raw=params.get('symbol')||'LINKUSDT';
+const symbol=/^[A-Z0-9]{2,24}USDT$/.test(raw)?raw:'LINKUSDT';
+const interval=['1','5','15','60'].includes(params.get('interval'))?params.get('interval'):'5';
+const status=document.getElementById('chart-status');
+const credit=document.getElementById('credit');
+credit.href='https://www.tradingview.com/chart/?symbol='+encodeURIComponent('BYBIT:'+symbol+'.P');
+credit.textContent=symbol+' perpetual · TradingView';
+const script=document.createElement('script');
+script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+script.async=true;
+script.textContent=JSON.stringify({autosize:true,symbol:'BYBIT:'+symbol+'.P',interval,timezone:'Etc/UTC',theme:'dark',style:'1',locale:'ru',allow_symbol_change:false,hide_top_toolbar:false,hide_side_toolbar:true,hide_volume:false,save_image:false,withdateranges:true,support_host:'https://www.tradingview.com'});
+script.onerror=()=>{status.textContent='TradingView недоступен. Откройте график по ссылке выше.';};
+script.onload=()=>{status.textContent='Внешние данные TradingView · время UTC · независимы от PAPER-модели';};
+document.getElementById('widget').append(script);
+setTimeout(()=>{if(!document.querySelector('iframe'))status.textContent='График не загрузился. Используйте ссылку TradingView.';},15000);

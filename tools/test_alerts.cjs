@@ -10,3 +10,13 @@ test('halt and contradictory packet cannot issue entry',()=>{assert.notEqual(B({
 test('watch only allowed pending conditions',()=>{const r={...row(),signal:'WAIT',reasons:['Нет пробоя локального экстремума последних секунд']};assert.equal(B(state(),r,1000).kind,'watch');r.reasons.push('Широкий спред');assert.equal(B(state(),r,1000).kind,'wait');});
 test('orderbook watcher never becomes entry',()=>{const r={book_time:1000,status:'WATCH_LONG',reasons:[]};assert.equal(W({status:'ok',updated:1000},r,1000).kind,'watch');assert.equal(W({status:'ok',updated:1000},r,1010).kind,'stale');});
 test('chart error and invalid numeric values blocked',()=>{assert.notEqual(B(state(),{...row(),chart_error:'Bad candles'},1000).kind,'entry');assert.equal(B(state(),{...row(),price:NaN},1000).kind,'stale');});
+const {transition}=require('../src/trading-panel/alerts.js');
+test('entry direction change emits a new alert, repeats do not',()=>{
+ assert.equal(transition('entry:LONG','entry','LONG').event,null);
+ assert.equal(transition('entry:LONG','entry','SHORT').event,'entry');
+});
+test('entry cancellation reported once and waiting does not invent entries',()=>{
+ assert.equal(transition('entry:LONG','stale','LONG').event,'cancel');
+ assert.equal(transition('stale:LONG','stale','LONG').event,null);
+ assert.equal(transition(undefined,'wait','LONG').event,null);
+});

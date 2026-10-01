@@ -32,7 +32,7 @@ def fixtures():
     for symbol,signal,side,reasons in [('DEMO-LONG','LONG',1,[]),('DEMO-SHORT','SHORT',-1,[]),('DEMO-WATCH','WAIT',1,['Нет пробоя локального экстремума последних секунд'])]:
         observations.append(dict(symbol=symbol,signal=signal,time=now,price=10,spread=.012,ready=True,
           trade_age=.2,warmup_remaining=0,roundtrip_pct=.222,reasons=reasons,
-          bands={'0.001':dict(bid=32000,ask=26000,covered=True,imbalance=.1)},
+          bands={k:dict(bid=32000*f,ask=26000*f,covered=True,imbalance=.1) for k,f in [('0.0002',.1),('0.0005',.4),('0.001',1)]},
           chart=dict(end=now-30,side=side,atr_pct=.3,rvol5=1.8),chart_error='',ofi5=side*5000,
           **{f'flow{n}':dict(buy=10000,sell=3000,count=25,ratio=side*.54) for n in (5,15,60)}))
     data={'/api/state':grid,'/api/paper':paper,
@@ -72,6 +72,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type',kind)
         self.send_header('Content-Length',str(len(body)))
         self.send_header('Cache-Control','no-store')
+        chart = path == '/chart.html'
+        self.send_header('Content-Security-Policy',
+            "default-src 'none'; script-src 'self' https://s3.tradingview.com; style-src 'self' 'unsafe-inline'; frame-src https://www.tradingview-widget.com https://s.tradingview.com; img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+            if chart else "default-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
         self.end_headers();self.wfile.write(body)
     def log_message(self,*args): pass
 
