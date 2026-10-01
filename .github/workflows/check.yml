@@ -33,4 +33,6 @@ jobs:
         if: always()
         with:
           name: dashboard-screenshots
-          path: artifacts/*.png
+          path: |
+            artifacts/*.png
+            artifacts/*.json

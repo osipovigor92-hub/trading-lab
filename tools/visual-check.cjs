@@ -54,6 +54,17 @@ const root=path.resolve(__dirname,'..');const port=18788;
    assert.deepEqual(errors,[]);
    await page.close();
   }
+  // Separate best-effort provider smoke test; never substitutes for the deterministic checks.
+  const remote=await browser.newPage({viewport:{width:1280,height:900}}),providerErrors=[];
+  remote.on('pageerror',e=>providerErrors.push(e.message));
+  await remote.goto(`http://127.0.0.1:${port}/`);
+  await remote.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();
+  await remote.waitForTimeout(15000);
+  const provider={frames:remote.frames().map(f=>f.url()),errors:providerErrors,canvases:0};
+  for(const frame of remote.frames())if(/tradingview/.test(frame.url()))provider.canvases+=await frame.locator('canvas').count().catch(()=>0);
+  fs.writeFileSync(path.join(root,'artifacts','tradingview-smoke.json'),JSON.stringify(provider,null,2));
+  await remote.locator('.chart-box').screenshot({path:path.join(root,'artifacts','tradingview-provider.png')});
+  console.log('TradingView provider smoke:',JSON.stringify(provider));await remote.close();
   console.log('VISUAL OK: 390/1280 px, six tabs, cards, filters, preserved details, deduplication, stale signals');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
