@@ -1,0 +1,11 @@
+[Unit]
+Description=Repeat scalping market analysis
+
+[Timer]
+OnActiveSec=3s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=trading-scalp.service
+
+[Install]
+WantedBy=timers.target

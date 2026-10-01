@@ -1,0 +1,31 @@
+[Unit]
+Description=Independent experimental scalping model B PAPER only
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=tradingbot
+Group=tradingbot
+WorkingDirectory=/opt/scalp-model-b
+ExecStart=/usr/bin/python3 -u /opt/scalp-model-b/model_b.py
+Restart=on-failure
+RestartSec=15
+CPUQuota=15%
+MemoryHigh=128M
+MemoryMax=192M
+TasksMax=12
+Nice=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/scalp-model-b
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+[Install]
+WantedBy=multi-user.target

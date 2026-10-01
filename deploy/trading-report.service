@@ -1,0 +1,21 @@
+[Unit]
+Description=Persistent PAPER comparison and diagnostics report
+After=network.target
+[Service]
+Type=oneshot
+User=tradingbot
+Group=tradingbot
+ExecStart=/usr/bin/python3 -u /opt/trading-report/report.py
+TimeoutStartSec=120
+CPUQuota=10%
+MemoryHigh=64M
+MemoryMax=96M
+TasksMax=8
+Nice=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trading-report
+Environment=PYTHONDONTWRITEBYTECODE=1

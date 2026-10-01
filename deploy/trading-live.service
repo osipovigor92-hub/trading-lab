@@ -1,0 +1,30 @@
+[Unit]
+Description=Bybit live orderbook and public trade observer
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=tradingbot
+Group=tradingbot
+ExecStart=/usr/bin/python3 -u /opt/trading-live/live.py
+Restart=on-failure
+RestartSec=15
+CPUQuota=20%
+MemoryHigh=96M
+MemoryMax=160M
+TasksMax=12
+Nice=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trading-live
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+[Install]
+WantedBy=multi-user.target
