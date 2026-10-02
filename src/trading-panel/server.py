@@ -7,6 +7,10 @@ from urllib.parse import urlsplit
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
 FILES = {
+    "/model-status.js": ("model-status.js", "text/javascript; charset=utf-8"),
+    "/api/research": ("/var/lib/trading-research/report.json", "application/json"),
+    "/journal-c.csv": ("/var/lib/trading-research/journal-c.csv", "text/csv; charset=utf-8"),
+    "/journal-d.csv": ("/var/lib/trading-research/journal-d.csv", "text/csv; charset=utf-8"),
     "/research.js": ("research.js", "text/javascript; charset=utf-8"),
     "/workspace.js": ("workspace.js", "text/javascript; charset=utf-8"),
     "/chart.html": ("chart.html", "text/html; charset=utf-8"),

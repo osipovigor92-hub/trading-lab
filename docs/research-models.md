@@ -33,11 +33,11 @@ D VWAP reversion: EMA gap<=0.25ATR, RVOL<=1.2; current VWAP distance between0.75
 
 Both: +/-0.05% imbalance>=15% in hypothetical direction, OFI5 sign agreement, tape5>=30% and tape15>=20% directional imbalance. Three distinct ordered book snapshots spanning>=4s are required. Duplicate snapshots cannot increase confirmation; direction change, failed gate, a gap>6s or stale data resets it. These constants are initial research settings, not optimized or literature-derived profit thresholds. ATR or VWAP distance is not expected profit.
 
-## Not an executor or backtest
+## Server PAPER execution
 
-C/D run only while the browser is open. There is no persistent C/D trade journal, equity or P&L. Purple means an observed condition match, not an entry order. Current B selection limits the observable universe; results cannot be generalized to all Bybit coins. Reloading resets confirmations. Real B alerts remain in their separate tab.
+C/D now have a separate server-side PAPER executor with durable accounting, exposed by `/api/research`. See [paper-cd.md](paper-cd.md) for exact costs, risk limits, installation, persistence and gap behavior. Browser code retains the pure hypothesis evaluator for tests, while displayed decisions and positions come from the server. The service must be installed separately after updating the panel. External catalog frameworks remain uninstalled.
 
-Next validation requires a separate server-side PAPER executor with versioned state, entry/exit and fill definitions, execution costs, funding/gap handling and an immutable trade journal. Freeze rules before subsequent data; compare common-period net returns, drawdown, expectation, sample count and regime coverage with A/B; report all tried variants and uncertainty. Neither two losses nor a short winning streak establishes superiority.
+No profitability superiority has been established. Freeze rules before subsequent data; compare net, drawdown, expectation, count, regime coverage and execution assumptions with A/B. Report all tried variants and uncertainty.
 
 ## Validation
 

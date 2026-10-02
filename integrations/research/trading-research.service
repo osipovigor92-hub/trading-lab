@@ -1,0 +1,27 @@
+[Unit]
+Description=Independent C/D PAPER experiments from local market snapshots
+After=scalp-model-b.service
+
+[Service]
+Type=simple
+User=tradingbot
+Group=tradingbot
+ExecStart=/usr/bin/python3 -u /opt/trading-research/engine.py
+Restart=on-failure
+RestartSec=15
+CPUQuota=10%
+MemoryMax=96M
+TasksMax=8
+Nice=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trading-research
+RestrictAddressFamilies=AF_UNIX
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+[Install]
+WantedBy=multi-user.target

@@ -12,6 +12,8 @@ PANEL = ROOT/'src/trading-panel'
 spec = importlib.util.spec_from_file_location('lab_report', ROOT/'src/trading-report/report.py')
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
+spec2=importlib.util.spec_from_file_location('research_engine',ROOT/'integrations/research/engine.py')
+research=importlib.util.module_from_spec(spec2);spec2.loader.exec_module(research)
 
 def fixtures():
     now = time.time()
@@ -49,6 +51,14 @@ def fixtures():
         data['/api/journal-'+m.lower()]=dict(model=m,updated=now,source_updated=now,status='ok',errors=[],phase='running',
           reason='СИНТЕТИЧЕСКИЕ ДАННЫЕ',position=None,summary=summary,legacy_closed=0,
           first_opened=trades[0]['opened'],last_closed=trades[-1]['closed'],rows=trades[::-1],shown=2)
+    rs=research.initial(now-600);rs['updated']=now
+    for model,m in rs['models'].items():
+        m.update(phase='running',balance=600.2,equity=600.2,net=.2,fees=.22,closed=2,wins=1,losses=1,last_observation=now,average=.1,profit_factor=1.5)
+        m['trades']=[dict(t,side=1 if t['side']=='LONG' else -1) for t in trades[::-1]]
+        for r in observations:
+            v=research.evaluate(model,data['/api/model-b'],r,now)
+            m['observations'].append(dict(symbol=r['symbol'],time=now,side=v['side'],checks=v['checks'],confirmations=0,confirmed=False))
+    data['/api/research']=rs
     return data
 
 class Handler(BaseHTTPRequestHandler):
@@ -57,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
         data=fixtures()
         if path in data:
             body=json.dumps(data[path],ensure_ascii=False).encode();kind='application/json; charset=utf-8'
-        elif path in ('/journal-a.csv','/journal-b.csv'):
+        elif path in ('/journal-a.csv','/journal-b.csv','/journal-c.csv','/journal-d.csv'):
             body=b'\xef\xbb\xbfsymbol,net\nDEMOUSDT,0.6\nDEMOUSDT,-0.4\n';kind='text/csv; charset=utf-8'
         else:
             name='index.html' if path=='/' else path.lstrip('/')
