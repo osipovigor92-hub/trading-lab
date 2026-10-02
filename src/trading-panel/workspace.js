@@ -57,7 +57,7 @@
   line(guide,'Исследования OFI и дисбаланса выполнены преимущественно на акциях. Эффективность на этих криптоконтрактах ещё предстоит проверить.');tests.prepend(guide);
   let b=null,a=null,report=null,journals={},selected='LINKUSDT',chartEnabled=false,sequence='',samples=new Map(),error='Подключение',lastSample=new Map();
   const chooseChart=()=>{const safe=/^[A-Z0-9]{2,24}USDT$/.test(selected)?selected:'LINKUSDT';external.href='https://www.tradingview.com/chart/?symbol='+encodeURIComponent('BYBIT:'+safe+'.P');
-   if(!chartEnabled)return;chartHost.replaceChildren();const frame=make('iframe');frame.title='TradingView '+safe;frame.setAttribute('sandbox','allow-scripts allow-popups');frame.referrerPolicy='no-referrer';frame.src='/chart.html?symbol='+encodeURIComponent(safe)+'&interval='+interval.value;chartHost.append(frame);
+   if(!chartEnabled)return;chartHost.replaceChildren();const frame=make('iframe');frame.title='TradingView '+safe;frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-popups');frame.referrerPolicy='no-referrer';frame.src='/chart.html?symbol='+encodeURIComponent(safe)+'&interval='+interval.value;chartHost.append(frame);
   };
   load.addEventListener('click',()=>{chartEnabled=true;chooseChart();});select.addEventListener('change',()=>{selected=select.value;chooseChart();render();});interval.addEventListener('change',chooseChart);
   function graph(parent,values,label){const box=make('div','spark-chart');box.append(make('span','muted',label));if(values.length<2){line(box,'Накопление наблюдений…');parent.append(box);return;}

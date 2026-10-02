@@ -54,7 +54,7 @@ class Handler(BaseHTTPRequestHandler):
         # Isolate the external widget from the authenticated dashboard.
         chart = urlsplit(self.path).path == "/chart.html"
         policy = (
-            "default-src 'none'; script-src 'self' https://s3.tradingview.com; "
+            "default-src 'none'; script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "frame-src https://www.tradingview-widget.com https://s.tradingview.com; "
             "img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"

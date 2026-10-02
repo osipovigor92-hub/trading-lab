@@ -12,14 +12,14 @@ const root=path.resolve(__dirname,'..');const port=18788;
   for(const width of [390,1280]){
    const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
    // Verify the isolated widget contract without making CI depend on market data availability.
-   await page.route('https://s3.tradingview.com/**',route=>route.fulfill({contentType:'text/javascript',body:"document.getElementById('chart-status').textContent='TEST: external widget transport';"}));
+   await page.route('https://www.tradingview-widget.com/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Chart fixture</title><p>Provider fixture</p>'}));
    await page.goto(`http://127.0.0.1:${port}/`);
    await page.waitForSelector('.terminal-quote strong');
    await page.waitForTimeout(1000);
    await page.screenshot({path:path.join(root,'artifacts',`terminal-${width}.png`),fullPage:true});
    await page.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();
    await page.waitForSelector('.chart-host iframe');
-   assert.equal(await page.locator('.chart-host iframe').getAttribute('sandbox'),'allow-scripts allow-popups');
+   assert.equal(await page.locator('.chart-host iframe').getAttribute('sandbox'),'allow-scripts allow-same-origin allow-popups');
    await page.frameLocator('.chart-host iframe').locator('#chart-status').filter({hasText:'Внешние данные'}).waitFor();
    await page.getByLabel('Таймфрейм графика').selectOption('15');
    assert.match(await page.locator('.chart-host iframe').getAttribute('src'),/interval=15/);

@@ -74,7 +74,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control','no-store')
         chart = path == '/chart.html'
         self.send_header('Content-Security-Policy',
-            "default-src 'none'; script-src 'self' https://s3.tradingview.com; style-src 'self' 'unsafe-inline'; frame-src https://www.tradingview-widget.com https://s.tradingview.com; img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-src https://www.tradingview-widget.com https://s.tradingview.com; img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
             if chart else "default-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
         self.end_headers();self.wfile.write(body)
     def log_message(self,*args): pass
