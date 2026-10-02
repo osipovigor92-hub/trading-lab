@@ -24,10 +24,19 @@ const root=path.resolve(__dirname,'..');const port=18788;
    await page.getByLabel('Таймфрейм графика').selectOption('15');
    assert.match(await page.locator('.chart-host iframe').getAttribute('src'),/interval=15/);
 
-   for(const name of ['Обзор','Рынок','LIVE','Grid','Тесты','Алерты']){
+   for(const name of ['Обзор','Рынок','LIVE','Grid','Тесты','Алерты','Модели']){
     await page.getByRole('button',{name,exact:true}).click();await page.waitForTimeout(200);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'horizontal overflow '+name);
    }
+   await page.getByRole('button',{name:'Модели',exact:true}).click();
+   await page.waitForSelector('.research-card');
+   assert.equal(await page.locator('.research-card').count(),6);
+   assert.equal(await page.locator('.research-catalog article').count(),3);
+   assert.equal(await page.locator('#page-research .alert-long,#page-research .alert-short').count(),0);
+   await page.locator('.research-card details').first().evaluate(e=>e.open=true);
+   await page.waitForTimeout(1200);
+   assert.equal(await page.locator('.research-card details').first().getAttribute('open'),'');
+   await page.screenshot({path:path.join(root,'artifacts',`research-${width}.png`),fullPage:true});
    await page.getByRole('button',{name:'LIVE',exact:true}).click();
    await page.screenshot({path:path.join(root,'artifacts',`liquidity-${width}.png`),fullPage:true});
    await page.getByRole('button',{name:'Алерты',exact:true}).click();
@@ -51,6 +60,9 @@ const root=path.resolve(__dirname,'..');const port=18788;
    await page.getByRole('button',{name:'Обзор',exact:true}).click();
    await page.waitForTimeout(1100);
    assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');
+   await page.getByRole('button',{name:'Модели',exact:true}).click();
+   assert.equal(await page.locator('.research-match').count(),0);
+   assert.match(await page.locator('#page-research').textContent(),/Нет свежего/);
    assert.deepEqual(errors,[]);
    await page.close();
   }
