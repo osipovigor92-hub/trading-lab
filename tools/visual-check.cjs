@@ -11,12 +11,27 @@ const root=path.resolve(__dirname,'..');const port=18788;
   fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});
   for(const width of [390,1280]){
    const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+   // Verify the isolated widget contract without making CI depend on market data availability.
+   await page.route('https://www.tradingview-widget.com/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Chart fixture</title><p>Provider fixture</p>'}));
    await page.goto(`http://127.0.0.1:${port}/`);
+   await page.waitForSelector('.terminal-quote strong');
+   await page.waitForTimeout(1000);
+   await page.screenshot({path:path.join(root,'artifacts',`terminal-${width}.png`),fullPage:true});
+   await page.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();
+   await page.waitForSelector('.chart-host iframe');
+   assert.equal(await page.locator('.chart-host iframe').getAttribute('sandbox'),'allow-scripts allow-same-origin allow-popups');
+   await page.frameLocator('.chart-host iframe').locator('#chart-status').filter({hasText:'Внешние данные'}).waitFor();
+   await page.getByLabel('Таймфрейм графика').selectOption('15');
+   assert.match(await page.locator('.chart-host iframe').getAttribute('src'),/interval=15/);
+
    for(const name of ['Обзор','Рынок','LIVE','Grid','Тесты','Алерты']){
     await page.getByRole('button',{name,exact:true}).click();await page.waitForTimeout(200);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'horizontal overflow '+name);
    }
-   await page.waitForSelector('.alert-long');
+   await page.getByRole('button',{name:'LIVE',exact:true}).click();
+   await page.screenshot({path:path.join(root,'artifacts',`liquidity-${width}.png`),fullPage:true});
+   await page.getByRole('button',{name:'Алерты',exact:true}).click();
+   await page.waitForSelector('#page-alerts .alert-long');
    assert.equal(await page.locator('.alert-card').count(),3);
    assert.equal(await page.locator('.alert-watch').count(),1);
    await page.locator('#page-alerts details').first().evaluate(e=>e.open=true);
@@ -26,14 +41,30 @@ const root=path.resolve(__dirname,'..');const port=18788;
    await page.screenshot({path:path.join(root,'artifacts',`alerts-${width}.png`),fullPage:true});
    await page.getByLabel('Фильтр алертов').selectOption('entry');
    assert.equal(await page.locator('.alert-card').count(),2);
-   await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.waitForSelector('.alert-long');
+   await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.waitForSelector('#page-alerts .alert-long');
+   assert.equal(await page.locator('.alert-event').count(),3,'history must survive reload without duplicates');
    const frozen=await page.evaluate(()=>Date.now());
    await page.evaluate(t=>{Date.now=()=>t+20000},frozen);
    await page.waitForTimeout(1300);
    assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');
+   assert.ok(await page.locator('.event-neutral').count()>=2,'entry cancellations visible');
+   await page.getByRole('button',{name:'Обзор',exact:true}).click();
+   await page.waitForTimeout(1100);
+   assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');
    assert.deepEqual(errors,[]);
    await page.close();
   }
+  // Separate best-effort provider smoke test; never substitutes for the deterministic checks.
+  const remote=await browser.newPage({viewport:{width:1280,height:900}}),providerErrors=[];
+  remote.on('pageerror',e=>providerErrors.push(e.message));
+  await remote.goto(`http://127.0.0.1:${port}/`);
+  await remote.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();
+  await remote.waitForTimeout(15000);
+  const provider={frames:remote.frames().map(f=>f.url()),errors:providerErrors,canvases:0};
+  for(const frame of remote.frames())if(/tradingview/.test(frame.url()))provider.canvases+=await frame.locator('canvas').count().catch(()=>0);
+  fs.writeFileSync(path.join(root,'artifacts','tradingview-smoke.json'),JSON.stringify(provider,null,2));
+  await remote.locator('.chart-box').screenshot({path:path.join(root,'artifacts','tradingview-provider.png')});
+  console.log('TradingView provider smoke:',JSON.stringify(provider));await remote.close();
   console.log('VISUAL OK: 390/1280 px, six tabs, cards, filters, preserved details, deduplication, stale signals');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

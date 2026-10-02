@@ -7,6 +7,10 @@ from urllib.parse import urlsplit
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
 FILES = {
+    "/workspace.js": ("workspace.js", "text/javascript; charset=utf-8"),
+    "/chart.html": ("chart.html", "text/html; charset=utf-8"),
+    "/chart.js": ("chart.js", "text/javascript; charset=utf-8"),
+    "/chart.css": ("chart.css", "text/css; charset=utf-8"),
     "/data-client.js": ("data-client.js", "text/javascript; charset=utf-8"),
     "/alerts.js": ("alerts.js", "text/javascript; charset=utf-8"),
     "/model-journals.js": ("model-journals.js", "text/javascript; charset=utf-8"),
@@ -45,13 +49,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Frame-Options", "SAMEORIGIN" if urlsplit(self.path).path == "/chart.html" else "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'self'; frame-ancestors 'none'; "
-            "base-uri 'none'; form-action 'none'"
+        # Isolate the external widget from the authenticated dashboard.
+        chart = urlsplit(self.path).path == "/chart.html"
+        policy = (
+            "default-src 'none'; script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "frame-src https://www.tradingview-widget.com https://s.tradingview.com; "
+            "img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+            if chart else
+            "default-src 'self'; frame-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'none'; object-src 'none'"
         )
+        self.send_header("Content-Security-Policy", policy)
         self.end_headers()
         self.wfile.write(body)
 
