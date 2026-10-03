@@ -48,7 +48,7 @@
     const head=make('section','box alerts-head');
     head.append(make('small','','МОНИТОР ВХОДОВ · PAPER'),make('h2','','Алерты и условия входа'),make('p','muted','Зелёный LONG и красный SHORT — условия модели B. Жёлтый — наблюдение, вход ещё не подтверждён. Это экспериментальные условия, а не обещание прибыли.'));
     const health=make('p','muted');health.setAttribute('role','status');head.append(health);
-    const stats=make('div','alerts-stats');head.append(stats);
+    const stats=make('div','alerts-stats'),statValues={};for(const [kind,label] of [['entry','Вход B'],['watch','Наблюдение'],['stale','Нет данных']]){const item=make('div',''),value=make('strong','','0');item.append(value,make('span','',label));stats.append(item);statValues[kind]=value;}head.append(stats);
     const filter=make('select','alerts-filter');filter.setAttribute('aria-label','Фильтр алертов');
     for(const [value,text] of [['all','Все монеты'],['entry','Условия входа B'],['watch','Наблюдение']]){const option=make('option','',text);option.value=value;filter.append(option);}
     head.append(filter);page.append(head);
@@ -56,8 +56,9 @@
     const list=make('div','alerts-list');page.append(list);
     const history=make('section','box');const log=make('div','alerts-log');
     const clear=make('button','alerts-clear','Очистить историю');clear.type='button';
-    history.append(make('h2','','История алертов'),make('p','muted','До 50 событий за 24 часа в этом браузере. История сохраняется после обновления страницы. Пока страница закрыта, новые события здесь не записываются. Старый алерт не является действующим сигналом.'),clear,log);page.append(history);
-    let b=null,w=null,errors={b:'Подключение',w:'Подключение'},busy=false,events=[],states=new Map(),lastPosition=null;
+    history.append(make('h2','','История алертов'),make('p','muted','До 50 событий за 24 часа в этом браузере. История сохраняется после обновления страницы. Серверные состояния обновляются независимо от открытого раздела и показываются сразу при возвращении в панель. Старый алерт не является действующим сигналом.'),clear,log);page.append(history);
+    let b=null,w=null,errors={b:'Подключение',w:'Подключение'},busy=false,events=[],states=new Map(),lastPosition=null,listSignature='',positionSignature='',historySignature='';
+    const alertCards=new Map();
     const storeKey='lab-alert-history-v2';
     let sound=false,audio=null;
     const soundButton=make('button','alerts-clear','Звук: выключен');soundButton.type='button';soundButton.setAttribute('aria-pressed','false');head.append(soundButton);
@@ -77,50 +78,35 @@
       if(!cancel&&kind==='entry'&&previous!==undefined)beep();
     };
     const line=(parent,text,cls='')=>parent.append(make('p',cls,text));
+    function createAlertCard(source,r,v,opened){
+      const card=make('article','alert-card'),sourceLabel=make('small',''),title=make('h3',''),label=make('p','alert-label'),metrics=make('div','alert-metrics'),values={};for(const name of ['price','spread','depth','age']){const cell=make('div',''),value=make('b','');cell.append(make('span','',name==='price'?'Цена снимка':name==='spread'?'Спред':name==='depth'?'Bid / Ask ±0,1%':'Возраст стакана'),value);metrics.append(cell);values[name]=value;}const coverage=make('p','muted'),atr=make('p','muted'),d=make('details',''),flow=make('p','');d.dataset.key=source+':'+r.symbol;d.open=opened.has(d.dataset.key);d.append(make('summary','','Условия и ограничения'));for(const reason of v.reasons)line(d,reason);if(!v.reasons.length)line(d,source==='B'?'Условия выполнены на этом снимке. Фактический PAPER-вход подтверждается позицией и журналом.':'Условия наблюдения за стаканом выполнены. Это не сигнал входа модели B.');d.append(flow);const chartButton=make('button','text-button','График и стакан ↗');chartButton.type='button';chartButton.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('lab-symbol',{detail:r.symbol})));card.append(sourceLabel,title,label,metrics,coverage,atr,d,chartButton);return {card,sourceLabel,title,label,values,coverage,atr,flow};
+    }
+    function updateAlertCard(item,source,r,v,now){
+      const depth=source==='B'?r.bands?.['0.001']:{bid:r.bid_depth,ask:r.ask_depth},stampValue=r.time??r.book_time;item.card.className='alert-card alert-'+v.tone;item.sourceLabel.textContent=source==='B'?'МОДЕЛЬ B':'АНАЛИЗ СТАКАНА';item.title.textContent=r.symbol+' · '+v.direction;item.label.textContent=v.label;item.values.price.textContent=fmt(r.price,8);item.values.spread.textContent=fmt(r.spread,4)+'%';item.values.depth.textContent=fmt(depth?.bid,0)+' / '+fmt(depth?.ask,0)+' USDT';item.values.age.textContent=fmt(now-stampValue,1)+' сек.';item.coverage.hidden=!(depth?.covered===false||r.covered===false);item.coverage.textContent='Полученная глубина — нижняя оценка зоны.';item.atr.hidden=source!=='B';item.atr.textContent='ATR '+fmt(r.chart?.atr_pct)+'% · расходы оборота '+fmt(r.roundtrip_pct)+'%.';item.flow.hidden=source!=='B';item.flow.textContent='Лента 5 / 15 сек.: '+fmt(r.flow5?.ratio*100,1)+'% / '+fmt(r.flow15?.ratio*100,1)+'% · OFI 5 сек. '+fmt(r.ofi5,0);
+    }
+    function renderPosition(now){
+      const active=b&&fresh(b.updated,now,8),p=active?b.position:null,signature=JSON.stringify(p?[p.symbol,p.side,p.entry,p.quantity,p.opened]:[active,'none']);if(p&&lastPosition!==p.opened){const direction=p.side===1?'LONG':'SHORT';events.unshift({time:now,text:p.symbol+' '+direction+' · PAPER вход выполнен',tone:p.side===1?'long':'short'});events=events.slice(0,50);lastPosition=p.opened;persist();beep();}if(signature===positionSignature)return;positionSignature=signature;position.replaceChildren(make('h3','','Позиция модели B'));if(p){const direction=p.side===1?'LONG':'SHORT';line(position,p.symbol+' · '+direction+' · PAPER вход '+fmt(p.entry,8),'position-name');line(position,'Открыта '+stamp(p.opened)+'. Это уже открытая виртуальная позиция, не новый сигнал.');}else line(position,active?'Открытой позиции нет.':'Состояние позиции неизвестно: нет свежего снимка.');
+    }
+    function renderAlertList(rows,now){
+      const visible=rows.filter(x=>filter.value==='all'||x.view.kind===filter.value),signature=JSON.stringify([filter.value,visible.map(({source,r,view})=>[source,r.symbol,view.kind,view.tone,view.direction,view.label,view.reasons,source==='B'?r.bands?.['0.001']?.covered:r.covered])]);if(signature!==listSignature){const opened=new Set([...list.querySelectorAll('details[open]')].map(e=>e.dataset.key));list.replaceChildren();alertCards.clear();if(!visible.length)line(list,filter.value==='entry'?'Сейчас нет подтверждённых условий входа B.':'Нет алертов выбранного типа.','notice');for(const item of visible){const key=item.source+':'+item.r.symbol,card=createAlertCard(item.source,item.r,item.view,opened);alertCards.set(key,card);list.append(card.card);}listSignature=signature;}for(const item of visible){const card=alertCards.get(item.source+':'+item.r.symbol);if(card)updateAlertCard(card,item.source,item.r,item.view,now);}
+    }
+    function renderHistory(now){events=events.filter(e=>now-e.time<86400);const signature=JSON.stringify(events);if(signature===historySignature)return;historySignature=signature;log.replaceChildren();if(!events.length)line(log,'Новых событий пока нет.','muted');for(const e of events){const p=make('p','alert-event event-'+e.tone,stamp(e.time)+' · '+e.text);log.append(p);}}
     function render(){
       if(document.hidden)return;
       const now=Date.now()/1000;
       health.textContent='Модель B: '+(errors.b||(!b||!fresh(b.updated,now,8)?'устарела':b.phase))+' · Стакан: '+(errors.w||(!w||!fresh(w.updated,now,8)?'устарел':w.status));
-      const rows=collectAlerts(b,w,now);
-      document.dispatchEvent(new CustomEvent('lab-alerts',{detail:rows.filter(x=>['entry','watch'].includes(x.view.kind)).length}));
-      stats.replaceChildren();
-      for(const [kind,label] of [['entry','Вход B'],['watch','Наблюдение'],['stale','Нет данных']]){
-        const item=make('div','');item.append(make('strong','',String(rows.filter(x=>x.view.kind===kind).length)),make('span','',label));stats.append(item);
-      }
-      const keys=new Set();
-      for(const {source,r,view} of rows){const key=source+':'+r.symbol;keys.add(key);addEvent(key,view.kind,view.direction,source+' · '+r.symbol+' '+view.direction+' · '+view.label,now,view.tone);}
-      for(const key of states.keys())if(!keys.has(key)&&!states.get(key).startsWith('stale:'))addEvent(key,'stale','—',key+' · поток недоступен',now,'neutral');
-      position.replaceChildren(make('h3','','Позиция модели B'));
-      if(b&&fresh(b.updated,now,8)&&b.position){const p=b.position;const direction=p.side===1?'LONG':'SHORT';line(position,p.symbol+' · '+direction+' · PAPER вход '+fmt(p.entry,8),'position-name');line(position,'Открыта '+stamp(p.opened)+'. Это уже открытая виртуальная позиция, не новый сигнал.');if(lastPosition!==p.opened){events.unshift({time:now,text:p.symbol+' '+direction+' · PAPER вход выполнен',tone:p.side===1?'long':'short'});events=events.slice(0,50);lastPosition=p.opened;persist();beep();}}
-      else line(position,b&&fresh(b.updated,now,8)?'Открытой позиции нет.':'Состояние позиции неизвестно: нет свежего снимка.');
-      const opened=new Set([...list.querySelectorAll('details[open]')].map(e=>e.dataset.key));list.replaceChildren();
-      const visible=rows.filter(x=>filter.value==='all'||x.view.kind===filter.value);
-      if(!visible.length)line(list,filter.value==='entry'?'Сейчас нет подтверждённых условий входа B.':'Нет алертов выбранного типа.','notice');
-      for(const {source,r,view:v} of visible){
-        const card=make('article','alert-card alert-'+v.tone);card.append(make('small','',source==='B'?'МОДЕЛЬ B':'АНАЛИЗ СТАКАНА'),make('h3','',r.symbol+' · '+v.direction),make('p','alert-label',v.label));
-        const metrics=make('div','alert-metrics');
-        const depth=source==='B'?r.bands?.['0.001']: {bid:r.bid_depth,ask:r.ask_depth};
-        for(const [label,value] of [['Цена снимка',fmt(r.price,8)],['Спред',fmt(r.spread,4)+'%'],['Bid / Ask ±0,1%',fmt(depth?.bid,0)+' / '+fmt(depth?.ask,0)+' USDT'],['Возраст стакана',fmt(now-(r.time??r.book_time),1)+' сек.']]){const cell=make('div','');cell.append(make('span','',label),make('b','',value));metrics.append(cell);}card.append(metrics);
-        if(depth?.covered===false||r.covered===false)line(card,'Полученная глубина — нижняя оценка зоны.','muted');
-        if(source==='B')line(card,'ATR '+fmt(r.chart?.atr_pct)+'% · расходы оборота '+fmt(r.roundtrip_pct)+'%.','muted');
-        const d=make('details','');d.dataset.key=source+':'+r.symbol;d.open=opened.has(d.dataset.key);d.append(make('summary','','Условия и ограничения'));
-        for(const reason of v.reasons)line(d,reason);
-        if(!v.reasons.length)line(d,source==='B'?'Условия выполнены на этом снимке. Фактический PAPER-вход подтверждается позицией и журналом.':'Условия наблюдения за стаканом выполнены. Это не сигнал входа модели B.');
-        if(source==='B')line(d,'Лента 5 / 15 сек.: '+fmt(r.flow5?.ratio*100,1)+'% / '+fmt(r.flow15?.ratio*100,1)+'% · OFI 5 сек. '+fmt(r.ofi5,0));
-        const chartButton=make('button','text-button','График и стакан ↗');chartButton.type='button';chartButton.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('lab-symbol',{detail:r.symbol})));card.append(d,chartButton);list.append(card);
-      }
-      events=events.filter(e=>now-e.time<86400);
-      log.replaceChildren();if(!events.length)line(log,'Новых событий пока нет.','muted');
-      for(const e of events){const p=make('p','alert-event event-'+e.tone,stamp(e.time)+' · '+e.text);log.append(p);}
+      const rows=collectAlerts(b,w,now);document.dispatchEvent(new CustomEvent('lab-alerts',{detail:rows.filter(x=>['entry','watch'].includes(x.view.kind)).length}));for(const kind of ['entry','watch','stale'])statValues[kind].textContent=String(rows.filter(x=>x.view.kind===kind).length);
+      const keys=new Set();for(const {source,r,view} of rows){const key=source+':'+r.symbol;keys.add(key);addEvent(key,view.kind,view.direction,source+' · '+r.symbol+' '+view.direction+' · '+view.label,now,view.tone);}for(const key of states.keys())if(!keys.has(key)&&!states.get(key).startsWith('stale:'))addEvent(key,'stale','—',key+' · поток недоступен',now,'neutral');
+      renderPosition(now);renderAlertList(rows,now);renderHistory(now);
     }
     async function poll(){
       if(busy)return;busy=true;
       const results=await Promise.allSettled(['/api/model-b','/api/signals'].map(async path=>{const res=await labFetch(path);if(!res.ok)throw new Error('HTTP '+res.status);return res.json();}));
-      for(let i=0;i<2;i++){const result=results[i],key=i?'w':'b';if(result.status==='fulfilled'){errors[key]='';if(i)w=result.value;else b=result.value;}else{errors[key]='недоступен';if(i)w=null;else b=null;}}
+      for(let i=0;i<2;i++){const result=results[i],key=i?'w':'b';if(result.status==='fulfilled'){errors[key]='';if(i)w=result.value;else b=result.value;}else errors[key]='недоступен';}
       busy=false;render();setTimeout(poll,2000);
     }
     clear.addEventListener('click',()=>{events=[];persist();render();});filter.addEventListener('change',render);
-    document.addEventListener('visibilitychange',render);
+    document.addEventListener('visibilitychange',render);document.addEventListener('lab-tab',e=>{if(e.detail==='alerts')render();});
     setInterval(render,1000);poll();
   });
 })(typeof window==='undefined'?globalThis:window);
