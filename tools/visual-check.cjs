@@ -33,6 +33,15 @@ async function navigate(page,key,width){
    await page.waitForTimeout(1200);assert.equal(await page.locator('.chart-analysis').getAttribute('open'),'');await page.locator('.chart-analysis>summary').click();
    assert.match(await page.locator('#screener-candles svg').getAttribute('aria-label'),/ONDOUSDT/);
    assert.equal(await page.locator('#screener-candles .volume-bar').count(),width===390?45:90);
+   await page.getByRole('button',{name:'Увеличить масштаб графика',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '125%');
+   assert.equal(await page.locator('#screener-candles .volume-bar').count(),width===390?36:72);
+   await page.locator('#screener-candles svg').evaluate(el=>el.dataset.liveNode='kept');
+   await page.locator('#screener-table tbody tr',{hasText:'ONDOUSDT'}).evaluate(el=>el.dataset.liveNode='kept');
+   await navigate(page,'alerts',width);await page.waitForTimeout(2300);await navigate(page,'market',width);
+   assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '125%','chart scale survives an inactive screener tab');
+   assert.equal(await page.locator('#screener-candles svg').evaluate(el=>el.dataset.liveNode),'kept','background data does not replace an unchanged chart');
+   assert.equal(await page.locator('#screener-table tbody tr',{hasText:'ONDOUSDT'}).evaluate(el=>el.dataset.liveNode),'kept','background data patches a screener row in place');
+   await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '100%');
    await page.waitForSelector('#screener-orderbook .book-total');assert.equal(await page.locator('#screener-orderbook .book-total').count(),2);
    assert.equal(await page.locator('#screener-orderbook .book-level').count(),10);
    await page.locator('.book-details>summary').click();await page.waitForSelector('#screener-orderbook .book-band');
