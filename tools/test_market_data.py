@@ -125,13 +125,26 @@ class MarketTests(unittest.TestCase):
             clock[0]=16;cache.get('screener')
             try:cache.entries[('screener','','')]['future'].result(timeout=2)
             except ValueError:pass
-            data=cache.get('screener');self.assertEqual(data['status'],'error');self.assertEqual(data['updated'],1000)
+            data=cache.get('screener');self.assertEqual(data['status'],'ok');self.assertEqual(data['updated'],1000)
+            self.assertIn('refresh_error',data)
             for _ in range(10):cache.get('screener')
             self.assertEqual(len(calls),2)
             for symbol in ('../passwd','https://example.org','BTCUSDT&x=1','BTCUSDT;id'):
                 with self.assertRaises(ValueError):cache.get('book',symbol)
             with self.assertRaises(ValueError):cache.get('chart','BTCUSDT','D')
         finally:cache.close()
+
+    def test_background_prefetch_warms_only_shared_screener_snapshot(self):
+        called = threading.Event(); calls = []
+        def api(endpoint, **params):
+            calls.append((endpoint, params)); called.set()
+            return dict(list=[ticker()]), 1000
+        cache = market.MarketData(api=api, background=True)
+        try:
+            self.assertTrue(called.wait(1), 'background prefetch should start without a browser request')
+            self.assertEqual(calls[0], ('tickers', {}))
+        finally:
+            cache.close()
 
 
 if __name__=='__main__':unittest.main()
