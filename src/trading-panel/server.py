@@ -8,7 +8,9 @@ import control_client
 
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
-MARKET = MarketData()
+# The public ticker cache is warmed on the server, so opening a dashboard section
+# never has to wait for another browser tab to have visited the screener first.
+MARKET = MarketData(background=True)
 FILES = {
     "/models.js": ("models.js", "text/javascript; charset=utf-8"),
     "/models.css": ("models.css", "text/css; charset=utf-8"),
@@ -81,6 +83,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def api_error(self, code, message):
+        self.send(code, json.dumps(dict(status='error', error=message), ensure_ascii=False).encode(),
+                  'application/json; charset=utf-8')
+
     def do_GET(self):
         if self.headers.get("Host") not in (
             "127.0.0.1:8787", "localhost:8787"
@@ -92,7 +98,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/engine-journal":
                 query = parse_qs(urlsplit(self.path).query)
                 if set(query) != {"engine"} or len(query["engine"]) != 1 or query["engine"][0] not in ("freqtrade", "hummingbot", "jesse"):
-                    self.send(400, b"Invalid engine", "text/plain")
+                    self.api_error(400, 'Invalid engine')
                     return
                 data = control_client.call(dict(op="journal", engine=query["engine"][0]))
                 self.send(200, data["csv"].encode(), "text/csv; charset=utf-8")
@@ -106,13 +112,13 @@ class Handler(BaseHTTPRequestHandler):
             elif path in ("/api/screener", "/api/market-chart", "/api/market-book"):
                 query = parse_qs(urlsplit(self.path).query)
                 if any(len(v) != 1 for v in query.values()) or set(query) - {"symbol", "interval"}:
-                    self.send(400, b"Invalid query", "text/plain")
+                    self.api_error(400, 'Invalid query')
                     return
                 kind = {"/api/screener": "screener", "/api/market-chart": "chart", "/api/market-book": "book"}[path]
                 try:
                     data = MARKET.get(kind, query.get("symbol", [""])[0], query.get("interval", ["5"])[0])
                 except ValueError:
-                    self.send(400, b"Invalid symbol or timeframe", "text/plain")
+                    self.api_error(400, 'Invalid symbol or timeframe')
                     return
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), "application/json")
             elif path in ("/api/state", "/api/scanner"):
@@ -132,7 +138,10 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as exc:
             print(type(exc).__name__, str(exc), flush=True)
-            self.send(503, b"State unavailable", "text/plain")
+            if urlsplit(self.path).path.startswith('/api/'):
+                self.api_error(503, 'Data source unavailable')
+            else:
+                self.send(503, b"State unavailable", "text/plain")
 
     def log_message(self, *args):
         pass
@@ -140,6 +149,24 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.headers.get("Host") not in ("127.0.0.1:8787", "localhost:8787"):
             self.send(403, b'{"error":"Invalid Host"}', "application/json")
+            return
+        if self.path == '/api/worker':
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                key = self.headers.get('X-Lab-Worker', '')
+                if (not 0 < length <= 32768 or self.headers.get('Transfer-Encoding') or
+                        self.headers.get('Content-Type') != 'application/json' or
+                        not 32 <= len(key) <= 128 or not key.isascii() or
+                        self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site')):
+                    raise ValueError('Invalid worker request')
+                payload = json.loads(self.rfile.read(length))
+                result = control_client.call(dict(op='worker', key=key, payload=payload))
+                self.send(200 if result.get('status') == 'ok' else 409,
+                          json.dumps(result, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            except (ValueError, TypeError):
+                self.send(400, b'{"error":"Invalid worker request"}', 'application/json')
+            except OSError:
+                self.send(503, b'{"error":"Controller unavailable"}', 'application/json')
             return
         if self.path != "/api/models-control":
             self.send(404, b'{"error":"Not found"}', "application/json")

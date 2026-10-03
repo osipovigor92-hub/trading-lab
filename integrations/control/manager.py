@@ -15,6 +15,7 @@ import subprocess
 import threading
 import time
 import uuid
+from remote import Remote
 
 ROOT = Path('/var/lib/trading-control')
 SOCKET = Path('/run/trading-control/control.sock')
@@ -76,6 +77,7 @@ class Manager:
         self.lock = threading.RLock()
         self.busy = set()
         self.journal = read(ROOT / 'audit.json', [])
+        self.remote = Remote(ROOT)
 
     def audit(self, target, action, outcome, message='', request_id=None):
         self.journal.append(dict(time=time.time(), target=target, action=action,
@@ -149,57 +151,76 @@ class Manager:
                       'Для теста нужно ' + str(minimum) + ' ГБ RAM с резервом для панели'
                       if not enough else 'Нужна подготовка изолированного движка' if not installed
                       else 'Подготовка нового тестового запуска' if starting else s.get('reason', 'Готов к отдельному тесту'))
-            result.append(dict(id=engine, name=name, kind='engine', mode=mode, installed=installed,
+            item = dict(id=engine, name=name, kind='engine', mode=mode, installed=installed,
                 phase=phase, reason=reason, version=configured.get('version'),
                 required_gb=minimum, memory_ok=enough, updated=s.get('updated'),
                 metrics=None if starting else s.get('metrics'), settings=None if starting else s.get('settings'), runs=runs[-20:][::-1],
                 busy=engine in self.busy, generation=len(runs),
                 actions=dict(start=trusted and enough and not active, stop=installed and active,
-                             restart=trusted and enough and not active)))
+                             restart=trusted and enough and not active))
+            pc = self.remote.item(engine)
+            item['execution'] = 'vds'
+            item['test_active'] = active
+            item['executors'] = dict(vds=dict(item), pc=pc)
+            item['test_active'] = active or pc['test_active']
+            result.append(item)
         return result
 
     def status(self):
         with self.lock:
             return dict(status='ok', updated=time.time(), models=self.models(), engines=self.engines(),
-                        memory=memory(), audit=self.journal[-30:][::-1])
+                        memory=memory(), worker=self.remote.status(), audit=self.journal[-30:][::-1])
 
     def journal_csv(self, engine):
         if engine not in ENGINES:
             raise ValueError('Unknown engine')
         stream = io.StringIO()
         writer = csv.writer(stream)
-        writer.writerow(['run_id', 'engine', 'started_utc_unix', 'finished_utc_unix', 'phase',
+        writer.writerow(['run_id', 'engine', 'execution', 'started_utc_unix', 'finished_utc_unix', 'phase',
                          'strategy', 'symbol', 'interval', 'trades', 'paper_fills', 'net_usdt',
                          'equity_usdt', 'reason'])
-        for r in read(PLATFORM_STATE / engine / 'runs.json', [])[-100:]:
+        runs = read(PLATFORM_STATE / engine / 'runs.json', [])[-100:]
+        runs += [r for r in self.remote.data['runs'] if r['engine'] == engine][-100:]
+        for r in sorted(runs, key=lambda r: r.get('started', r.get('created', 0))):
             m, s = r.get('metrics') or {}, r.get('settings') or {}
-            fields = [r.get('id'), engine, r.get('started'), r.get('finished'), r.get('phase'),
+            fields = [r.get('id'), engine, r.get('execution', 'vds'), r.get('started', r.get('created')), r.get('finished'), r.get('phase'),
                 s.get('strategy'), s.get('pair'), s.get('interval'), m.get('count'), m.get('fills'),
                 m.get('net'), m.get('equity'), r.get('reason')]
             writer.writerow(["'"+v if isinstance(v, str) and v.startswith(('=', '+', '-', '@')) else v for v in fields])
         return dict(csv='\ufeff' + stream.getvalue())
 
     def command(self, request):
-        if not isinstance(request, dict) or set(request) != {'target', 'action', 'generation'}:
+        if not isinstance(request, dict) or set(request) not in ({'target', 'action', 'generation'}, {'target', 'action', 'generation', 'execution'}):
             raise ValueError('Неизвестные поля команды')
         target, action, generation = (request[k] for k in ('target', 'action', 'generation'))
+        execution = request.get('execution', 'vds')
         if (not isinstance(target, str) or target not in (*MODEL_UNITS, *ENGINES) or
-                action not in ('start', 'stop', 'restart') or type(generation) is not int):
+                action not in ('start', 'stop', 'restart') or type(generation) is not int or
+                execution not in ('vds', 'pc') or (target in MODEL_UNITS and 'execution' in request)):
             raise ValueError('Недопустимая команда')
         with self.lock:
             items = self.models() if target in MODEL_UNITS else self.engines()
             item = next(i for i in items if i['id'] == target)
+            if target in ENGINES and execution == 'pc':
+                item = item.get('executors', {}).get('pc') or self.remote.item(target)
             if target in self.busy or generation != item['generation']:
                 raise ValueError('Состояние изменилось. Обновите карточку и повторите действие')
             if not item['actions'][action]:
                 raise ValueError(item['reason'] or 'Действие сейчас недоступно')
             if target in ENGINES and action != 'stop':
+                if self.remote.active():
+                    raise ValueError('Другой тест ещё работает на ПК или его завершение не подтверждено')
                 # A single heavyweight test slot, across all three engines.
                 if any(unit_status('trading-test-' + x + '.service').get('ActiveState')
                        in ('active', 'activating', 'deactivating') for x in ENGINES):
                     raise ValueError('Другой тест ещё работает. Доступно одно тестовое задание')
                 if any(x in self.busy for x in ENGINES):
                     raise ValueError('Другой тест запускается')
+            if target in ENGINES and execution == 'pc':
+                uid = self.remote.command(target, action, generation)
+                self.audit(target, action, 'accepted', 'ПК: команда сохранена в очереди', uid)
+                self.audit(target, action, 'delivered', 'ПК: ожидаем подтверждения исполнителя', uid)
+                return dict(status='accepted', id=uid, message='Задание принято для ПК')
             uid = str(uuid.uuid4())
             if target in MODEL_UNITS:
                 atomic(ROOT / 'commands' / (target + '.json'),
@@ -234,16 +255,23 @@ class Handler(socketserver.StreamRequestHandler):
             return
         self.request.settimeout(5)
         try:
-            raw = self.rfile.readline(8193)
-            if len(raw) > 8192 or not raw.endswith(b'\n'):
+            raw = self.rfile.readline(65537)
+            if len(raw) > 65536 or not raw.endswith(b'\n'):
                 raise ValueError('Слишком длинная команда')
             request = json.loads(raw)
+            if not isinstance(request, dict):
+                raise ValueError('Недопустимый запрос')
+            if request.get('op') != 'worker' and len(raw) > 8192:
+                raise ValueError('Слишком длинная команда')
             if request == {'op': 'status'}:
                 response = self.server.manager.status()
             elif isinstance(request, dict) and set(request) == {'op', 'engine'} and request['op'] == 'journal':
                 response = self.server.manager.journal_csv(request['engine'])
             elif isinstance(request, dict) and set(request) == {'op', 'command'} and request['op'] == 'command':
                 response = self.server.manager.command(request['command'])
+            elif isinstance(request, dict) and set(request) == {'op', 'key', 'payload'} and request['op'] == 'worker':
+                with self.server.manager.lock:
+                    response = self.server.manager.remote.exchange(request['key'], request['payload'])
             else:
                 raise ValueError('Неизвестная операция')
         except (ValueError, KeyError, TypeError, OSError) as exc:

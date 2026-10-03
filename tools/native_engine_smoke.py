@@ -43,7 +43,8 @@ def main(engine):
             df=strategy.populate_entry_trend(df,{'pair':'BTC/USDT:USDT'})
             df=strategy.populate_exit_trend(df,{'pair':'BTC/USDT:USDT'})
             assert df['enter_long'].sum()>0 and df['enter_short'].sum()>0
-            assert config['dry_run'] is True and not config['api_server']['enabled']
+            assert config['dry_run'] is True
+            assert 'api_server' not in config and 'telegram' not in config
         elif engine=='jesse':
             from datetime import datetime, timezone
             rows=candles();start=datetime.fromtimestamp(rows[300][0]/1000,timezone.utc)

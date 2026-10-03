@@ -4,17 +4,22 @@ document.addEventListener('DOMContentLoaded',()=>{
  const title=document.createElement('h2');title.textContent='A / B · общий период и постоянный журнал';
  const status=document.createElement('p'),body=document.createElement('div');box.append(title,status,body);page.prepend(box);
  const fmt=(x,n=3)=>x==null?'—':Number(x).toLocaleString('ru-RU',{maximumFractionDigits:n});
- const dt=x=>new Date(x*1000).toLocaleString('ru-RU');
+ const dt=x=>typeof x==='number'&&Number.isFinite(x)?new Date(x*1000).toLocaleString('ru-RU'):'—';
  const line=(parent,text)=>{const p=document.createElement('p');p.textContent=text;parent.append(p);};
+ const issueRows=s=>Array.isArray(s.issues)&&s.issues.length?s.issues:(s.errors||[]).map(detail=>({title:'Данные требуют внимания',detail:String(detail)}));
+ function showIssues(parent,s){const rows=issueRows(s).filter(row=>row&&typeof row.title==='string');if(!rows.length)return;const box=document.createElement('details');box.className='data-notice report-issues';const summary=document.createElement('summary');summary.textContent='Данные требуют внимания · '+rows.length;box.append(summary);for(const row of rows){const item=document.createElement('div');item.className='report-issue';const h=document.createElement('strong');h.textContent=row.title;const p=document.createElement('p');p.textContent=row.detail||'';item.append(h,p);box.append(item);}parent.append(box);}
+ async function get(){
+  if(typeof window.labJson==='function')return window.labJson('/api/lab-report',{cache:'no-store',signal:AbortSignal.timeout(8000)},'Сводный отчёт');
+  const res=await labFetch('/api/lab-report',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(!res.ok)throw new Error('HTTP '+res.status);return res.json();
+ }
  async function refresh(){
   try{
-   const res=await labFetch('/api/lab-report',{cache:'no-store',signal:AbortSignal.timeout(8000)});
-   if(!res.ok)throw new Error('HTTP '+res.status);const s=await res.json();
+   const s=await get();
    const age=Date.now()/1000-s.updated,fresh=age>=-3&&age<=150;
-   status.textContent=(!fresh?'ОТЧЁТ УСТАРЕЛ':s.status==='ok'?'Отчёт обновляется':s.status==='partial'?'Неполные или устаревшие исходные данные':'Ожидание / ошибка')+' · '+dt(s.updated);
+   status.textContent=(!fresh?'ОТЧЁТ УСТАРЕЛ':s.status==='ok'?'Отчёт актуален':s.status==='partial'?'Часть источников требует внимания':'Ожидание данных')+' · '+dt(s.updated);
    status.className=fresh&&s.status==='ok'?'positive':'negative';
    const open=new Set([...body.querySelectorAll('details[open]')].map(d=>d.dataset.key));body.replaceChildren();
-   for(const error of s.errors||[])line(body,error);
+   showIssues(body,s);
    if(!s.models)return;
    line(body,'Общий период: '+dt(s.start)+' — '+dt(s.end)+'. Максимум 24 часа.');
    line(body,'Включены только точно записанные сделки, открытые и закрытые внутри периода. Начало ограничено запуском B и первым точным закрытием A.');

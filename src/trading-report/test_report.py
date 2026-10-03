@@ -1,5 +1,6 @@
 import json,sqlite3,tempfile,unittest
 from pathlib import Path
+from unittest.mock import patch
 import report
 
 class Tests(unittest.TestCase):
@@ -31,10 +32,28 @@ class Tests(unittest.TestCase):
   path=self.root/'history.sqlite';src=sqlite3.connect(path);src.execute('CREATE TABLE samples(t REAL PRIMARY KEY,data TEXT)');src.execute("INSERT INTO samples VALUES(100,'bad json')");src.commit();src.close()
   with self.assertRaises(ValueError):report.ingest(self.db,path)
   self.assertIsNone(self.db.execute("SELECT v FROM meta WHERE k='cursor'").fetchone())
+
+ def test_history_open_falls_back_to_checkpointed_read_without_hiding_failure(self):
+  path=self.root/'history.sqlite';path.write_bytes(b'not opened in this mocked test')
+  sentinel=object()
+  with patch.object(report.sqlite3,'connect',side_effect=[sqlite3.OperationalError('missing shm'),sentinel]) as connect:
+   self.assertIs(report.open_history(path),sentinel)
+   self.assertIn('immutable=1',connect.call_args_list[1].args[0])
+  with patch.object(report.sqlite3,'connect',side_effect=[sqlite3.OperationalError('first'),sqlite3.OperationalError('second')]):
+   with self.assertRaisesRegex(sqlite3.OperationalError,'first'):report.open_history(path)
  def test_atomic_report(self):
   old=report.ROOT;report.ROOT=self.root
   try:
    report.save({'status':'ok'});self.assertEqual(json.loads((self.root/'report.json').read_text())['status'],'ok');self.assertFalse((self.root/'report.tmp').exists())
   finally:report.ROOT=old
+
+ def test_issues_are_human_readable_and_scoped_to_the_affected_model(self):
+  errors=['История B: unable to open database file','A: состояние устарело; общий период заканчивается последним общим снимком','Нет свежих архивных наблюдений B']
+  rows=report.issues_for(errors)
+  self.assertEqual(rows[0]['code'],'history-b-unavailable')
+  self.assertNotIn('database',rows[0]['detail'])
+  self.assertEqual([row['scope'] for row in report.issues_for(errors,'A')],['A'])
+  self.assertEqual([row['scope'] for row in report.issues_for(errors,'B')],['B','B'])
+  self.assertEqual(report.errors_for(errors,'A'),[errors[1]])
 
 if __name__=='__main__':unittest.main()

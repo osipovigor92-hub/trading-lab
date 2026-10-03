@@ -33,6 +33,15 @@ async function navigate(page,key,width){
    await page.waitForTimeout(1200);assert.equal(await page.locator('.chart-analysis').getAttribute('open'),'');await page.locator('.chart-analysis>summary').click();
    assert.match(await page.locator('#screener-candles svg').getAttribute('aria-label'),/ONDOUSDT/);
    assert.equal(await page.locator('#screener-candles .volume-bar').count(),width===390?45:90);
+   await page.getByRole('button',{name:'Увеличить масштаб графика',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '125%');
+   assert.equal(await page.locator('#screener-candles .volume-bar').count(),width===390?36:72);
+   await page.locator('#screener-candles svg').evaluate(el=>el.dataset.liveNode='kept');
+   await page.locator('#screener-table tbody tr',{hasText:'ONDOUSDT'}).evaluate(el=>el.dataset.liveNode='kept');
+   await navigate(page,'alerts',width);await page.waitForTimeout(2300);await navigate(page,'market',width);
+   assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '125%','chart scale survives an inactive screener tab');
+   assert.equal(await page.locator('#screener-candles svg').evaluate(el=>el.dataset.liveNode),'kept','background data does not replace an unchanged chart');
+   assert.equal(await page.locator('#screener-table tbody tr',{hasText:'ONDOUSDT'}).evaluate(el=>el.dataset.liveNode),'kept','background data patches a screener row in place');
+   await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '100%');
    await page.waitForSelector('#screener-orderbook .book-total');assert.equal(await page.locator('#screener-orderbook .book-total').count(),2);
    assert.equal(await page.locator('#screener-orderbook .book-level').count(),10);
    await page.locator('.book-details>summary').click();await page.waitForSelector('#screener-orderbook .book-band');
@@ -76,6 +85,13 @@ async function navigate(page,key,width){
    await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).click();
    await bCard.locator('.control-response').filter({hasText:'Состояние изменилось'}).waitFor();
    assert.equal(await bCard.locator('.managed-badge').textContent(),'Отключена');await page.unroute('**/api/models-control');
+   // Gateways sometimes return an HTML page instead of the local JSON API.
+   // The panel must explain the fix, never leak a browser JSON parser error.
+   await page.route('**/api/models-control',async route=>{if(route.request().method()==='POST')await route.fulfill({status:502,contentType:'text/html',body:'<html><h1>Gateway</h1></html>'});else await route.continue();});
+   await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).click();
+   await bCard.locator('.control-response').filter({hasText:'SSH-туннель'}).waitFor();
+   assert.doesNotMatch(await bCard.locator('.control-response').textContent(),/Unexpected token/);
+   await page.unroute('**/api/models-control');
    await bCard.getByRole('button',{name:'Перезапустить Модель B',exact:true}).click();
    await bCard.locator('.managed-badge').filter({hasText:'Прогрев'}).waitFor();await bCard.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
    assert.match(await bCard.locator('.control-response').textContent(),/Перезапуск подтверждён/);
@@ -100,6 +116,21 @@ async function navigate(page,key,width){
    await ft.getByRole('button',{name:'Повторить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест завершён'}).waitFor();
    await ft.locator('.engine-runs>summary').click();assert.ok(await ft.locator('.engine-run').count()>=2);
    const csv=await page.request.get(`http://127.0.0.1:${port}/api/engine-journal?engine=freqtrade`);assert.equal(csv.status(),200);assert.match(await csv.text(),/cancelled/);
+   assert.match(await page.locator('#pc-worker-status').textContent(),/Мой ПК подключён/);
+   await ft.getByLabel('Исполнитель Freqtrade').selectOption('pc');
+   assert.match(await ft.textContent(),/Исполнение на ПК/);
+   await ft.locator('.engine-prepare>summary').click();assert.match(await ft.locator('.setup-command').textContent(),/worker_setup.py prepare --engine freqtrade --install/);
+   await ft.locator('.engine-prepare>summary').click();
+   await ft.getByRole('button',{name:'Запустить тест Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
+   assert.equal(await ft.getByLabel('Исполнитель Freqtrade').isDisabled(),true,'active PC task pins its executor');
+   assert.equal(await jesse.getByRole('button',{name:'Запустить тест Jesse',exact:true}).isDisabled(),true,'PC task also occupies the VDS slot');
+   await page.reload();await page.waitForSelector('#page-research:not([hidden])');
+   assert.equal(await ft.getByLabel('Исполнитель Freqtrade').inputValue(),'pc','PC choice survives reload');
+   await ft.getByRole('button',{name:'Остановить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест отменён'}).waitFor();
+   assert.match(await ft.locator('.control-response').textContent(),/Остановка теста подтверждена/);
+   await ft.locator('.engine-runs>summary').click();assert.match(await ft.locator('.engine-run-list').textContent(),/ПК/);
+   const pcCsv=await page.request.get(`http://127.0.0.1:${port}/api/engine-journal?engine=freqtrade`);assert.match(await pcCsv.text(),/,pc,cancelled,/);
+   await page.screenshot({path:path.join(root,'artifacts',`pc-models-${width}.png`),fullPage:true});
    await page.locator('.models-audit>summary').click();assert.match(await page.locator('.control-log').textContent(),/B.*Отключение.*подтверждено/);
    await page.screenshot({path:path.join(root,'artifacts',`models-${width}.png`),fullPage:true});
    await page.locator('.models-analysis>summary').click();await page.waitForSelector('#research-observations .research-card');
@@ -124,7 +155,7 @@ async function navigate(page,key,width){
    assert.equal(await page.locator('#page-alerts .alert-event').count(),historyCount,'history must survive reload without duplicates');
    const frozen=await page.evaluate(()=>Date.now());await page.evaluate(t=>{Date.now=()=>t+20000},frozen);await page.waitForTimeout(1300);
    assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');assert.ok(await page.locator('.event-neutral').count()>=2,'entry cancellations visible');
-   await navigate(page,'chart',width);await page.waitForTimeout(1100);assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');
+   await navigate(page,'chart',width);await page.waitForTimeout(1100);assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');assert.match(await page.locator('.decision-box').textContent(),/сигнал скрыт до свежего снимка/);
    await navigate(page,'research',width);await page.locator('.models-analysis>summary').click();assert.equal(await page.locator('.research-match').count(),0);assert.match(await page.locator('#page-research').textContent(),/ОТЧЁТ УСТАРЕЛ/);
    assert.equal(await page.locator('#model-controls button[data-action]:enabled').count(),0,'stale control reply must disable commands');
    await navigate(page,'market',width);await page.evaluate(t=>{Date.now=()=>t+90000},frozen);await page.waitForTimeout(4500);

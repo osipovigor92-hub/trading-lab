@@ -191,12 +191,35 @@ def orderbook_analysis(symbol, result, stamp):
 
 
 class MarketData:
-    """Two workers, two outstanding requests, 24 entries, failure backoff."""
-    def __init__(self, api=public_api, clock=time.monotonic):
+    """Two workers, bounded cache and an optional public screener prefetcher."""
+    TTL = {"screener": 5, "chart": 25, "book": 2}
+
+    def __init__(self, api=public_api, clock=time.monotonic, background=False):
         self.api, self.clock = api, clock
         self.lock = threading.Lock()
         self.entries = OrderedDict()
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="public-market")
+        self.stop_event = None
+        self.prefetcher = None
+        if background:
+            self.start_background()
+
+    def start_background(self):
+        """Keep the shared top-of-market snapshot warm without a browser tab."""
+        if self.prefetcher:
+            return
+        self.stop_event = threading.Event()
+
+        def refresh():
+            while not self.stop_event.is_set():
+                try:
+                    self.get("screener")
+                except Exception:
+                    pass
+                self.stop_event.wait(1)
+
+        self.prefetcher = threading.Thread(target=refresh, name="public-screener-prefetch", daemon=True)
+        self.prefetcher.start()
 
     def _load(self, kind, symbol, interval):
         if kind == "screener":
@@ -224,7 +247,7 @@ class MarketData:
                 try:
                     cached["data"] = job.result()
                     cached["error"] = ""
-                    cached["until"] = now + {"screener": 15, "chart": 25, "book": 2}[cache_key[0]]
+                    cached["until"] = now + self.TTL[cache_key[0]]
                 except Exception as exc:
                     cached["error"] = type(exc).__name__ + ": " + str(exc)[:160]
                     cached["until"] = now + 20
@@ -246,8 +269,17 @@ class MarketData:
             data = dict(entry["data"] or dict(status="pending", updated=0))
             data["refreshing"] = entry["future"] is not None
             if entry["error"]:
-                data.update(status="error", error=entry["error"])
+                # A last verified quote remains usable until its own timestamp ages out.
+                # Do not replace it with an empty error packet during a transient refresh.
+                if entry["data"] is None:
+                    data.update(status="error", error=entry["error"])
+                else:
+                    data["refresh_error"] = entry["error"]
             return data
 
     def close(self):
+        if self.stop_event:
+            self.stop_event.set()
+        if self.prefetcher:
+            self.prefetcher.join(timeout=2)
         self.pool.shutdown(wait=True)

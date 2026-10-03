@@ -5,22 +5,24 @@ document.addEventListener('DOMContentLoaded',()=>{
  const fmt=(x,n=4)=>x==null?'—':Number(x).toLocaleString('ru-RU',{maximumFractionDigits:n});
  const dt=x=>x?new Date(x*1000).toLocaleString('ru-RU'):'—';
  const line=(p,text)=>{const el=document.createElement('p');el.textContent=text;p.append(el);return el;};
+ const issueRows=s=>Array.isArray(s.issues)&&s.issues.length?s.issues:(s.errors||[]).map(detail=>({title:'Данные требуют внимания',detail:String(detail)}));
+ function showIssues(parent,s){const rows=issueRows(s).filter(row=>row&&typeof row.title==='string');if(!rows.length)return;const box=document.createElement('details');box.className='data-notice report-issues';const summary=document.createElement('summary');summary.textContent='Данные требуют внимания · '+rows.length;box.append(summary);for(const row of rows){const item=document.createElement('div');item.className='report-issue';const h=document.createElement('strong');h.textContent=row.title;const p=document.createElement('p');p.textContent=row.detail||'';item.append(h,p);box.append(item);}parent.append(box);}
+ const metric=(parent,label,value,cls='')=>{const cell=document.createElement('div');cell.className='journal-metric';const h=document.createElement('span');h.textContent=label;const v=document.createElement('strong');v.className=cls;v.textContent=value;cell.append(h,v);parent.append(cell);};
  for(const model of ['A','B']){
   const root=document.createElement('section'),h=document.createElement('h3'),status=document.createElement('p'),body=document.createElement('div');
   h.textContent='Модель '+model;root.append(h,status,body);box.append(root);
   async function refresh(){
    try{
-    const response=await labFetch('/api/journal-'+model.toLowerCase(),{cache:'no-store',signal:AbortSignal.timeout(8000)});
-    if(!response.ok)throw new Error('HTTP '+response.status);const s=await response.json(),now=Date.now()/1000;
+    const url='/api/journal-'+model.toLowerCase();const s=typeof window.labJson==='function'?await window.labJson(url,{cache:'no-store',signal:AbortSignal.timeout(8000)},'Журнал модели '+model):await (async()=>{const response=await labFetch(url,{cache:'no-store',signal:AbortSignal.timeout(8000)});if(!response.ok)throw new Error('HTTP '+response.status);return response.json();})();const now=Date.now()/1000;
     const reportFresh=now-s.updated>=-3&&now-s.updated<=150;
     const sourceAtBuild=s.updated-s.source_updated,sourceFresh=sourceAtBuild>=-3&&sourceAtBuild<=15;
     status.textContent=(!reportFresh?'ОТЧЁТ УСТАРЕЛ':!sourceFresh?'ИСХОДНОЕ СОСТОЯНИЕ УСТАРЕЛО':s.phase==='halted'?'МОДЕЛЬ ОСТАНОВЛЕНА':s.status==='ok'?'Журнал обновляется':'НЕПОЛНЫЙ ОТЧЁТ')+' · '+dt(s.updated);
     status.className=reportFresh&&sourceFresh&&s.status==='ok'&&s.phase!=='halted'?'positive':'negative';
     const opened=new Set([...body.querySelectorAll('details[open]')].map(d=>d.dataset.key));body.replaceChildren();
-    if(s.reason)line(body,s.reason);for(const e of s.errors||[])line(body,e);
+    showIssues(body,s);if(s.reason)line(body,s.reason,s.phase==='halted'?'negative':'muted');
     const t=s.summary;
-    line(body,'Все точные закрытия: '+t.count+' · прибыльных '+t.wins+' · убыточных '+t.losses+' · нулевых '+(t.count-t.wins-t.losses)+'.');
-    const net=line(body,'Чистый результат: '+fmt(t.net)+' USDT · средняя сделка: '+fmt(t.average)+' USDT.');net.className=t.net>0?'positive':t.net<0?'negative':'muted';
+    const summary=document.createElement('div');summary.className='journal-summary';metric(summary,'Точные закрытия',String(t.count));metric(summary,'Чистый результат',fmt(t.net)+' USDT',t.net>0?'positive':t.net<0?'negative':'');metric(summary,'Средняя сделка',fmt(t.average)+' USDT',t.average>0?'positive':t.average<0?'negative':'');metric(summary,'Profit factor',fmt(t.profit_factor,2));body.append(summary);
+    line(body,'Прибыльных '+t.wins+' · убыточных '+t.losses+' · нулевых '+(t.count-t.wins-t.losses)+'.');
     line(body,'Gross '+fmt(t.gross)+' · комиссии '+fmt(t.fees)+' · funding '+fmt(t.funding)+' USDT. Комиссии и funding уже включены в net.');
     line(body,'Прибыльных '+fmt(t.win_rate,1)+'% · profit factor '+fmt(t.profit_factor,2)+'. Прочерк — показатель не определён.');
     line(body,'Покрытие: '+dt(s.first_opened)+' — '+dt(s.last_closed)+'. Старых закрытий без точного журнала: '+s.legacy_closed+'.');

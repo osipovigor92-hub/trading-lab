@@ -28,7 +28,24 @@ class DemoControl:
         self.models = {m: dict(phase='running', generation=0) for m in 'ABCD'}
         self.engines = {e: dict(phase='idle' if e != 'hummingbot' else 'not_installed',
                               generation=0, runs=[]) for e in ('freqtrade', 'hummingbot', 'jesse')}
+        self.pc_engines = {e: dict(phase='idle' if e != 'hummingbot' else 'not_installed',
+                                 generation=0, runs=[]) for e in self.engines}
         self.audit = []
+
+    def engine_item(self, engine, c, now, execution):
+        if c.get('until', 0) and now >= c['until']:
+            c.update(phase='completed', until=0)
+            c['runs'].append(dict(id='DEMO-'+execution+'-'+str(c['generation']),started=c['started'],
+                finished=now,phase='completed',execution=execution,reason='СИНТЕТИЧЕСКИЙ ПРИМЕР · не результат бота',
+                metrics=dict(count=12,net=-.8),settings=dict(strategy='LabEMATest')))
+        installed=engine!='hummingbot'
+        return dict(id=engine,kind='engine',execution=execution,installed=installed,phase=c['phase'],
+            generation=c['generation'],memory_ok=True,version='DEMO' if installed else None,
+            required_gb=5 if engine=='hummingbot' else 3,test_active=c['phase']=='running',
+            reason='ДЕМОНСТРАЦИЯ · реальный движок не подключён',
+            metrics=c['runs'][-1].get('metrics') if c['runs'] else None,runs=c['runs'][::-1],
+            actions=dict(start=installed and c['phase']!='running',stop=installed and c['phase']=='running',
+                         restart=installed and c['phase']!='running'))
 
     def status(self, data, now):
         with self.lock:
@@ -46,35 +63,29 @@ class DemoControl:
                     actions=dict(start=c['phase']=='paused', stop=c['phase']!='paused', restart=True)))
             engines = []
             for engine, c in self.engines.items():
-                if c.get('until', 0) and now >= c['until']:
-                    c['phase'] = 'completed'; c['until'] = 0
-                    c['runs'].append(dict(id='DEMO-'+str(c['generation']), started=c['started'],
-                        finished=now, phase='completed', reason='СИНТЕТИЧЕСКИЙ ПРИМЕР · не результат бота',
-                        metrics=dict(count=12, net=-.8), settings=dict(strategy='LabEMATest')))
-                installed = engine != 'hummingbot'
-                engines.append(dict(id=engine, kind='engine', installed=installed, phase=c['phase'],
-                    generation=c['generation'], memory_ok=True, version='DEMO' if installed else None,
-                    required_gb=5 if engine=='hummingbot' else 3,
-                    reason='ДЕМОНСТРАЦИЯ · реальный движок не подключён',
-                    metrics=c['runs'][-1].get('metrics') if c['runs'] else None,
-                    runs=c['runs'][::-1], actions=dict(start=installed and c['phase']!='running',
-                        stop=installed and c['phase']=='running', restart=installed and c['phase']!='running')))
+                local=self.engine_item(engine,c,now,'vds')
+                pc=self.engine_item(engine,self.pc_engines[engine],now,'pc')
+                engines.append(dict(local,executors=dict(vds=dict(local),pc=pc),test_active=local['test_active'] or pc['test_active']))
             return dict(status='ok', token=self.token, updated=now, models=rows, engines=engines,
-                        memory=dict(total_gb=8, available_gb=7), audit=self.audit[::-1])
+                        memory=dict(total_gb=8, available_gb=7), audit=self.audit[::-1],
+                        worker=dict(configured=True,online=True,memory=dict(total_gb=8,available_gb=7)))
 
     def command(self, request):
         with self.lock:
-            if not isinstance(request, dict) or set(request) != {'target', 'action', 'generation'}:
+            if not isinstance(request, dict) or set(request) not in ({'target', 'action', 'generation'}, {'target', 'action', 'generation', 'execution'}):
                 raise ValueError('Недопустимая команда')
             target, action, generation = (request[k] for k in ('target', 'action', 'generation'))
+            execution=request.get('execution','vds')
             if target not in (*self.models, *self.engines) or action not in ('start', 'stop', 'restart'):
                 raise ValueError('Недопустимая команда')
-            c = self.models.get(target, self.engines.get(target))
+            if execution not in ('pc','vds') or target in self.models and 'execution' in request:
+                raise ValueError('Недопустимый исполнитель')
+            c = self.models[target] if target in self.models else (self.pc_engines if execution=='pc' else self.engines)[target]
             if type(generation) is not int or generation != c['generation']:
                 raise ValueError('Состояние изменилось. Обновите карточку')
             if target == 'hummingbot':
                 raise ValueError('Движок не подготовлен')
-            if target in self.engines and action != 'stop' and any(v['phase']=='running' for v in self.engines.values()):
+            if target in self.engines and action != 'stop' and any(v['phase']=='running' for v in (*self.engines.values(),*self.pc_engines.values())):
                 raise ValueError('Другой тест ещё работает')
             c['generation'] += 1
             now=time.time()
@@ -83,10 +94,10 @@ class DemoControl:
             elif action=='stop':
                 c.update(phase='cancelled', until=0)
                 c['runs'].append(dict(id='DEMO-'+str(c['generation']), started=c.get('started', now),
-                    finished=now, phase='cancelled', reason='Тест отменён в демонстрации', metrics=None))
+                    finished=now, phase='cancelled', execution=execution,reason='Тест отменён в демонстрации', metrics=None))
             else:
-                c.update(phase='running', started=now, until=now+5)
-            uid='DEMO-'+target+'-'+str(c['generation'])
+                c.update(phase='running', started=now, until=now+(20 if execution=='pc' else 5))
+            uid='DEMO-'+execution+'-'+target+'-'+str(c['generation'])
             self.audit.append(dict(id=uid,time=now,target=target,action=action,outcome='applied',message='ДЕМО'))
             return dict(status='accepted',id=uid)
 
@@ -178,9 +189,9 @@ class Handler(BaseHTTPRequestHandler):
             engine=parse_qs(urlsplit(self.path).query).get('engine', [''])[0]
             if engine not in CONTROL.engines:
                 self.send_error(400);return
-            body=('\ufeffrun_id,engine,phase,net_usdt\n'+''.join(
-                f"{r['id']},{engine},{r['phase']},{(r.get('metrics') or {}).get('net', '')}\n"
-                for r in CONTROL.engines[engine]['runs'])).encode();kind='text/csv; charset=utf-8'
+            body=('\ufeffrun_id,engine,execution,phase,net_usdt\n'+''.join(
+                f"{r['id']},{engine},{r.get('execution','vds')},{r['phase']},{(r.get('metrics') or {}).get('net', '')}\n"
+                for r in CONTROL.engines[engine]['runs']+CONTROL.pc_engines[engine]['runs'])).encode();kind='text/csv; charset=utf-8'
         else:
             name='index.html' if path=='/' else path.lstrip('/')
             allowed={p.name:p for p in PANEL.iterdir() if p.suffix in ('.html','.js','.css')}

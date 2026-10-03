@@ -1,20 +1,35 @@
 /* Actual server lifecycle; buttons never infer success from a click. */
 (function(scope){
  'use strict';
- const names={running:'Работает',warming:'Прогрев',waiting:'Ожидает данные',paused:'Отключена',stopped:'Служба остановлена',draining:'Завершает позицию',pending:'Применяет команду',halted:'Остановлена по защите',stale:'Нет свежего отчёта',unknown:'Нет отчёта',not_installed:'Не подготовлен',idle:'Готов к тесту',starting:'Запускается',completed:'Тест завершён',cancelled:'Тест отменён',failed:'Ошибка теста',interrupted:'Тест прерван'};
+ const names={running:'Работает',warming:'Прогрев',waiting:'Ожидает данные',paused:'Отключена',stopped:'Служба остановлена',draining:'Завершает позицию',pending:'Применяет команду',halted:'Остановлена по защите',stale:'Нет свежего отчёта',unknown:'Нет отчёта',not_installed:'Не подготовлен',idle:'Готов к тесту',starting:'Запускается',completed:'Тест завершён',cancelled:'Тест отменён',failed:'Ошибка теста',interrupted:'Тест прерван',cancelling:'Останавливается на ПК',lost:'ПК потерял связь'};
  const engineNames={freqtrade:'Freqtrade',hummingbot:'Hummingbot',jesse:'Jesse'};
  const setupCommands={freqtrade:'python3 /opt/trading-lab-repo/tools/prepare_engine.py --engine freqtrade --install',jesse:'python3 /opt/trading-lab-repo/tools/prepare_engine.py --engine jesse --install',hummingbot:'python3 /opt/trading-lab-repo/tools/prepare_engine.py --engine hummingbot --python /opt/hummingbot-env/bin/python'};
+ async function controlJson(response){
+  if(typeof scope.labParseJson==='function')return scope.labParseJson(response,'Управление моделями');
+  const text=await response.text();let value;
+  try{value=JSON.parse(text);}catch(_){throw Error('Управление моделями: сервер вернул некорректный ответ.');}
+  if(!response.ok)throw Error(value?.error||'Управление моделями: HTTP '+response.status);
+  return value;
+ }
  function testSlot(item,engines=[]){
   if(item?.kind!=='engine')return {item,occupiedBy:null};
-  const occupied=engines.find(e=>e.id!==item.id&&(e.busy||['running','starting'].includes(e.phase)));
+  const occupied=engines.find(e=>e.id!==item.id&&(e.busy||e.test_active||['running','starting','cancelling','lost'].includes(e.phase)));
   return {item:occupied?{...item,actions:{...item.actions,start:false,restart:false}}:item,occupiedBy:occupied?.id||null};
+ }
+ function executor(item,node='vds'){
+  if(item?.kind!=='engine')return item;
+  const selected=item.executors?.[node];
+  if(!selected)return node==='vds'?{...item,execution:'vds'}:{...item,execution:'pc',installed:false,memory_ok:false,phase:'not_installed',reason:'Поддержка ПК ещё не установлена',metrics:null,runs:[],actions:{}};
+  const result={...item,...selected,id:item.id,kind:'engine',execution:node};
+  if(item.test_active&&!selected.test_active){result.actions={...result.actions,start:false,restart:false};result.reason='Этот движок выполняется на другом исполнителе.';}
+  return result;
  }
  function buttons(item,current=true){
   const a=item?.actions||{},off=['paused','stopped'].includes(item?.phase),busy=item?.busy||!current;
   if(item?.kind==='engine')return {start:!busy&&a.start===true,stop:!busy&&a.stop===true,restart:!busy&&a.restart===true&&item.phase!=='idle'};
   return {start:!busy&&a.start===true&&(off||['draining','pending','stale','unknown'].includes(item.phase)),stop:!busy&&a.stop===true&&!off&&!(item.pending&&item.requested==='stop'),restart:!busy&&a.restart===true&&!item.pending};
  }
- const api={buttons,names,testSlot};if(typeof module!=='undefined')module.exports=api;
+ const api={buttons,names,testSlot,executor,controlJson};if(typeof module!=='undefined')module.exports=api;
  if(typeof document==='undefined')return;
  document.addEventListener('DOMContentLoaded',()=>{
   const page=document.getElementById('page-research');if(!page)return;
@@ -31,8 +46,9 @@
   const modelGrid=make('div','managed-grid');modelsBox.append(modelGrid);
   const engineBox=make('section','box models-section');engineBox.id='engine-controls';engineBox.append(make('h3','','Тесты Freqtrade / Hummingbot / Jesse'));
   const resources=make('p','muted','Один внешний тест за раз.');engineBox.append(resources);
+  const worker=make('div','worker-status');worker.id='pc-worker-status';worker.setAttribute('role','status');engineBox.append(worker);
   const setup=make('details','models-setup');setup.append(make('summary','','Подготовка и проверка установки'));
-  setup.append(make('p','muted','Тестовый движок сначала готовят на сервере. На этой странице запускается уже подготовленный тест. Требования к памяти включают резерв для панели.'));
+  setup.append(make('p','muted','Выбери место расчёта: VDS или Мой ПК. Движок готовят на выбранной машине. На Windows исполнитель работает в Ubuntu / WSL2 и связывается с панелью через SSH-туннель. ПК должен быть включён; браузер можно закрыть.'));
   const diagnostic=make('pre','setup-command');diagnostic.append(make('code','','python3 /opt/trading-lab-repo/tools/diagnose_models.py'));setup.append(make('p','muted','Проверить службы, версии и доступность тестов без перезапуска:'),diagnostic);
   engineBox.append(setup);
   const engineGrid=make('div','engine-grid');engineBox.append(engineGrid);
@@ -51,32 +67,43 @@
     const b=make('button',action==='start'?'control-primary':'control-secondary',label);b.type='button';b.disabled=true;b.setAttribute('aria-label',label+' '+title.textContent);b.dataset.action=action;b.addEventListener('click',()=>command(id,action));actions.append(b);buttons[action]=b;
    }box.append(actions);
    const response=make('p','control-response');response.setAttribute('role','status');box.append(response);
-   let runs, runBody, readiness;
+   let runs, runBody, readiness, selector, prepareCode, prepareNote;
    if(kind==='engine'){
+    const target=make('label','engine-execution');target.append(make('span','muted','Где выполнять расчёт'));
+    selector=make('select');selector.setAttribute('aria-label','Исполнитель '+title.textContent);
+    for(const [value,label]of [['vds','VDS · сервер'],['pc','Мой ПК · Ubuntu / WSL2']]){const option=make('option','',label);option.value=value;selector.append(option);}
+    try{selector.value=localStorage.getItem('lab-executor-'+id)||'vds';}catch{}
+    selector.addEventListener('change',()=>{try{localStorage.setItem('lab-executor-'+id,selector.value);}catch{}cards.get(id).pendingCommand=null;cards.get(id).response.textContent='';render();});target.append(selector);box.insertBefore(target,metrics);
     readiness=make('ul','engine-readiness');readiness.setAttribute('aria-label','Готовность '+title.textContent);box.insertBefore(readiness,actions);
     const prepare=make('details','engine-prepare');prepare.append(make('summary','','Как подготовить '+title.textContent));
-    prepare.append(make('p','muted',id==='hummingbot'?'Нужно официальное скомпилированное окружение Hummingbot. В шаблоне замени путь к Python на настоящий. Если исходники находятся отдельно, добавь --source-dir с их путём.':'Эта команда создаёт отдельное Python-окружение с проверенной версией. Выполняй её от root на сервере с достаточной памятью.'));
-    const code=make('pre','setup-command');code.append(make('code','',setupCommands[id]));prepare.append(code);
+    prepareNote=make('p','muted');prepare.append(prepareNote);
+    const code=make('pre','setup-command');prepareCode=make('code','',setupCommands[id]);code.append(prepareCode);prepare.append(code);
     const copy=make('button','managed-copy',id==='hummingbot'?'Скопировать шаблон':'Скопировать команду');copy.type='button';copy.setAttribute('aria-label',copy.textContent+' '+title.textContent);
     const copyStatus=make('p','muted');copyStatus.setAttribute('role','status');
-    copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(setupCommands[id]);copyStatus.textContent='Скопировано. Выполни команду в терминале сервера.';}catch{copyStatus.textContent='Буфер обмена недоступен. Выдели и скопируй команду выше.';}});prepare.append(copy,copyStatus);box.append(prepare);
+    copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(prepareCode.textContent);copyStatus.textContent='Скопировано. Выполни команду на выбранном исполнителе.';}catch{copyStatus.textContent='Буфер обмена недоступен. Выдели и скопируй команду выше.';}});prepare.append(copy,copyStatus);box.append(prepare);
     runs=make('details','engine-runs');runs.append(make('summary','','Последние тестовые запуски'));runBody=make('div','engine-run-list');runs.append(runBody);box.append(runs);
     const csv=make('a','research-link','Журнал тестов CSV');csv.href='/api/engine-journal?engine='+id;csv.download=id+'-tests.csv';box.append(csv);
    }else{
     const a=make('button','managed-journal','Открыть журнал сделок →');a.type='button';a.addEventListener('click',()=>{document.dispatchEvent(new CustomEvent('lab-navigate',{detail:'journals'}));document.getElementById(id==='C'||id==='D'?'research-journals':'model-journals')?.scrollIntoView({block:'start',behavior:'smooth'});});box.append(a);
    }
-   const value={box,badge,metrics,position,reason,buttons,response,runBody,readiness,item:{id,kind,actions:{}}};cards.set(id,value);(kind==='engine'?engineGrid:modelGrid).append(box);
+   const value={box,badge,metrics,position,reason,buttons,response,runBody,readiness,selector,prepareCode,prepareNote,item:{id,kind,actions:{}}};cards.set(id,value);(kind==='engine'?engineGrid:modelGrid).append(box);
   }
   for(const id of ['A','B','C','D'])card(id,'model');for(const id of ['freqtrade','hummingbot','jesse'])card(id,'engine');
   const metric=(parent,label,value,cls='')=>{const n=make('div','managed-metric');n.append(make('span','muted',label),make('strong',cls,value));parent.append(n);};
   function enginesNow(){return (state?.engines||[]).map(e=>({...e,busy:e.busy||inflight.has(e.id)}));}
   function render(){
    const now=Date.now()/1000,current=!!state&&now-state.updated>=-1&&now-state.updated<=8;
-   connection.textContent=apiError||(!current?'Управление недоступно: ждём свежий ответ сервера':'Управление подключено · '+date(state.updated));connection.className=current?'models-connection positive':'models-connection muted';
+   connection.textContent=apiError||(!current?'Управление недоступно: ждём свежий ответ сервера':'Управление подключено · '+date(state.updated));connection.className=apiError?'models-connection negative':current?'models-connection positive':'models-connection muted';
    resources.textContent='Один внешний тест за раз.'+(state?.memory?' RAM сервера '+fmt(state.memory.total_gb)+' ГБ · доступно '+fmt(state.memory.available_gb)+' ГБ.':'')+' Freqtrade/Jesse: отдельные исторические тесты; Hummingbot: PAPER по публичному стакану.';
+   const pc=state?.worker;worker.className='worker-status '+(current&&pc?.online?'is-online':'is-offline');worker.replaceChildren();
+   worker.append(make('strong','',current&&pc?.online?'Мой ПК подключён':pc?.configured?'Мой ПК не подключён':'Исполнитель ПК ещё не подключён'));
+   worker.append(make('p','muted',current&&pc?.online?'RAM исполнителя '+fmt(pc.memory?.total_gb)+' ГБ · доступно '+fmt(pc.memory?.available_gb)+' ГБ. Расчёты используют процессор и память ПК.':'Для подключения подготовь Ubuntu / WSL2, SSH-туннель и запусти агент. При выключении ПК новые тесты недоступны.'));
    const list=[...(state?.models||[]),...(state?.engines||[])];
    for(const [id,c]of cards){
-    const item=list.find(i=>i.id===id),slot=testSlot(item,enginesNow());c.item=slot.item||{id,kind:c.item.kind,actions:{}};
+    const raw=list.find(i=>i.id===id);
+    if(c.selector&&raw?.test_active){const running=Object.entries(raw.executors||{}).find(([,e])=>e.test_active);if(running)c.selector.value=running[0];}
+    const item=executor(raw,c.selector?.value||'vds'),slot=testSlot(item,enginesNow());c.item=slot.item||{id,kind:c.item.kind,actions:{}};
+    if(c.selector)c.selector.disabled=inflight.has(id)||!!raw?.test_active;
     if(current&&item&&c.pendingCommand){
      const q=c.pendingCommand,failed=state.audit.find(e=>e.id===q.id&&e.outcome==='error');
      const delivered=state.audit.some(e=>e.id===q.id&&['delivered','applied'].includes(e.outcome));
@@ -86,15 +113,18 @@
      else if(confirmed){c.response.textContent=['failed','halted'].includes(item.phase)?item.reason||'Движок остановлен по ошибке':item.kind==='model'?({start:'Включение подтверждено.',stop:'Отключение подтверждено.',restart:'Перезапуск подтверждён.'}[q.action]):({start:'Запуск теста подтверждён.',stop:'Остановка теста подтверждена.',restart:'Повтор теста подтверждён.'}[q.action]);c.response.className='control-response '+(['failed','halted'].includes(item.phase)?'negative':'positive');c.pendingCommand=null;}
     }
     const phase=current&&item?item.phase:'unknown',active=current&&['running','completed'].includes(phase);
-    c.badge.textContent=current&&item?(names[phase]||phase):'Нет управления';c.badge.className='managed-badge '+(active?'is-on':['failed','halted','interrupted'].includes(phase)?'is-error':['draining','pending','warming'].includes(phase)?'is-pending':'');
+    c.badge.textContent=current&&item?(names[phase]||phase):'Нет управления';c.badge.className='managed-badge '+(active?'is-on':['failed','halted','interrupted','lost'].includes(phase)?'is-error':['draining','pending','warming','cancelling'].includes(phase)?'is-pending':'');
     c.box.classList.toggle('is-working',phase==='running'&&current);c.metrics.replaceChildren();
     if(c.item.kind==='model'){
      metric(c.metrics,'Капитал, USDT',fmt(item?.equity));metric(c.metrics,'Закрыто сделок',fmt(item?.closed,0));
      c.position.textContent=item?.position?'Позиция '+item.position.symbol+' · '+(item.position.side===1?'LONG':'SHORT')+(item.fresh?'':' · оценка устарела'):item?.fresh?'Открытой позиции нет':'Состояние позиции не подтверждено';
     }else{
+     const onPC=item?.execution==='pc';
+     c.prepareCode.textContent=onPC?'python3 ~/trading-lab-pc/tools/worker_setup.py prepare --engine '+id+(id==='hummingbot'?' --python /home/USER/hummingbot-env/bin/python':' --install'):setupCommands[id];
+     c.prepareNote.textContent=id==='hummingbot'?'Нужно официальное скомпилированное окружение Hummingbot на выбранной машине. В шаблоне замени путь к Python на настоящий. Если исходники отдельно, добавь --source-dir.':onPC?'Выполняй в терминале Ubuntu на ПК, без sudo. Перед подготовкой останови агент Ctrl+C; после проверки снова запусти его.':'Выполняй от root на VDS с достаточной памятью. Команда создаёт отдельное окружение с проверенной версией.';
      const m=item?.metrics;metric(c.metrics,id==='hummingbot'?'Изменение оценки, USDT':'Net теста, USDT',fmt(m?.net,4),m?.net>0?'positive':m?.net<0?'negative':'');metric(c.metrics,id==='hummingbot'?'PAPER-исполнений':'Сделок',fmt(id==='hummingbot'?m?.fills:m?.count,0));
      if(m){if(id==='hummingbot'){metric(c.metrics,'Оценка портфеля',fmt(m.equity));metric(c.metrics,'Оборот, USDT',fmt(m.turnover));}else{metric(c.metrics,'Profit factor',fmt(m.profit_factor));metric(c.metrics,'Просадка, %',fmt(m.drawdown_pct));}}
-     c.position.textContent=item?.version?'Движок '+item.version+(item.settings?.start?' · '+date(item.settings.start)+' — '+date(item.settings.end):''):item?.installed?'Движок подготовлен':'Ожидает подготовки движка';
+     c.position.textContent=(onPC?'Исполнение на ПК · ':'Исполнение на VDS · ')+(item?.version?'Движок '+item.version+(item.settings?.start?' · '+date(item.settings.start)+' — '+date(item.settings.end):''):item?.installed?'Движок подготовлен':'Ожидает подготовки движка');
      c.readiness.replaceChildren();
      const required=item?.required_gb,prepared=current&&item?item.installed:null,ramReady=current&&item?item.memory_ok:null;
      const checks=[
@@ -105,7 +135,7 @@
      for(const [pass,label]of checks){const li=make('li',pass===true?'is-ready':pass===false?'is-blocked':'is-unknown');li.append(make('span','readiness-dot',pass===true?'✓':pass===false?'!':'—'),make('span','',label+(pass==null?' · нет свежих данных':'')));c.readiness.append(li);}
      c.runBody.replaceChildren();
      if(!item?.runs?.length)c.runBody.append(make('p','muted','Завершённых запусков пока нет.'));
-     for(const run of item?.runs||[]){const row=make('div','engine-run');row.append(make('p','',date(run.started)+' · '+(names[run.phase]||run.phase)),make('p','muted',run.reason||''));if(run.metrics){row.append(make('p',run.metrics.net>0?'positive':run.metrics.net<0?'negative':'muted',(run.metrics.valuation?'Изменение оценки ':'Net ')+fmt(run.metrics.net,4)+' USDT · '+fmt(run.metrics.count??run.metrics.fills,0)+(run.metrics.valuation?' исполнений':' сделок')));}c.runBody.append(row);}
+     for(const run of item?.runs||[]){const row=make('div','engine-run');row.append(make('p','',date(run.started??run.created)+' · '+(run.execution==='pc'?'ПК':'VDS')+' · '+(names[run.phase]||run.phase)),make('p','muted',run.reason||''));if(run.metrics){row.append(make('p',run.metrics.net>0?'positive':run.metrics.net<0?'negative':'muted',(run.metrics.valuation?'Изменение оценки ':'Net ')+fmt(run.metrics.net,4)+' USDT · '+fmt(run.metrics.count??run.metrics.fills,0)+(run.metrics.valuation?' исполнений':' сделок')));}c.runBody.append(row);}
     }
     c.reason.textContent=slot.occupiedBy&&current?'Заверши тест '+(engineNames[slot.occupiedBy]||slot.occupiedBy)+' перед запуском другого движка.':item?.reason||(!current?'Для кнопок нужна доступная служба управления.':'');
     if(item?.kind==='engine'&&item?.installed&&!item.memory_ok)c.reason.className='managed-reason negative';else c.reason.className='managed-reason muted';
@@ -117,14 +147,15 @@
    const c=cards.get(id),slot=testSlot(c.item,enginesNow());if(inflight.has(id)||!buttons(slot.item,!!state&&Date.now()/1000-state.updated<=8)[action])return;
    inflight.add(id);c.pendingCommand=null;const expected=c.item.generation+1;c.response.textContent='Отправляем команду…';c.response.className='control-response muted';render();
    try{
-    const r=await fetch('/api/models-control',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Control':state.token},credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(8000),body:JSON.stringify({target:id,action,generation:c.item.generation})});
-    const result=await r.json();if(!r.ok||result.status!=='accepted')throw Error(result.error||'HTTP '+r.status);
+    const payload={target:id,action,generation:c.item.generation};if(c.item.kind==='engine'&&c.item.execution==='pc')payload.execution='pc';
+    const r=await fetch('/api/models-control',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Control':state.token},credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(8000),body:JSON.stringify(payload)});
+    const result=await controlJson(r);if(result.status!=='accepted')throw Error(result.error||'Управление не приняло команду.');
     c.pendingCommand={id:result.id,action,generation:expected};c.response.textContent='Команда принята. Ждём фактического состояния движка.';c.response.className='control-response muted';await poll(false);
    }catch(e){c.response.textContent=e.message;c.response.className='control-response negative';}finally{inflight.delete(id);render();}
   }
   async function poll(repeat=true){
-   try{if(!document.hidden){const r=await fetch('/api/models-control',{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error('Недоступно');const s=await r.json();if(s.status!=='ok'||!Array.isArray(s.models)||!Array.isArray(s.engines))throw Error('Неверный ответ');state=s;apiError='';render();}}
-   catch{apiError='Управление ещё не подключено. После установки здесь появятся фактические статусы и кнопки.';state=null;render();}
+   try{if(!document.hidden){const r=await fetch('/api/models-control',{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(8000)});const s=await controlJson(r);if(s.status!=='ok'||!Array.isArray(s.models)||!Array.isArray(s.engines))throw Error('Управление моделями: сервер вернул неполные данные.');state=s;apiError='';render();}}
+   catch(e){apiError=e?.message||'Управление ещё не подключено. После установки здесь появятся фактические статусы и кнопки.';state=null;render();}
    finally{if(repeat)setTimeout(poll,3000);}
   }
   poll();setInterval(()=>{if(!document.hidden)render();},1000);

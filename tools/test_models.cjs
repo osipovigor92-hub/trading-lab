@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {buttons,testSlot}=require('../src/trading-panel/models.js');
+const {buttons,testSlot,executor}=require('../src/trading-panel/models.js');
 const row=(phase,kind='model')=>({kind,phase,actions:{start:true,stop:true,restart:true}});
 test('actual state governs model buttons; stale and pending commands stay disabled',()=>{
  assert.deepEqual(buttons(row('running')),{start:false,stop:true,restart:true});
@@ -7,6 +7,22 @@ test('actual state governs model buttons; stale and pending commands stay disabl
  assert.deepEqual(buttons(row('running'),false),{start:false,stop:false,restart:false});
  assert.equal(buttons({...row('draining'),pending:true,requested:'stop'}).stop,false);
  assert.equal(buttons({...row('running'),busy:true}).restart,false);
+});
+test('PC selection uses PC memory and generation while the VPS remains unprepared',()=>{
+ const raw={id:'jesse',kind:'engine',installed:false,memory_ok:false,generation:4,
+  executors:{vds:{installed:false,memory_ok:false,phase:'not_installed',actions:{}},
+   pc:{installed:true,memory_ok:true,generation:7,phase:'idle',actions:{start:true,stop:false,restart:true}}}};
+ const pc=executor(raw,'pc');assert.equal(pc.execution,'pc');assert.equal(pc.generation,7);
+ assert.equal(buttons(pc).start,true);assert.equal(buttons(executor(raw,'vds')).start,false);
+ assert.equal(buttons(executor({...raw,executors:undefined},'pc')).start,false,'old broker cannot pretend PC support exists');
+});
+test('running or disconnected PC tasks occupy the shared slot and keep stop available',()=>{
+ const pc={phase:'lost',installed:true,test_active:true,actions:{start:false,stop:true,restart:false}};
+ const raw={id:'freqtrade',kind:'engine',test_active:true,executors:{pc,vds:{...row('idle','engine'),test_active:false}}};
+ assert.equal(buttons(executor(raw,'vds')).start,false,'same engine cannot start again on another executor');
+ assert.equal(buttons(executor(raw,'pc')).stop,true);
+ const j={id:'jesse',...row('idle','engine')};assert.equal(buttons(testSlot(j,[raw,j]).item).start,false);
+ assert.equal(buttons(executor(raw,'pc'),false).stop,false,'stale controller response cannot command a task');
 });
 test('unprepared engines cannot start; running test can only be stopped',()=>{
  assert.deepEqual(buttons({kind:'engine',phase:'not_installed',actions:{}}),{start:false,stop:false,restart:false});
