@@ -21,8 +21,21 @@
   const overview=document.getElementById('page-overview'),live=document.getElementById('page-live'),tests=document.getElementById('page-tests');if(!overview)return;
   const make=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
   const fmt=(x,n=2)=>numeric(x)?x.toLocaleString('ru-RU',{maximumFractionDigits:n}):'—';
+  const dt=x=>numeric(x)?new Date(x*1000).toLocaleString('ru-RU'):'—';
   const line=(p,t,c='muted')=>p.append(make('p',c,t));
   const heading=(p,k,t)=>{p.append(make('small','eyebrow',k),make('h2','',t));};
+  const getJson=(path,context)=>typeof scope.labJson==='function'
+   ?scope.labJson(path,{cache:'no-store',signal:AbortSignal.timeout(8000)},context)
+   :scope.labFetch(path,{cache:'no-store',signal:AbortSignal.timeout(8000)}).then(async r=>{if(!r.ok)throw Error(context+' · HTTP '+r.status);return r.json();});
+  function issues(data){
+   if(Array.isArray(data?.issues))return data.issues.filter(x=>x&&typeof x.title==='string');
+   return (data?.errors||[]).map(detail=>({title:'Данные требуют внимания',detail:String(detail)}));
+  }
+  function issueNotice(parent,rows){
+   if(!rows.length)return;
+   const box=make('details','data-notice report-issues');box.append(make('summary','','Данные требуют внимания · '+rows.length));
+   for(const row of rows){const item=make('div','report-issue');item.append(make('strong','',row.title),make('p','',row.detail||''));box.append(item);}parent.append(box);
+  }
   const wrap=(page,title)=>{const old=[...page.children],d=make('details','box archive-details');d.append(make('summary','',title));for(const n of old)d.append(n);page.append(d);return d;};
   const oldOverview=wrap(overview,'Подробности контрольной модели A');
   const oldLive=wrap(live,'Сырые метрики LIVE, уровни и независимый наблюдатель');
@@ -55,7 +68,7 @@
   ];for(const [title,text] of guideItems){const a=make('article');a.append(make('h3','',title),make('p','',text));guide.append(a);}
   for(const [title,url] of [['OFI · Cont, Kukanov, Stoikov','https://arxiv.org/abs/1011.6402'],['Дисбаланс очередей · Gould, Bonart','https://arxiv.org/abs/1512.03492'],['Риск подгонки бэктеста · Bailey и др.','https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf'],['Bybit · порядок snapshot / delta','https://bybit-exchange.github.io/docs/v5/websocket/public/orderbook']]){const a=make('a','research-link',title);a.href=url;a.target='_blank';a.rel='noopener noreferrer';guide.append(a);}
   line(guide,'Исследования OFI и дисбаланса выполнены преимущественно на акциях. Эффективность на этих криптоконтрактах ещё предстоит проверить.');tests.prepend(guide);
-  let b=null,a=null,report=null,journals={},selected='LINKUSDT',extraSymbol='',chartEnabled=false,sequence='',samples=new Map(),error='Подключение',lastSample=new Map();
+  let b=null,a=null,report=null,journals={},selected='LINKUSDT',extraSymbol='',chartEnabled=false,sequence='',samples=new Map(),error='',lastSample=new Map();
   const chooseChart=()=>{const safe=/^[A-Z0-9]{2,24}USDT$/.test(selected)?selected:'LINKUSDT';external.href='https://www.tradingview.com/chart/?symbol='+encodeURIComponent('BYBIT:'+safe+'.P');
    if(!chartEnabled)return;chartHost.replaceChildren();const frame=make('iframe');frame.title='TradingView '+safe;frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-popups');frame.referrerPolicy='no-referrer';frame.src='/chart.html?symbol='+encodeURIComponent(safe)+'&interval='+interval.value;chartHost.append(frame);
   };
@@ -70,14 +83,17 @@
   }
   function render(){if(document.hidden)return;const now=Date.now()/1000;const rows=b?.observations||[];const symbols=[...new Set([...rows.map(r=>r.symbol),...(extraSymbol?[extraSymbol]:[])])];const signature=symbols.join('|');
    if(signature!==sequence){sequence=signature;select.replaceChildren();for(const symbol of symbols){const o=make('option','',symbol);o.value=symbol;select.append(o);}if(!symbols.includes(selected))selected=symbols[0]||'LINKUSDT';select.value=selected;chooseChart();}
-   const r=rows.find(r=>r.symbol===selected);const current=b?.phase==='running'&&fresh(b.updated,now,8)&&fresh(r?.time,now,3);const view=r&&scope.LabAlerts?scope.LabAlerts.classifyB(b,r,now):null;
-   modelSummary.replaceChildren();for(const [name,s] of [['A',a],['B',b]]){const card=make('article','model-tile');const active=s&&fresh(s.updated,now,10);card.append(make('small','eyebrow','МОДЕЛЬ '+name),make('h3','',active?(s.phase==='running'?'PAPER работает':s.phase==='halted'?'Остановлена':'Ожидание'):'Нет свежих данных'));
-    const pnl=s&&numeric(s.equity)&&numeric(s.config?.capital)?s.equity-s.config.capital:null;card.append(make('strong',pnl<0?'negative':'positive',fmt(pnl,4)+' USDT'));line(card,'Полный P&L модели · '+(s?.position?s.position.symbol+' в позиции':'нет открытой позиции'));modelSummary.append(card);}
-   quote.replaceChildren(make('strong','',current?fmt(r.price,6):'—'),make('small',current?'positive':'negative',current?'Свежий стакан · '+fmt(now-r.time,1)+' с':error||'Данные устарели'));
-   decision.replaceChildren();heading(decision,'РЕШЕНИЕ МОДЕЛИ B',view?view.label:'Ожидание данных');decision.className='box decision-box alert-'+(view?.tone||'neutral');
-   line(decision,selected+(view?' · '+view.direction:''),'decision-symbol');
+   const r=rows.find(r=>r.symbol===selected);const current=b?.phase==='running'&&fresh(b.updated,now,8)&&fresh(r?.time,now,3);const view=current&&r&&scope.LabAlerts?scope.LabAlerts.classifyB(b,r,now):null;
+   modelSummary.replaceChildren();for(const [name,s] of [['A',a],['B',b]]){const card=make('article','model-tile');const active=s&&fresh(s.updated,now,10),running=active&&s.phase==='running';const status=running?'PAPER работает':active&&s.phase==='halted'?'Остановлена по защите':active?'Ожидает данные':'Нет свежих данных';
+    card.append(make('small','eyebrow','МОДЕЛЬ '+name),make('h3','',status));const pnl=s&&numeric(s.equity)&&numeric(s.config?.capital)?s.equity-s.config.capital:null;
+    if(!active){card.append(make('strong','muted','—'));line(card,s?'Последний снимок: '+dt(s.updated)+'. Текущий P&L не подтверждён.':'Снимок модели ещё не получен.','negative');if(pnl!==null)line(card,'Последний P&L: '+fmt(pnl,4)+' USDT.');}
+    else{card.append(make('strong',pnl<0?'negative':'positive',fmt(pnl,4)+' USDT'));line(card,(running?'Текущий':'Итоговый')+' P&L модели · '+(s?.position?(running?'открытая позиция: ':'последняя позиция: ')+s.position.symbol:'нет открытой позиции'));}
+    if(!active&&s?.position)line(card,'Последняя известная позиция '+s.position.symbol+' требует проверки.','muted');modelSummary.append(card);}
+   quote.replaceChildren(make('strong','',current?fmt(r.price,6):'—'),make('small',current?'positive':'negative',current?'Модельный стакан свежий · '+fmt(now-r.time,1)+' с':(error||'Модельный поток устарел')+' · решение по рынку отключено'));
+   decision.replaceChildren();heading(decision,'РЕШЕНИЕ МОДЕЛИ B',current?(view?.label||'Ожидание условий'):'Нет свежего подтверждения');decision.className='box decision-box alert-'+(current?(view?.tone||'neutral'):'neutral');
+   line(decision,current?selected+(view?' · '+view.direction:''):selected+' · сигнал скрыт до свежего снимка','decision-symbol');
    const chartFresh=current&&fresh(r.chart?.end,now,120)&&!r.chart_error;const metrics=make('div','terminal-metrics');for(const [k,v] of [['Спред',current?fmt(r.spread,4)+'%':'—'],['Расходы оборота',current?fmt(r.roundtrip_pct,3)+'%':'—'],['ATR минутный',chartFresh?fmt(r.chart?.atr_pct,3)+'%':'—'],['RVOL 5 мин',chartFresh?fmt(r.chart?.rvol5,2)+'×':'—']]){const cell=make('div');cell.append(make('span','muted',k),make('b','',v));metrics.append(cell);}decision.append(metrics);
-   const reasons=view?.reasons||['Нет данных модели'];for(const text of reasons.slice(0,4))line(decision,text,'condition-reason');if(reasons.length>4)line(decision,'Ещё '+(reasons.length-4)+' ограничений во вкладке «Алерты».');
+   const reasons=current?(view?.reasons||['Нет данных модели']):['Модель B не прислала свежую оценку. Сигнал LONG / SHORT не считается действующим.',b?.updated?'Последний снимок модели: '+dt(b.updated)+'.':'Ожидаем первый снимок модели.'];for(const text of reasons.slice(0,4))line(decision,text,'condition-reason');if(reasons.length>4)line(decision,'Ещё '+(reasons.length-4)+' ограничений во вкладке «Алерты».');
    if(!reasons.length)line(decision,'Проверяйте фактическое открытие в PAPER-журнале.');
    pulse.replaceChildren();heading(pulse,'МИКРОСТРУКТУРА','Ликвидность и исполненные сделки');
    liquidity.replaceChildren();heading(liquidity,'BYBIT / ПОТОК МОДЕЛИ B','Активность стакана · '+selected);line(liquidity,'Монета выбирается в разделе «График». Зелёный — покупатели; красный — продавцы.');
@@ -90,12 +106,12 @@
    const sampled=samples.get(selected)||[];graph(liquidity,sampled.map(x=>x.price),'Mid-price · до 120 снимков этой сессии, не свечи');graph(liquidity,sampled.map(x=>x.spread),'Спред, % · до 120 снимков этой сессии');
    if(!current&&sampled.length)line(liquidity,'Графики показывают прошлые наблюдения, текущий поток недоступен.','negative');
    modelCharts.replaceChildren();heading(modelCharts,'РЕЗУЛЬТАТ ПОСЛЕ ИЗДЕРЖЕК','Модели и журнал');
-   if(report&&fresh(report.updated,now,180)){const table=make('table'),thead=make('thead'),tr=make('tr');for(const t of ['Модель','Сделки','Net, USDT','Средняя','PF'])tr.append(make('th','',t));thead.append(tr);table.append(thead);const body=make('tbody');for(const name of ['A','B']){const s=report.models?.[name];if(!s)continue;const tr=make('tr');for(const v of [name,fmt(s.count,0),fmt(s.net,4),fmt(s.average,4),fmt(s.profit_factor,2)])tr.append(make('td','',v));body.append(tr);}table.append(body);const scroll=make('div','scroll');scroll.append(table);modelCharts.append(scroll);line(modelCharts,'Общий период: '+new Date(report.start*1000).toLocaleString('ru-RU')+' — '+new Date(report.end*1000).toLocaleString('ru-RU')+'.');if(report.status!=='ok')line(modelCharts,'Отчёт неполный: '+(report.errors||[]).join('; '),'negative');
+   if(report&&fresh(report.updated,now,180)){const table=make('table'),thead=make('thead'),tr=make('tr');for(const t of ['Модель','Сделки','Net, USDT','Средняя','PF'])tr.append(make('th','',t));thead.append(tr);table.append(thead);const body=make('tbody');for(const name of ['A','B']){const s=report.models?.[name];if(!s)continue;const tr=make('tr');for(const v of [name,fmt(s.count,0),fmt(s.net,4),fmt(s.average,4),fmt(s.profit_factor,2)])tr.append(make('td','',v));body.append(tr);}table.append(body);const scroll=make('div','scroll');scroll.append(table);modelCharts.append(scroll);line(modelCharts,'Общий период: '+dt(report.start)+' — '+dt(report.end)+'.');issueNotice(modelCharts,issues(report));
    }else line(modelCharts,'Сравнительный отчёт недоступен или устарел.','negative');
    const curves=make('div','micro-grid');for(const name of ['A','B']){const j=journals[name];const box=make('div');if(j){const trades=[...(j.rows||[])].filter(t=>numeric(t.net)&&numeric(t.closed)).sort((x,y)=>x.closed-y.closed);let sum=0;const vals=[0,...trades.map(t=>sum+=t.net)];graph(box,vals,'Модель '+name+' · сумма net по '+trades.length+' последним записям');if(!fresh(j.updated,now,180))line(box,'Снимок журнала устарел.','negative');}else line(box,'Журнал '+name+' недоступен.');curves.append(box);}modelCharts.append(curves);line(modelCharts,'Кривые начинаются с нуля для показанных записей, не отражают полный капитал и открытые позиции. Это PAPER-результаты; малое число сделок не подтверждает преимущество.');
   }
-  async function poll(){try{const res=await labFetch('/api/model-b');if(!res.ok)throw Error('HTTP '+res.status);b=await res.json();error='';const now=Date.now()/1000;for(const r of b.observations||[]){if(b.phase!=='running'||!fresh(b.updated,now,8)||!fresh(r.time,now,3)||!numeric(r.price)||!numeric(r.spread)||lastSample.get(r.symbol)===r.time)continue;const previous=lastSample.get(r.symbol);const arr=previous&&r.time-previous>6?[]:samples.get(r.symbol)||[];arr.push({time:r.time,price:r.price,spread:r.spread});samples.set(r.symbol,arr.slice(-120));lastSample.set(r.symbol,r.time);}}catch(e){b=null;error='Поток недоступен';}render();setTimeout(poll,2000);}
-  async function slow(){const paths=['/api/paper','/api/lab-report','/api/journal-a','/api/journal-b'];const results=await Promise.allSettled(paths.map(async p=>{const r=await labFetch(p);if(!r.ok)throw Error();return r.json();}));a=results[0].status==='fulfilled'?results[0].value:null;report=results[1].status==='fulfilled'?results[1].value:null;for(let i=2;i<4;i++)journals[i===2?'A':'B']=results[i].status==='fulfilled'?results[i].value:null;render();setTimeout(slow,10000);}
+  async function poll(){try{const next=await getJson('/api/model-b','Поток модели B');b=next;error='';const now=Date.now()/1000;for(const r of b.observations||[]){if(b.phase!=='running'||!fresh(b.updated,now,8)||!fresh(r.time,now,3)||!numeric(r.price)||!numeric(r.spread)||lastSample.get(r.symbol)===r.time)continue;const previous=lastSample.get(r.symbol);const arr=previous&&r.time-previous>6?[]:samples.get(r.symbol)||[];arr.push({time:r.time,price:r.price,spread:r.spread});samples.set(r.symbol,arr.slice(-120));lastSample.set(r.symbol,r.time);}}catch(e){error=e?.message||'Поток модели B недоступен';}render();setTimeout(poll,2000);}
+  async function slow(){const paths=[['/api/paper','PAPER-модель A'],['/api/lab-report','Сводный отчёт'],['/api/journal-a','Журнал A'],['/api/journal-b','Журнал B']];const results=await Promise.allSettled(paths.map(([p,label])=>getJson(p,label)));if(results[0].status==='fulfilled')a=results[0].value;if(results[1].status==='fulfilled')report=results[1].value;for(let i=2;i<4;i++)if(results[i].status==='fulfilled')journals[i===2?'A':'B']=results[i].value;render();setTimeout(slow,10000);}
   document.addEventListener('lab-symbol',e=>{if((b?.observations||[]).some(r=>r.symbol===e.detail)||typeof e.detail==='string'&&/^[A-Z0-9]{2,24}USDT$/.test(e.detail)){selected=e.detail;extraSymbol=selected;render();select.value=selected;chooseChart();scope.LabNavigation.activate('chart');}});
   setInterval(render,1000);poll();slow();chooseChart();
  });
