@@ -15,6 +15,7 @@ import manager
 import control_client as client
 import install_control
 import prepare_engine
+import diagnose_models
 spec=importlib.util.spec_from_file_location('controlled_panel_server',REPO/'src/trading-panel/server.py')
 panel=importlib.util.module_from_spec(spec);spec.loader.exec_module(panel)
 
@@ -91,6 +92,32 @@ class ControlTests(unittest.TestCase):
             self.assertIn('KillMode=control-group',body);self.assertIn('NoNewPrivileges=true',body)
             self.assertIn('NUMBA_CACHE_DIR=/var/lib/trading-platforms/'+engine,body)
         self.assertIn('PYTHONPATH=/opt/hummingbot',prepare_engine.unit('hummingbot',Path('/opt/env/bin/python'),Path('/opt/hummingbot')).decode())
+
+    def test_diagnostic_report_excludes_token_audit_strategy_and_position_details(self):
+        raw=dict(status='ok',updated=100,token='PRIVATE_TOKEN',audit=[dict(message='PRIVATE_LOG')],
+                 memory=dict(total_gb=1,available_gb=.7,private='PRIVATE_MEMORY'),
+                 models=[dict(id='B',phase='paused',fresh=True,position=dict(symbol='PRIVATE_POSITION',entry=100),config='PRIVATE_CONFIG')],
+                 engines=[dict(id='jesse',phase='not_installed',settings='PRIVATE_SETTINGS')])
+        result=diagnose_models.sanitized_status(raw,101)
+        self.assertTrue(result['fresh']);self.assertTrue(result['models'][0]['has_position'])
+        self.assertNotIn('PRIVATE',json.dumps(result));self.assertNotIn('token',result)
+        self.assertFalse(diagnose_models.sanitized_status(raw,110)['fresh'])
+        self.assertFalse(diagnose_models.sanitized_status(dict(status='error'),101)['available'])
+
+    def test_diagnostic_integrity_rejects_unknown_manifest_paths_and_unit_inspection_only_shows(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'launcher.py';p.write_bytes(b'checked code')
+            manifest=dict(files={str(p):diagnose_models.hashlib.sha256(p.read_bytes()).hexdigest()})
+            with patch.object(diagnose_models,'CONTROL_FILES',{str(p)}):
+                self.assertTrue(diagnose_models.integrity(manifest))
+                p.write_bytes(b'changed');self.assertFalse(diagnose_models.integrity(manifest))
+                self.assertFalse(diagnose_models.integrity(dict(files={'/root/private': 'hash'})))
+        output='Id=trading-panel.service\nLoadState=loaded\nActiveState=active\n\nId=trading-control.service\nLoadState=not-found\nActiveState=inactive\n'
+        with patch.object(diagnose_models.subprocess,'run',return_value=SimpleNamespace(stdout=output)) as run:
+            states=diagnose_models.unit_states()
+            self.assertEqual(states['trading-panel.service']['active'],'active')
+            self.assertEqual(states['trading-control.service']['load'],'not-found')
+            self.assertEqual(run.call_args.args[0][:2],['/usr/bin/systemctl','show'])
 
     def test_failed_first_install_removes_dropins_and_restores_previous_startup(self):
         with tempfile.TemporaryDirectory() as d:

@@ -54,6 +54,7 @@ class DemoControl:
                 installed = engine != 'hummingbot'
                 engines.append(dict(id=engine, kind='engine', installed=installed, phase=c['phase'],
                     generation=c['generation'], memory_ok=True, version='DEMO' if installed else None,
+                    required_gb=5 if engine=='hummingbot' else 3,
                     reason='ДЕМОНСТРАЦИЯ · реальный движок не подключён',
                     metrics=c['runs'][-1].get('metrics') if c['runs'] else None,
                     runs=c['runs'][::-1], actions=dict(start=installed and c['phase']!='running',
