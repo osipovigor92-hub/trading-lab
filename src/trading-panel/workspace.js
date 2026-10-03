@@ -55,7 +55,7 @@
   ];for(const [title,text] of guideItems){const a=make('article');a.append(make('h3','',title),make('p','',text));guide.append(a);}
   for(const [title,url] of [['OFI · Cont, Kukanov, Stoikov','https://arxiv.org/abs/1011.6402'],['Дисбаланс очередей · Gould, Bonart','https://arxiv.org/abs/1512.03492'],['Риск подгонки бэктеста · Bailey и др.','https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf'],['Bybit · порядок snapshot / delta','https://bybit-exchange.github.io/docs/v5/websocket/public/orderbook']]){const a=make('a','research-link',title);a.href=url;a.target='_blank';a.rel='noopener noreferrer';guide.append(a);}
   line(guide,'Исследования OFI и дисбаланса выполнены преимущественно на акциях. Эффективность на этих криптоконтрактах ещё предстоит проверить.');tests.prepend(guide);
-  let b=null,a=null,report=null,journals={},selected='LINKUSDT',chartEnabled=false,sequence='',samples=new Map(),error='Подключение',lastSample=new Map();
+  let b=null,a=null,report=null,journals={},selected='LINKUSDT',extraSymbol='',chartEnabled=false,sequence='',samples=new Map(),error='Подключение',lastSample=new Map();
   const chooseChart=()=>{const safe=/^[A-Z0-9]{2,24}USDT$/.test(selected)?selected:'LINKUSDT';external.href='https://www.tradingview.com/chart/?symbol='+encodeURIComponent('BYBIT:'+safe+'.P');
    if(!chartEnabled)return;chartHost.replaceChildren();const frame=make('iframe');frame.title='TradingView '+safe;frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-popups');frame.referrerPolicy='no-referrer';frame.src='/chart.html?symbol='+encodeURIComponent(safe)+'&interval='+interval.value;chartHost.append(frame);
   };
@@ -68,8 +68,8 @@
     for(const [x,w,cls] of [[0,share*100,'meter-buy'],[share*100,(1-share)*100,'meter-sell']]){const rect=document.createElementNS(svg.namespaceURI,'rect');rect.setAttribute('x',x);rect.setAttribute('width',w);rect.setAttribute('height',8);rect.setAttribute('class',cls);svg.append(rect);}bar.append(svg);
    }else bar.append(make('span','muted','Нет объёма'));row.append(bar);parent.append(row);
   }
-  function render(){if(document.hidden)return;const now=Date.now()/1000;const rows=b?.observations||[];const signature=rows.map(r=>r.symbol).join('|');
-   if(signature!==sequence){sequence=signature;select.replaceChildren();for(const symbol of rows.map(r=>r.symbol)){const o=make('option','',symbol);o.value=symbol;select.append(o);}if(!rows.some(r=>r.symbol===selected))selected=rows[0]?.symbol||'LINKUSDT';select.value=selected;chooseChart();}
+  function render(){if(document.hidden)return;const now=Date.now()/1000;const rows=b?.observations||[];const symbols=[...new Set([...rows.map(r=>r.symbol),...(extraSymbol?[extraSymbol]:[])])];const signature=symbols.join('|');
+   if(signature!==sequence){sequence=signature;select.replaceChildren();for(const symbol of symbols){const o=make('option','',symbol);o.value=symbol;select.append(o);}if(!symbols.includes(selected))selected=symbols[0]||'LINKUSDT';select.value=selected;chooseChart();}
    const r=rows.find(r=>r.symbol===selected);const current=b?.phase==='running'&&fresh(b.updated,now,8)&&fresh(r?.time,now,3);const view=r&&scope.LabAlerts?scope.LabAlerts.classifyB(b,r,now):null;
    modelSummary.replaceChildren();for(const [name,s] of [['A',a],['B',b]]){const card=make('article','model-tile');const active=s&&fresh(s.updated,now,10);card.append(make('small','eyebrow','МОДЕЛЬ '+name),make('h3','',active?(s.phase==='running'?'PAPER работает':s.phase==='halted'?'Остановлена':'Ожидание'):'Нет свежих данных'));
     const pnl=s&&numeric(s.equity)&&numeric(s.config?.capital)?s.equity-s.config.capital:null;card.append(make('strong',pnl<0?'negative':'positive',fmt(pnl,4)+' USDT'));line(card,'Полный P&L модели · '+(s?.position?s.position.symbol+' в позиции':'нет открытой позиции'));modelSummary.append(card);}
@@ -96,7 +96,7 @@
   }
   async function poll(){try{const res=await labFetch('/api/model-b');if(!res.ok)throw Error('HTTP '+res.status);b=await res.json();error='';const now=Date.now()/1000;for(const r of b.observations||[]){if(b.phase!=='running'||!fresh(b.updated,now,8)||!fresh(r.time,now,3)||!numeric(r.price)||!numeric(r.spread)||lastSample.get(r.symbol)===r.time)continue;const previous=lastSample.get(r.symbol);const arr=previous&&r.time-previous>6?[]:samples.get(r.symbol)||[];arr.push({time:r.time,price:r.price,spread:r.spread});samples.set(r.symbol,arr.slice(-120));lastSample.set(r.symbol,r.time);}}catch(e){b=null;error='Поток недоступен';}render();setTimeout(poll,2000);}
   async function slow(){const paths=['/api/paper','/api/lab-report','/api/journal-a','/api/journal-b'];const results=await Promise.allSettled(paths.map(async p=>{const r=await labFetch(p);if(!r.ok)throw Error();return r.json();}));a=results[0].status==='fulfilled'?results[0].value:null;report=results[1].status==='fulfilled'?results[1].value:null;for(let i=2;i<4;i++)journals[i===2?'A':'B']=results[i].status==='fulfilled'?results[i].value:null;render();setTimeout(slow,10000);}
-  document.addEventListener('lab-symbol',e=>{if((b?.observations||[]).some(r=>r.symbol===e.detail)){selected=e.detail;select.value=selected;chooseChart();render();document.querySelector('[aria-controls="page-overview"]').click();}});
+  document.addEventListener('lab-symbol',e=>{if((b?.observations||[]).some(r=>r.symbol===e.detail)||typeof e.detail==='string'&&/^[A-Z0-9]{2,24}USDT$/.test(e.detail)){selected=e.detail;extraSymbol=selected;render();select.value=selected;chooseChart();document.querySelector('[aria-controls="page-overview"]').click();}});
   setInterval(render,1000);poll();slow();chooseChart();
  });
 })(typeof window==='undefined'?globalThis:window);
