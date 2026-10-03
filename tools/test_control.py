@@ -89,6 +89,8 @@ class ControlTests(unittest.TestCase):
             body=prepare_engine.unit(engine,Path('/opt/test/bin/python')).decode()
             self.assertNotIn('Restart=',body);self.assertNotIn('[Install]',body)
             self.assertIn('KillMode=control-group',body);self.assertIn('NoNewPrivileges=true',body)
+            self.assertIn('NUMBA_CACHE_DIR=/var/lib/trading-platforms/'+engine,body)
+        self.assertIn('PYTHONPATH=/opt/hummingbot',prepare_engine.unit('hummingbot',Path('/opt/env/bin/python'),Path('/opt/hummingbot')).decode())
 
     def test_failed_first_install_removes_dropins_and_restores_previous_startup(self):
         with tempfile.TemporaryDirectory() as d:

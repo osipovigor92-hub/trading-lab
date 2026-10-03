@@ -18,7 +18,7 @@ MINIMUM = {'freqtrade': 3, 'jesse': 3, 'hummingbot': 5}
 PACKAGES = {'freqtrade': 'freqtrade==2026.9', 'jesse': 'jesse==3.2.4'}
 
 
-def unit(engine, python):
+def unit(engine, python, source=None):
     return ('[Unit]\nDescription=Native ' + engine + ' isolated test only\nAfter=network-online.target\n'
         '[Service]\nType=simple\nUser=tradingbot\nGroup=tradingbot\n'
         'ExecStart=' + str(python) + ' -B -u /opt/trading-platforms/runner.py ' + engine + '\n'
@@ -28,7 +28,10 @@ def unit(engine, python):
         'TasksMax=64\nNice=19\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n'
         'ProtectSystem=strict\nProtectHome=true\nReadWritePaths=/var/lib/trading-platforms/' + engine + '\n'
         'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nEnvironment=PYTHONDONTWRITEBYTECODE=1\n'
-        'Environment=NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1\n').encode()
+        'Environment=NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 POLARS_MAX_THREADS=1\n'
+        'Environment=NUMBA_CACHE_DIR=/var/lib/trading-platforms/' + engine + '/.numba-cache\n'
+        'Environment=XDG_CACHE_HOME=/var/lib/trading-platforms/' + engine + '/.cache\n' +
+        ('Environment=PYTHONPATH=' + str(source) + '\n' if source else '')).encode()
 
 
 def main():
@@ -37,6 +40,7 @@ def main():
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument('--python', type=Path, help='Existing isolated environment, outside /root')
     group.add_argument('--install', action='store_true', help='Create a venv for pinned Freqtrade or Jesse')
+    p.add_argument('--source-dir', type=Path, help='Compiled official Hummingbot source directory, if not installed in site-packages')
     args = p.parse_args()
     if os.geteuid() != 0:
         raise SystemExit('Запусти от root')
@@ -70,6 +74,10 @@ def main():
             subprocess.run([str(python), '-m', 'pip', 'install', PACKAGES[args.engine]], check=True, timeout=1800)
         else:
             python = args.python.absolute()
+        source = args.source_dir.absolute() if args.source_dir else None
+        if source and (args.engine != 'hummingbot' or not (source/'hummingbot').is_dir()
+                       or any(c in str(source) for c in '\n\r \t%') or '/root/' in str(source)):
+            raise SystemExit('Нужен каталог официальных скомпилированных исходников Hummingbot в /opt без пробелов')
         if not python.is_file() or not os.access(python, os.X_OK) or any(c in str(python) for c in '\n\r \t%'):
             raise SystemExit('Нужен исполняемый Python по абсолютному пути без пробелов')
         if '/root/' in str(python):
@@ -83,7 +91,8 @@ def main():
         # Probe native imports as the unprivileged user who will run the test.
         probe = subprocess.run(['runuser', '-u', 'tradingbot', '--', str(python), '-B', str(CODE / 'runner.py'),
                                 args.engine, '--probe'], capture_output=True, text=True, timeout=60,
-                                env=dict(os.environ, NUMBA_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1'))
+                                env=dict(os.environ, NUMBA_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1',
+                                    **({'PYTHONPATH':str(source)} if source else {})))
         if probe.returncode:
             raise SystemExit('Нативный движок не прошёл проверку импорта: ' + probe.stderr[-1000:])
         info = json.loads(probe.stdout.strip().splitlines()[-1])
@@ -93,11 +102,11 @@ def main():
         ROOT.mkdir(mode=0o755, exist_ok=True)
         state = ROOT / args.engine; state.mkdir(mode=0o700, exist_ok=True)
         os.chown(state, owner.pw_uid, owner.pw_gid)
-        body = unit(args.engine, python)
+        body = unit(args.engine, python, source)
         deploy.atomic(service, body)
         deploy.system('daemon-reload')
         registry[args.engine] = dict(version=info['version'], mode=info['mode'], registered=__import__('time').time(),
-            unit_sha=hashlib.sha256(body).hexdigest(), python=str(python))
+            unit_sha=hashlib.sha256(body).hexdigest(), python=str(python), source=str(source) if source else None)
         deploy.atomic(registry_path, json.dumps(registry).encode(), 0o640)
         os.chown(registry_path, 0, owner.pw_gid)
         print(info['engine'] + ' готов. Во вкладке Модели можно запускать и отменять отдельные тесты.')
