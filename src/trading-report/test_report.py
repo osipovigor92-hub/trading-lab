@@ -1,5 +1,6 @@
 import json,sqlite3,tempfile,unittest
 from pathlib import Path
+from unittest.mock import patch
 import report
 
 class Tests(unittest.TestCase):
@@ -31,6 +32,15 @@ class Tests(unittest.TestCase):
   path=self.root/'history.sqlite';src=sqlite3.connect(path);src.execute('CREATE TABLE samples(t REAL PRIMARY KEY,data TEXT)');src.execute("INSERT INTO samples VALUES(100,'bad json')");src.commit();src.close()
   with self.assertRaises(ValueError):report.ingest(self.db,path)
   self.assertIsNone(self.db.execute("SELECT v FROM meta WHERE k='cursor'").fetchone())
+
+ def test_history_open_falls_back_to_checkpointed_read_without_hiding_failure(self):
+  path=self.root/'history.sqlite';path.write_bytes(b'not opened in this mocked test')
+  sentinel=object()
+  with patch.object(report.sqlite3,'connect',side_effect=[sqlite3.OperationalError('missing shm'),sentinel]) as connect:
+   self.assertIs(report.open_history(path),sentinel)
+   self.assertIn('immutable=1',connect.call_args_list[1].args[0])
+  with patch.object(report.sqlite3,'connect',side_effect=[sqlite3.OperationalError('first'),sqlite3.OperationalError('second')]):
+   with self.assertRaisesRegex(sqlite3.OperationalError,'first'):report.open_history(path)
  def test_atomic_report(self):
   old=report.ROOT;report.ROOT=self.root
   try:
