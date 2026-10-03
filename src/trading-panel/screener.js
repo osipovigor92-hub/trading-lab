@@ -60,7 +60,7 @@
   const levelsBox=el('div','screener-levels');levelsBox.id='screener-levels';panel.append(levelsBox);
   const explanation=el('details','screener-method');explanation.append(el('summary','','Как рассчитываются уровни'));
   line(explanation,'Берём до 180 закрытых свечей выбранного таймфрейма. Экстремум подтверждается двумя свечами слева и двумя справа: последние два бара ещё не могут стать новым уровнем. Близкие экстремумы объединяются в зоны шириной до max(0,05% цены; 0,25 ATR).');
-  line(explanation,'Показаны три ближайшие зоны ниже и выше последней цены закрытия. Число экстремумов — описание прошлого, не вероятность отскока. Роль зоны определяется относительно последнего закрытия; удержание или будущий пробой не подтверждены. На графике видны последние 90 свечей и уровни в их ценовом масштабе.');panel.append(explanation);
+  line(explanation,'Показаны три ближайшие зоны ниже и выше последней цены закрытия. Число экстремумов — описание прошлого, не вероятность отскока. Роль зоны определяется относительно последнего закрытия; удержание или будущий пробой не подтверждены. На графике видны последние 90 свечей, на телефоне — 45, и уровни в их ценовом масштабе.');panel.append(explanation);
   const bookBox=el('section','box');bookBox.id='screener-orderbook';root.append(bookBox);
   const botsBox=el('section','box');botsBox.id='screener-bots';root.append(botsBox);
   let snapshot=null,chart=null,book=null,models={},bState=null,selected='BTCUSDT',generation=0,tickerError='',chartError='',bookError='';
@@ -69,16 +69,18 @@
   const svgNode=(tag,attrs={})=>{const n=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v]of Object.entries(attrs))n.setAttribute(k,String(v));return n;};
   function addText(svg,x,y,text,cls){const n=svgNode('text',{x,y,class:cls||'chart-axis'});n.textContent=text;svg.append(n);}
   function drawChart(data){
-   chartHost.replaceChildren();const bars=data.candles.slice(-90),d=domain(bars),svg=svgNode('svg',{viewBox:'0 0 940 390',role:'img','aria-label':selected+' · свечи, поддержка, сопротивление и оборот USDT'});
-   const x=i=>18+i*800/Math.max(1,bars.length-1),y=p=>24+(d.high-p)/(d.high-d.low)*214;
-   for(let i=0;i<=4;i++){const price=d.low+(d.high-d.low)*i/4,yp=y(price);svg.append(svgNode('line',{x1:12,x2:835,y1:yp,y2:yp,class:'chart-grid'}));addText(svg,842,yp+4,fmt(price,8));}
-   for(const level of data.levels){if(level.price<d.low||level.price>d.high)continue;const yp=y(level.price),height=Math.max(2,Math.abs(y(level.low)-y(level.high)));svg.append(svgNode('rect',{x:12,y:yp-height/2,width:823,height,class:'zone-'+level.side}));svg.append(svgNode('line',{x1:12,x2:835,y1:yp,y2:yp,class:'line-'+level.side}));addText(svg,24,yp-5,(level.side==='support'?'S':'R')+' · '+fmt(level.price,8),'label-'+level.side);}
-   if(finite(data.vwap)&&data.vwap>=d.low&&data.vwap<=d.high){const yp=y(data.vwap);svg.append(svgNode('line',{x1:12,x2:835,y1:yp,y2:yp,class:'line-vwap'}));addText(svg,670,yp-5,'VWAP '+fmt(data.vwap,8),'label-vwap');}
-   for(const [id,s]of Object.entries(models)){const p=positionView(s,Date.now()/1000);if(!p?.current||p.symbol!==selected||p.entry<d.low||p.entry>d.high)continue;const yp=y(p.entry);svg.append(svgNode('line',{x1:12,x2:835,y1:yp,y2:yp,class:'line-entry'}));addText(svg,400,yp-5,'Вход '+id+' '+p.side+' '+fmt(p.entry,8),'label-entry');}
-   const width=Math.max(2,Math.min(9,620/bars.length)),maxVolume=Math.max(1,...bars.map(b=>b.turnover));
+   chartHost.replaceChildren();const widthPixels=Math.max(300,Math.round(chartHost.clientWidth-20)),right=widthPixels-86,mobile=widthPixels<560;
+   const bars=data.candles.slice(mobile?-45:-90),d=domain(bars),svg=svgNode('svg',{viewBox:'0 0 '+widthPixels+' 390',role:'img','aria-label':selected+' · свечи, поддержка, сопротивление и оборот USDT'});
+   const x=i=>18+i*(right-30)/Math.max(1,bars.length-1),y=p=>24+(d.high-p)/(d.high-d.low)*214;
+   for(let i=0;i<=4;i++){const price=d.low+(d.high-d.low)*i/4,yp=y(price);svg.append(svgNode('line',{x1:12,x2:right,y1:yp,y2:yp,class:'chart-grid'}));addText(svg,right+6,yp+4,fmt(price,8));}
+   const labels=[];
+   for(const level of data.levels){if(level.price<d.low||level.price>d.high)continue;const yp=y(level.price),height=Math.max(2,Math.abs(y(level.low)-y(level.high)));svg.append(svgNode('rect',{x:12,y:yp-height/2,width:right-12,height,class:'zone-'+level.side}));svg.append(svgNode('line',{x1:12,x2:right,y1:yp,y2:yp,class:'line-'+level.side}));if(labels.every(p=>Math.abs(p-yp)>14)){addText(svg,24,yp-5,(level.side==='support'?'S':'R')+' · '+fmt(level.price,8),'label-'+level.side);labels.push(yp);}}
+   if(finite(data.vwap)&&data.vwap>=d.low&&data.vwap<=d.high){const yp=y(data.vwap);svg.append(svgNode('line',{x1:12,x2:right,y1:yp,y2:yp,class:'line-vwap'}));addText(svg,Math.max(24,right-145),yp-5,'VWAP '+fmt(data.vwap,8),'label-vwap');}
+   for(const [id,s]of Object.entries(models)){const p=positionView(s,Date.now()/1000);if(!p?.current||p.symbol!==selected||p.entry<d.low||p.entry>d.high)continue;const yp=y(p.entry);svg.append(svgNode('line',{x1:12,x2:right,y1:yp,y2:yp,class:'line-entry'}));addText(svg,24,yp-5,'Вход '+id+' '+p.side+' '+fmt(p.entry,8),'label-entry');}
+   const width=Math.max(1,Math.min(9,(right-30)/Math.max(1,bars.length-1)*.72)),maxVolume=Math.max(1,...bars.map(b=>b.turnover));
    for(const [i,b]of bars.entries()){const cls=b.close>=b.open?'candle-up':'candle-down',xp=x(i);svg.append(svgNode('line',{x1:xp,x2:xp,y1:y(b.high),y2:y(b.low),class:cls}));svg.append(svgNode('rect',{x:xp-width/2,y:Math.min(y(b.open),y(b.close)),width,height:Math.max(1,Math.abs(y(b.open)-y(b.close))),class:cls}));svg.append(svgNode('rect',{x:xp-width/2,y:345-b.turnover/maxVolume*70,width,height:Math.max(0,b.turnover/maxVolume*70),class:cls+' volume-bar'}));}
-   addText(svg,16,268,'Оборот свечи · USDT');addText(svg,842,292,fmt(maxVolume,0));
-   for(const i of [0,Math.floor(bars.length/3),Math.floor(bars.length*2/3),bars.length-1])addText(svg,x(i)-8,375,new Date(bars[i].time*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}));
+   addText(svg,16,268,'Оборот свечи · USDT');addText(svg,right+6,292,fmt(maxVolume,0));
+   for(const i of [0,Math.floor(bars.length/3),Math.floor(bars.length*2/3),bars.length-1])addText(svg,Math.max(12,x(i)-18),375,new Date(bars[i].time*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}));
    chartHost.append(svg);
   }
   function renderTable(now){
@@ -92,7 +94,8 @@
    counter.textContent='Показано '+rows.length+' / '+snapshot.rows.length+' · валидных USDT-контрактов '+snapshot.eligible+(snapshot.rejected?' · исключено некорректных '+snapshot.rejected:'');
    if(!rows.length){const tr=el('tr'),td=el('td','','Монет с выбранными условиями нет.');td.colSpan=6;tr.append(td);tbody.append(tr);}
    for(const r of rows){const tr=el('tr',r.symbol===selected?'selected-coin':''),td=el('td'),button=el('button','coin-button',r.symbol);button.type='button';button.setAttribute('aria-pressed',String(selected===r.symbol));button.addEventListener('click',()=>choose(r.symbol));td.append(button);
-    const badges=el('div','coin-tags');for(const [id,s]of Object.entries(models)){const p=positionView(s,now);if(p?.symbol===r.symbol&&p.current)badges.append(el('span','coin-tag '+(p.side==='LONG'?'tag-long':'tag-short'),id+' '+p.side));}if((bState?.observations||[]).some(o=>o.symbol===r.symbol)&&bState.phase==='running'&&fresh(bState.updated,now,8))badges.append(el('span','coin-tag','B/C/D наблюдают'));td.append(badges);tr.append(td);
+    const badges=el('div','coin-tags');for(const [id,s]of Object.entries(models)){const p=positionView(s,now);if(p?.symbol===r.symbol&&p.current)badges.append(el('span','coin-tag '+(p.side==='LONG'?'tag-long':'tag-short'),id+' '+p.side));}if((bState?.observations||[]).some(o=>o.symbol===r.symbol)&&bState.phase==='running'&&fresh(bState.updated,now,8))badges.append(el('span','coin-tag','B/C/D наблюдают'));td.append(badges);
+    const mobileFacts=el('div','coin-mobile-facts');mobileFacts.append(el('span','','Оборот '+fmt(r.turnover/1e6,1)+' млн USDT'),el('span','','Диапазон '+fmt(r.range24)+'%'),el('span','','Спред '+fmt(r.spread,4)+'%'));td.append(mobileFacts);tr.append(td);
     for(const [text,cls]of [[fmt(r.price,8),''],[(r.change>0?'+':'')+fmt(r.change)+'%',r.change>=0?'positive':'negative'],[fmt(r.turnover/1e6,1)+' млн',''],[fmt(r.range24)+'%',''],[fmt(r.spread,4)+'%',r.spread>.03?'negative':'']])tr.append(el('td',cls,text));tbody.append(tr);
    }
   }
@@ -102,7 +105,7 @@
    metrics.replaceChildren();levelsBox.replaceChildren();chartStatus.textContent=chartError||(!chart||chart.status==='pending'?'Загрузка закрытых свечей…':chart.status!=='ok'?'Свечи недоступны: '+(chart.error||'ошибка'):!usable?'СВЕЧИ УСТАРЕЛИ · уровни скрыты':'Закрытие '+new Date(chart.candle_end*1000).toLocaleString('ru-RU')+' · '+chart.candles.length+' закрытых свечей');chartStatus.className=usable?'muted':'negative';
    if(!usable){chartSignature='';chartHost.replaceChildren(el('p','muted','Ожидание свежего анализа.'));return;}
    for(const [key,value]of [['Последнее закрытие',fmt(chart.price,8)],['ATR(14)',fmt(chart.atr_pct,3)+'%'],['RVOL · 5 / 20 свечей',fmt(chart.rvol)+'×'],['Оборот 60 свечей',fmt(chart.turnover_window/1e6,2)+' млн USDT']]){const cell=el('div');cell.append(el('span','muted',key),el('b','',value));metrics.append(cell);}
-   const signature=selected+'|'+timeframe.value+'|'+chart.updated+'|'+Object.entries(models).map(([id,s])=>id+JSON.stringify(positionView(s,now))).join('|');if(signature!==chartSignature){drawChart(chart);chartSignature=signature;}
+   const signature=selected+'|'+timeframe.value+'|'+chart.updated+'|'+chartHost.clientWidth+'|'+Object.entries(models).map(([id,s])=>id+JSON.stringify(positionView(s,now))).join('|');if(signature!==chartSignature){drawChart(chart);chartSignature=signature;}
    for(const [side,label]of [['support','Поддержка'],['resistance','Сопротивление']]){const section=el('div','level-group '+side);section.append(el('h3','',label));const levels=chart.levels.filter(l=>l.side===side);if(!levels.length)line(section,'Подтверждённых зон в истории нет.');for(const l of levels){const row=el('div','level-item');row.append(el('b','',fmt(l.price,8)+' USDT'),el('span','muted',fmt(l.distance_pct,2)+'% от закрытия · экстремумов '+l.pivots));section.append(row);}levelsBox.append(section);}
   }
   function renderBook(now){
