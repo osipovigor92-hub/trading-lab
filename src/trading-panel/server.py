@@ -8,7 +8,9 @@ import control_client
 
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
-MARKET = MarketData()
+# The public ticker cache is warmed on the server, so opening a dashboard section
+# never has to wait for another browser tab to have visited the screener first.
+MARKET = MarketData(background=True)
 FILES = {
     "/models.js": ("models.js", "text/javascript; charset=utf-8"),
     "/models.css": ("models.css", "text/css; charset=utf-8"),
