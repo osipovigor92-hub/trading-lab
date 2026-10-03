@@ -85,6 +85,13 @@ async function navigate(page,key,width){
    await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).click();
    await bCard.locator('.control-response').filter({hasText:'Состояние изменилось'}).waitFor();
    assert.equal(await bCard.locator('.managed-badge').textContent(),'Отключена');await page.unroute('**/api/models-control');
+   // Gateways sometimes return an HTML page instead of the local JSON API.
+   // The panel must explain the fix, never leak a browser JSON parser error.
+   await page.route('**/api/models-control',async route=>{if(route.request().method()==='POST')await route.fulfill({status:502,contentType:'text/html',body:'<html><h1>Gateway</h1></html>'});else await route.continue();});
+   await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).click();
+   await bCard.locator('.control-response').filter({hasText:'SSH-туннель'}).waitFor();
+   assert.doesNotMatch(await bCard.locator('.control-response').textContent(),/Unexpected token/);
+   await page.unroute('**/api/models-control');
    await bCard.getByRole('button',{name:'Перезапустить Модель B',exact:true}).click();
    await bCard.locator('.managed-badge').filter({hasText:'Прогрев'}).waitFor();await bCard.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
    assert.match(await bCard.locator('.control-response').textContent(),/Перезапуск подтверждён/);
@@ -148,7 +155,7 @@ async function navigate(page,key,width){
    assert.equal(await page.locator('#page-alerts .alert-event').count(),historyCount,'history must survive reload without duplicates');
    const frozen=await page.evaluate(()=>Date.now());await page.evaluate(t=>{Date.now=()=>t+20000},frozen);await page.waitForTimeout(1300);
    assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');assert.ok(await page.locator('.event-neutral').count()>=2,'entry cancellations visible');
-   await navigate(page,'chart',width);await page.waitForTimeout(1100);assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');
+   await navigate(page,'chart',width);await page.waitForTimeout(1100);assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');assert.match(await page.locator('.decision-box').textContent(),/сигнал скрыт до свежего снимка/);
    await navigate(page,'research',width);await page.locator('.models-analysis>summary').click();assert.equal(await page.locator('.research-match').count(),0);assert.match(await page.locator('#page-research').textContent(),/ОТЧЁТ УСТАРЕЛ/);
    assert.equal(await page.locator('#model-controls button[data-action]:enabled').count(),0,'stale control reply must disable commands');
    await navigate(page,'market',width);await page.evaluate(t=>{Date.now=()=>t+90000},frozen);await page.waitForTimeout(4500);
