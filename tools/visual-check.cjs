@@ -96,10 +96,12 @@ async function navigate(page,key,width){
    assert.equal(await page.locator('#page-journals #lab-report').count(),1);await page.screenshot({path:path.join(root,'artifacts',`journals-${width}.png`),fullPage:true});
    await navigate(page,'live',width);await page.screenshot({path:path.join(root,'artifacts',`liquidity-${width}.png`),fullPage:true});
    await navigate(page,'alerts',width);await page.waitForSelector('#page-alerts .alert-long');assert.equal(await page.locator('.alert-card').count(),3);assert.equal(await page.locator('.alert-watch').count(),1);
-   await page.locator('#page-alerts details').first().evaluate(e=>e.open=true);await page.waitForTimeout(2300);assert.equal(await page.locator('#page-alerts details').first().getAttribute('open'),'');
-   assert.equal(await page.locator('#page-alerts .alert-event').count(),3,'duplicate events');await page.screenshot({path:path.join(root,'artifacts',`alerts-${width}.png`),fullPage:true});
+   await page.locator('#page-alerts details').first().evaluate(e=>e.open=true);const historyCount=await page.locator('#page-alerts .alert-event').count();
+   assert.ok(historyCount>=3,'model stop/restart may add genuine cancellations and resumed conditions');
+   await page.waitForTimeout(2300);assert.equal(await page.locator('#page-alerts details').first().getAttribute('open'),'');
+   assert.equal(await page.locator('#page-alerts .alert-event').count(),historyCount,'unchanged conditions created duplicate events');await page.screenshot({path:path.join(root,'artifacts',`alerts-${width}.png`),fullPage:true});
    await page.getByLabel('Фильтр алертов').selectOption('entry');assert.equal(await page.locator('.alert-card').count(),2);await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.waitForSelector('#page-alerts .alert-long');
-   assert.equal(await page.locator('#page-alerts .alert-event').count(),3,'history must survive reload without duplicates');
+   assert.equal(await page.locator('#page-alerts .alert-event').count(),historyCount,'history must survive reload without duplicates');
    const frozen=await page.evaluate(()=>Date.now());await page.evaluate(t=>{Date.now=()=>t+20000},frozen);await page.waitForTimeout(1300);
    assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');assert.ok(await page.locator('.event-neutral').count()>=2,'entry cancellations visible');
    await navigate(page,'chart',width);await page.waitForTimeout(1100);assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');

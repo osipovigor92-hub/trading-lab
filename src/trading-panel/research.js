@@ -15,7 +15,7 @@ function evaluate(id,s,r,now){
  const imbalance=bandValid?(band.bid-band.ask)/(band.bid+band.ask):null;
  const flow=seconds=>{const f=r?.['flow'+seconds];return f&&finite(f.buy)&&finite(f.sell)&&f.buy>=0&&f.sell>=0&&finite(f.count)&&Number.isInteger(f.count)&&f.count>=0&&f.buy+f.sell>0?{total:f.buy+f.sell,ratio:(f.buy-f.sell)/(f.buy+f.sell),count:f.count}:null;};
  const f5=flow(5),f15=flow(15);
- add('Работающий источник; состояние ≤8 с, стакан ≤3 с',s?.phase==='running'&&fresh(s.updated,now,8)&&fresh(r?.time,now,3));
+ add('Работающий источник; состояние ≤8 с, стакан ≤3 с',(s?.feed_phase||s?.phase)==='running'&&fresh(s.updated,now,8)&&fresh(r?.time,now,3));
  add('Прогрев завершён; последняя сделка ≤10 с',r?.ready===true&&finite(r.trade_age)&&r.trade_age>=0&&r.trade_age+Math.max(0,now-s?.updated)<=10);
  add('Корректные цены и закрытые свечи ≤120 с',validPrice&&validChart&&!r?.chart_error&&fresh(c.end,now,120));
  add('Спред ≤0,025%; расходы оборота известны',finite(r?.spread)&&r.spread>=0&&r.spread<=.025&&validCost);
@@ -85,12 +85,12 @@ document.addEventListener('DOMContentLoaded',()=>{
   const current=fresh(data.updated,now,8);status.textContent=(current?'Серверный отчёт':'ОТЧЁТ УСТАРЕЛ')+' · '+date(data.updated)+' · версия '+data.version;
   for(const id of ['C','D']){
    const m=data.models[id];if(!m)continue;
-   const healthy=current&&m.phase==='running',card=make('article','research-card');card.append(make('h3','','Модель '+id+' · '+(healthy?'PAPER работает':m.phase==='halted'?'ОСТАНОВЛЕНА':!current?'ДАННЫЕ УСТАРЕЛИ':'Ожидание данных')));
+   const healthy=current&&m.phase==='running',card=make('article','research-card');card.append(make('h3','','Модель '+id+' · '+(!current?'ДАННЫЕ УСТАРЕЛИ':healthy?'PAPER работает':m.phase==='halted'?'ОСТАНОВЛЕНА':m.phase==='paused'?'Отключена':m.phase==='draining'?'Завершает позицию':'Ожидание данных')));
    p(card,m.reason||'Отдельный виртуальный эксперимент');p(card,'Капитал с оценкой закрытия: '+fmt(m.equity)+' USDT · P&L '+fmt(m.equity-data.config.capital)+' USDT',m.equity>=data.config.capital?'positive':'negative');
    p(card,'Закрыто '+m.closed+' · прибыльных '+m.wins+' / убыточных '+m.losses+' · комиссии '+fmt(m.fees)+' USDT');
    p(card,'Максимальная наблюдаемая просадка '+fmt(m.max_drawdown)+' USDT · последняя оценка '+date(m.last_observation));
    if(m.position)p(card,'Позиция: '+m.position.symbol+' '+(m.position.side===1?'LONG':'SHORT')+' · вход '+fmt(m.position.entry,8)+' · с '+date(m.position.opened),'');else p(card,'Открытой позиции нет.');
-   if(!healthy)p(card,'Капитал — последняя сохранённая оценка; при DATA_GAP позиция может остаться незакрытой.');cards.append(card);
+   if(!current||m.phase==='halted')p(card,'Капитал — последняя сохранённая оценка; при DATA_GAP позиция может остаться незакрытой.');cards.append(card);
    const j=make('article','');j.append(make('h3','','Журнал '+id));p(j,'Net закрытых '+fmt(m.net)+' USDT · средняя '+fmt(m.average)+' · PF '+fmt(m.profit_factor,2));
    const csv=make('a','research-link','Скачать весь журнал CSV ↗');csv.href='/journal-'+id.toLowerCase()+'.csv';csv.download='model-'+id+'.csv';j.append(csv);p(j,'Все закрытия сохраняются в SQLite. Ниже последние 100; CSV обновляется после закрытия и не реже 30 с. Время CSV — Unix UTC.');
    const details=make('details','');details.dataset.key='journal:'+id;details.open=opened.has(details.dataset.key);details.append(make('summary','','Сделки · '+(m.trades||[]).length));
