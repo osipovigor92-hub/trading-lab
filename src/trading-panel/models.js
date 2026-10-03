@@ -58,6 +58,14 @@
    const list=[...(state?.models||[]),...(state?.engines||[])];
    for(const [id,c]of cards){
     const item=list.find(i=>i.id===id);c.item=item||{id,kind:c.item.kind,actions:{}};
+    if(current&&item&&c.pendingCommand){
+     const q=c.pendingCommand,failed=state.audit.find(e=>e.id===q.id&&e.outcome==='error');
+     const delivered=state.audit.some(e=>e.id===q.id&&['delivered','applied'].includes(e.outcome));
+     const confirmed=item.kind==='model'?item.generation===q.generation&&!item.pending&&item.fresh:
+       delivered&&(q.action==='stop'?['completed','cancelled','failed','interrupted'].includes(item.phase):['running','completed','failed'].includes(item.phase));
+     if(failed){c.response.textContent=failed.message||'Команда не выполнена';c.response.className='control-response negative';c.pendingCommand=null;}
+     else if(confirmed){c.response.textContent=['failed','halted'].includes(item.phase)?item.reason||'Движок остановлен по ошибке':item.kind==='model'?({start:'Включение подтверждено.',stop:'Отключение подтверждено.',restart:'Перезапуск подтверждён.'}[q.action]):({start:'Запуск теста подтверждён.',stop:'Остановка теста подтверждена.',restart:'Повтор теста подтверждён.'}[q.action]);c.response.className='control-response '+(['failed','halted'].includes(item.phase)?'negative':'positive');c.pendingCommand=null;}
+    }
     const phase=current&&item?item.phase:'unknown',active=current&&['running','completed'].includes(phase);
     c.badge.textContent=current&&item?(names[phase]||phase):'Нет управления';c.badge.className='managed-badge '+(active?'is-on':['failed','halted','interrupted'].includes(phase)?'is-error':['draining','pending','warming'].includes(phase)?'is-pending':'');
     c.box.classList.toggle('is-working',phase==='running'&&current);c.metrics.replaceChildren();
@@ -66,6 +74,7 @@
      c.position.textContent=item?.position?'Позиция '+item.position.symbol+' · '+(item.position.side===1?'LONG':'SHORT')+(item.fresh?'':' · оценка устарела'):item?.fresh?'Открытой позиции нет':'Состояние позиции не подтверждено';
     }else{
      const m=item?.metrics;metric(c.metrics,id==='hummingbot'?'Изменение оценки, USDT':'Net теста, USDT',fmt(m?.net,4),m?.net>0?'positive':m?.net<0?'negative':'');metric(c.metrics,id==='hummingbot'?'PAPER-исполнений':'Сделок',fmt(id==='hummingbot'?m?.fills:m?.count,0));
+     if(m){if(id==='hummingbot'){metric(c.metrics,'Оценка портфеля',fmt(m.equity));metric(c.metrics,'Оборот, USDT',fmt(m.turnover));}else{metric(c.metrics,'Profit factor',fmt(m.profit_factor));metric(c.metrics,'Просадка, %',fmt(m.drawdown_pct));}}
      c.position.textContent=item?.version?'Движок '+item.version+(item.settings?.start?' · '+date(item.settings.start)+' — '+date(item.settings.end):''):item?.installed?'Движок подготовлен':'Ожидает подготовки движка';
      c.runBody.replaceChildren();
      if(!item?.runs?.length)c.runBody.append(make('p','muted','Завершённых запусков пока нет.'));
@@ -79,11 +88,11 @@
   }
   async function command(id,action){
    const c=cards.get(id);if(inflight.has(id)||!buttons(c.item,!!state&&Date.now()/1000-state.updated<=8)[action])return;
-   inflight.add(id);c.response.textContent='Отправляем команду…';c.response.className='control-response muted';render();
+   inflight.add(id);c.pendingCommand=null;const expected=c.item.generation+1;c.response.textContent='Отправляем команду…';c.response.className='control-response muted';render();
    try{
     const r=await fetch('/api/models-control',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Control':state.token},credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(8000),body:JSON.stringify({target:id,action,generation:c.item.generation})});
     const result=await r.json();if(!r.ok||result.status!=='accepted')throw Error(result.error||'HTTP '+r.status);
-    c.response.textContent='Команда принята. Ждём фактического состояния движка.';c.response.className='control-response muted';await poll(false);
+    c.pendingCommand={id:result.id,action,generation:expected};c.response.textContent='Команда принята. Ждём фактического состояния движка.';c.response.className='control-response muted';await poll(false);
    }catch(e){c.response.textContent=e.message;c.response.className='control-response negative';}finally{inflight.delete(id);render();}
   }
   async function poll(repeat=true){

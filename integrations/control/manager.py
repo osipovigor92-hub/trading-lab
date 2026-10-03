@@ -139,17 +139,20 @@ class Manager:
             s = read(PLATFORM_STATE / engine / 'state.json', {})
             enough = mem['total_gb'] >= minimum - .15 and mem['available_gb'] >= minimum - 1
             phase = 'running' if active else s.get('phase', 'idle') if installed else 'not_installed'
+            starting = active and s.get('phase') not in ('running', 'starting')
+            if starting:
+                phase = 'starting'
             if not active and phase in ('running', 'starting'):
                 phase = 'interrupted'
             runs = read(PLATFORM_STATE / engine / 'runs.json', [])
             reason = ('Служба теста изменилась после подготовки; запуск отключён' if installed and not trusted else
                       'Для теста нужно ' + str(minimum) + ' ГБ RAM с резервом для панели'
                       if not enough else 'Нужна подготовка изолированного движка' if not installed
-                      else s.get('reason', 'Готов к отдельному тесту'))
+                      else 'Подготовка нового тестового запуска' if starting else s.get('reason', 'Готов к отдельному тесту'))
             result.append(dict(id=engine, name=name, kind='engine', mode=mode, installed=installed,
                 phase=phase, reason=reason, version=configured.get('version'),
                 required_gb=minimum, memory_ok=enough, updated=s.get('updated'),
-                metrics=s.get('metrics'), settings=s.get('settings'), runs=runs[-20:][::-1],
+                metrics=None if starting else s.get('metrics'), settings=None if starting else s.get('settings'), runs=runs[-20:][::-1],
                 busy=engine in self.busy, generation=len(runs),
                 actions=dict(start=trusted and enough and not active, stop=installed and active,
                              restart=trusted and enough and not active)))

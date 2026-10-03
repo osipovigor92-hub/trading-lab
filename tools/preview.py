@@ -85,8 +85,9 @@ class DemoControl:
                     finished=now, phase='cancelled', reason='Тест отменён в демонстрации', metrics=None))
             else:
                 c.update(phase='running', started=now, until=now+5)
-            self.audit.append(dict(time=now, target=target, action=action, outcome='applied', message='ДЕМО'))
-            return dict(status='accepted', id='DEMO-'+str(c['generation']))
+            uid='DEMO-'+target+'-'+str(c['generation'])
+            self.audit.append(dict(id=uid,time=now,target=target,action=action,outcome='applied',message='ДЕМО'))
+            return dict(status='accepted',id=uid)
 
 CONTROL = DemoControl()
 

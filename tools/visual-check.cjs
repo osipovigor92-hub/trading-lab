@@ -68,6 +68,7 @@ async function navigate(page,key,width){
    const bCard=page.locator('.managed-card[data-model="B"]');
    await bCard.getByRole('button',{name:'Отключить Модель B',exact:true}).click();
    await bCard.locator('.managed-badge').filter({hasText:'Отключена'}).waitFor();
+   assert.match(await bCard.locator('.control-response').textContent(),/Отключение подтверждено/);
    assert.match(await bCard.textContent(),/600,2/,'disabling must preserve capital');
    assert.equal(await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).isEnabled(),true);
    // Verify server rejection is shown, without pretending a command succeeded.
@@ -77,10 +78,12 @@ async function navigate(page,key,width){
    assert.equal(await bCard.locator('.managed-badge').textContent(),'Отключена');await page.unroute('**/api/models-control');
    await bCard.getByRole('button',{name:'Перезапустить Модель B',exact:true}).click();
    await bCard.locator('.managed-badge').filter({hasText:'Прогрев'}).waitFor();await bCard.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
+   assert.match(await bCard.locator('.control-response').textContent(),/Перезапуск подтверждён/);
    const ft=page.locator('.managed-card[data-model="freqtrade"]');
    assert.equal(await page.locator('.managed-card[data-model="hummingbot"]').getByRole('button',{name:'Запустить тест Hummingbot',exact:true}).isDisabled(),true);
    await ft.getByRole('button',{name:'Запустить тест Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
    await ft.getByRole('button',{name:'Остановить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест отменён'}).waitFor();
+   assert.match(await ft.locator('.control-response').textContent(),/Остановка теста подтверждена/);
    await ft.getByRole('button',{name:'Повторить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест завершён'}).waitFor();
    await ft.locator('.engine-runs>summary').click();assert.ok(await ft.locator('.engine-run').count()>=2);
    const csv=await page.request.get(`http://127.0.0.1:${port}/api/engine-journal?engine=freqtrade`);assert.equal(csv.status(),200);assert.match(await csv.text(),/cancelled/);
