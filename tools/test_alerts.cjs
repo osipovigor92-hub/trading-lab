@@ -19,6 +19,7 @@ test('compact screener shares entry, watch, blocked and stale classification',()
  assert.equal(collectAlerts({...b,position:{}},w,1000).some(x=>x.view.kind==='entry'),false);
  assert.ok(collectAlerts(b,w,1010).every(x=>x.view.kind==='stale'&&x.view.tone==='neutral'));
  assert.deepEqual(collectAlerts(null,null,1000),[]);
+ assert.deepEqual(collectAlerts({observations:[null,{}]}, {rows:'invalid'},1000),[]);
 });
 test('entry direction change emits a new alert, repeats do not',()=>{
  assert.equal(transition('entry:LONG','entry','LONG').event,null);

@@ -80,7 +80,7 @@
    const reasons=view?.reasons||['Нет данных модели'];for(const text of reasons.slice(0,4))line(decision,text,'condition-reason');if(reasons.length>4)line(decision,'Ещё '+(reasons.length-4)+' ограничений во вкладке «Алерты».');
    if(!reasons.length)line(decision,'Проверяйте фактическое открытие в PAPER-журнале.');
    pulse.replaceChildren();heading(pulse,'МИКРОСТРУКТУРА','Ликвидность и исполненные сделки');
-   liquidity.replaceChildren();heading(liquidity,'BYBIT / ПОТОК МОДЕЛИ B','Активность стакана · '+selected);line(liquidity,'Монета выбирается в «Обзоре». Зелёный — покупатели; красный — продавцы.');
+   liquidity.replaceChildren();heading(liquidity,'BYBIT / ПОТОК МОДЕЛИ B','Активность стакана · '+selected);line(liquidity,'Монета выбирается в разделе «График». Зелёный — покупатели; красный — продавцы.');
    for(const target of [pulse,liquidity]){if(!current){line(target,'Нет свежего стакана. Объёмы и активность скрыты.','negative');continue;}
     const grid=make('div','micro-grid'),book=make('div'),flow=make('div');book.append(make('h3','','Видимые заявки в зонах'));for(const band of bookRows(r)){meter(book,band.label,band.bid,band.ask,band.share);if(!band.covered)line(book,band.label+' — зона покрыта не полностью либо нет данных.');}
     flow.append(make('h3','','Лента исполнений'));if(!r.ready)line(flow,'Поток ещё не готов: прогрев или нет свежих сделок.','negative');line(flow,'Возраст последней сделки: '+fmt(r.trade_age+now-b.updated,1)+' с.');for(const f of flowRows(r)){meter(flow,f.seconds+' сек. · '+fmt(f.count,0)+' сделок',f.buy,f.sell,f.share);line(flow,'Дельта '+fmt(f.delta,0)+' USDT',f.delta<0?'negative':'positive');}grid.append(book,flow);target.append(grid);

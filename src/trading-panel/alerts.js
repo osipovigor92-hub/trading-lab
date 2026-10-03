@@ -31,8 +31,9 @@
   }
   function collectAlerts(b,w,now){
     const rows=[];
-    if(b)rows.push(...(b.observations||[]).map(r=>({source:'B',r,view:classifyB(b,r,now)})));
-    if(w)rows.push(...(w.rows||[]).map(r=>({source:'Стакан',r,view:classifyWatch(w,r,now)})));
+    const usable=rs=>Array.isArray(rs)?rs.filter(r=>r&&typeof r.symbol==='string'):[];
+    if(b)rows.push(...usable(b.observations).map(r=>({source:'B',r,view:classifyB(b,r,now)})));
+    if(w)rows.push(...usable(w.rows).map(r=>({source:'Стакан',r,view:classifyWatch(w,r,now)})));
     const priority={entry:5,watch:4,blocked:3,wait:2,stale:1};
     return rows.sort((a,c)=>priority[c.view.kind]-priority[a.view.kind]||a.r.symbol.localeCompare(c.r.symbol));
   }

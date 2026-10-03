@@ -44,6 +44,8 @@ async function navigate(page,key,width){
    await page.getByLabel('Подборка',{exact:true}).selectOption('all');await page.getByRole('button',{name:'Дополнительные фильтры',exact:true}).click();
    await page.getByRole('button',{name:'Ликвидные',exact:true}).click();assert.equal(await page.locator('#screener-table .coin-button').count(),2);await page.getByRole('button',{name:'Все',exact:true}).click();
    await page.getByRole('button',{name:'15 минут',exact:true}).click();await page.waitForSelector('#screener-candles svg');
+   const selectedVisible=await page.locator('#screener-table .selected-coin').evaluate(r=>{const s=r.closest('.screener-scroll'),a=r.getBoundingClientRect(),b=s.getBoundingClientRect();return a.top>=b.top-1&&a.bottom<=b.bottom+1;});
+   assert.equal(selectedVisible,true,'selected coin should stay inside the list viewport');
    assert.equal(await page.locator('#screener-candles').evaluate(e=>e.scrollWidth>e.clientWidth),false,'chart needs horizontal scrolling');
    await page.screenshot({path:path.join(root,'artifacts',`screener-${width}.png`),fullPage:true});
    await page.screenshot({path:path.join(root,'artifacts',`dashboard-${width}.png`)});
