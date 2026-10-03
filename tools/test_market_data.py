@@ -77,6 +77,14 @@ class MarketTests(unittest.TestCase):
         self.assertAlmostEqual(data['bands']['0.001']['bid'],2998.9)
         self.assertTrue(data['bands']['0.001']['covered'])
         self.assertAlmostEqual(data['walls']['bid'][0]['notional'],1999)
+        # Compact ladder shows the best prices, not the largest walls.
+        self.assertEqual([v['price'] for v in data['top']['bid']], [99.99,99.95,99.8])
+        self.assertEqual([v['price'] for v in data['top']['ask']], [100.01,100.05,100.2])
+        self.assertEqual(data['top']['ask'][0]['quantity'],15)
+        self.assertAlmostEqual(data['top']['ask'][0]['notional'],1500.15)
+        deep=copy.deepcopy(result)
+        deep['b']=[[str(99.99-i*.01),'10'] for i in range(10)]
+        self.assertEqual(len(market.orderbook_analysis('BTCUSDT',deep,1000)['top']['bid']),5)
         for mutation in ('crossed','sorted','stale','symbol'):
             bad=copy.deepcopy(result)
             if mutation=='crossed':bad['b'][0][0]='100.1'

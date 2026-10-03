@@ -29,7 +29,15 @@
     const event=['entry','watch'].includes(kind)?kind:previous?.startsWith('entry:')?'cancel':null;
     return {signature,event};
   }
-  scope.LabAlerts={classifyB,classifyWatch,fresh,transition};
+  function collectAlerts(b,w,now){
+    const rows=[];
+    const usable=rs=>Array.isArray(rs)?rs.filter(r=>r&&typeof r.symbol==='string'):[];
+    if(b)rows.push(...usable(b.observations).map(r=>({source:'B',r,view:classifyB(b,r,now)})));
+    if(w)rows.push(...usable(w.rows).map(r=>({source:'Стакан',r,view:classifyWatch(w,r,now)})));
+    const priority={entry:5,watch:4,blocked:3,wait:2,stale:1};
+    return rows.sort((a,c)=>priority[c.view.kind]-priority[a.view.kind]||a.r.symbol.localeCompare(c.r.symbol));
+  }
+  scope.LabAlerts={classifyB,classifyWatch,fresh,transition,collectAlerts};
   if(typeof module!=='undefined')module.exports=scope.LabAlerts;
   if(typeof document==='undefined')return;
   document.addEventListener('DOMContentLoaded',()=>{
@@ -73,10 +81,8 @@
       if(document.hidden)return;
       const now=Date.now()/1000;
       health.textContent='Модель B: '+(errors.b||(!b||!fresh(b.updated,now,8)?'устарела':b.phase))+' · Стакан: '+(errors.w||(!w||!fresh(w.updated,now,8)?'устарел':w.status));
-      let rows=[];
-      if(b)rows.push(...(b.observations||[]).map(r=>({source:'B',r,view:classifyB(b,r,now)})));
-      if(w)rows.push(...(w.rows||[]).map(r=>({source:'Стакан',r,view:classifyWatch(w,r,now)})));
-      const priority={entry:5,watch:4,blocked:3,wait:2,stale:1};rows.sort((a,c)=>priority[c.view.kind]-priority[a.view.kind]||a.r.symbol.localeCompare(c.r.symbol));
+      const rows=collectAlerts(b,w,now);
+      document.dispatchEvent(new CustomEvent('lab-alerts',{detail:rows.filter(x=>['entry','watch'].includes(x.view.kind)).length}));
       stats.replaceChildren();
       for(const [kind,label] of [['entry','Вход B'],['watch','Наблюдение'],['stale','Нет данных']]){
         const item=make('div','');item.append(make('strong','',String(rows.filter(x=>x.view.kind===kind).length)),make('span','',label));stats.append(item);
