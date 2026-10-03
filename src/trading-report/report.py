@@ -110,6 +110,48 @@ def save(data):
         f.flush();os.fsync(f.fileno())
     os.replace(tmp,path)
 
+
+def issue_for(error):
+    """Turn known collection failures into a safe, actionable UI message.
+
+    The raw error remains in ``errors`` for an operator log, but no browser
+    should have to explain SQLite or a service implementation detail to a user.
+    """
+    text = str(error)
+    if text.startswith('История B:'):
+        return dict(scope='B', code='history-b-unavailable',
+                    title='Архив наблюдений B недоступен',
+                    detail='Сделки B остаются в журнале, но диагностика потока и условия входа B не обновляются. Нужна проверка доступа к архиву B на сервере.')
+    if text == 'Нет свежих архивных наблюдений B':
+        return dict(scope='B', code='history-b-stale',
+                    title='Архив наблюдений B не обновляется',
+                    detail='Новые снимки B не поступали более 90 секунд. Текущий сигнал и статистика потока скрыты до восстановления источника.')
+    if text.startswith(('A: состояние устарело', 'B: состояние устарело')):
+        model = text[0]
+        return dict(scope=model, code='state-stale-'+model.lower(),
+                    title='Состояние модели '+model+' устарело',
+                    detail='Показан последний сохранённый снимок. Текущие цена, позиция и P&L не подтверждены.')
+    if ': эксперимент остановлен:' in text and text[:1] in ('A', 'B'):
+        model, reason = text.split(': эксперимент остановлен:', 1)
+        return dict(scope=model, code='halted-'+model.lower(),
+                    title='Модель '+model+' остановлена по защите',
+                    detail=reason.strip() or 'Новые входы остановлены до ручной проверки.')
+    if text.startswith(('A:', 'B:')):
+        model = text[0]
+        return dict(scope=model, code='source-'+model.lower(),
+                    title='Не удалось прочитать данные модели '+model,
+                    detail='Отчёт использует последний доступный снимок. Проверьте службу модели и её файл состояния.')
+    return dict(scope='all', code='report-source', title='Данные требуют внимания', detail=text)
+
+
+def issues_for(errors, model=None):
+    rows = [issue_for(error) for error in errors]
+    return rows if model is None else [row for row in rows if row['scope'] in ('all', model)]
+
+
+def errors_for(errors, model):
+    return [error for error in errors if issue_for(error)['scope'] in ('all', model)]
+
 def main():
     now=time.time(); db=connect(ROOT/'archive.sqlite')
     errors=[]; states={}
@@ -122,27 +164,29 @@ def main():
     except Exception as e:imported=0;errors.append('История B: '+str(e)[:180])
     write_model_journals(db,states,errors)
     if len(states)!=2:
-        save(dict(updated=now,status='error',errors=errors));return
+        save(dict(updated=now,status='error',errors=errors,issues=issues_for(errors)));return
     a,b=states['A'],states['B']
     # Conservative coverage: journal installation instant is unknown; begin after
     # the first precisely recorded A closure, which intentionally excludes it.
     first=db.execute("SELECT min(closed) FROM trades WHERE model='A'").fetchone()[0]
     if first is None:
-        save(dict(updated=now,status='waiting',errors=errors+['Нет точных закрытий A для определения начала покрытия.']));return
+        errors += ['Нет точных закрытий A для определения начала покрытия.']
+        save(dict(updated=now,status='waiting',errors=errors,issues=issues_for(errors)));return
     end=min(now,finite(a['updated']),finite(b['updated']))
     start=max(end-86400,finite(b['started']),first)
     for name,s in states.items():
         if not -3<=now-finite(s['updated'])<=15:errors.append(name+': состояние устарело; общий период заканчивается последним общим снимком')
         if s.get('phase')=='halted':errors.append(name+': эксперимент остановлен: '+s.get('reason',''))
     if start>end:
-        save(dict(updated=now,status='waiting',errors=errors+['Общий период ещё не начался.']));return
+        errors += ['Общий период ещё не начался.']
+        save(dict(updated=now,status='waiting',errors=errors,issues=issues_for(errors)));return
     diag=diagnostics(db,start,end)
     if not diag['last_sample'] or now-diag['last_sample']>90:errors.append('Нет свежих архивных наблюдений B')
     positions={k:dict(symbol=s['position']['symbol'],side=s['position']['side'],opened=s['position']['opened']) if s.get('position') else None for k,s in states.items()}
     result=dict(updated=now,status='partial' if errors else 'ok',start=start,end=end,
                 models=comparison(db,start,end),diagnostics=diag,positions=positions,
                 legacy_a=max(0,a['closed']-len(a.get('journal_trades',[]))),
-                imported=imported,errors=errors)
+                imported=imported,errors=errors,issues=issues_for(errors))
     save(result);db.close()
     print('REPORT',result['status'],'imported',imported,flush=True)
 
@@ -170,8 +214,10 @@ def write_model_journals(db,states,errors):
         if position:
             position={k:position.get(k) for k in ('symbol','side','entry','quantity','opened','entry_fee','funding','mfe_net','mae_net')}
             position['side']='LONG' if position['side']==1 else 'SHORT'
+        model_errors=errors_for(errors,model)
         report=dict(model=model,updated=now,source_updated=state.get('updated'),
-                    status='ok' if fresh and not errors else 'partial',errors=errors,
+                    status='ok' if fresh and not model_errors else 'partial',errors=model_errors,
+                    issues=issues_for(errors,model),
                     phase=state.get('phase'),reason=state.get('reason',''),position=position,
                     summary=stats(records),legacy_closed=max(0,state.get('closed',0)-len(state.get('journal_trades',[]))) if model=='A' else 0,
                     first_opened=min((r['opened'] for r in records),default=None),
@@ -198,5 +244,6 @@ def write_model_journals(db,states,errors):
 if __name__=='__main__':
     try:main()
     except Exception as exc:
-        save(dict(updated=time.time(),status='error',errors=[type(exc).__name__+': '+str(exc)[:200]]))
+        errors=[type(exc).__name__+': '+str(exc)[:200]]
+        save(dict(updated=time.time(),status='error',errors=errors,issues=issues_for(errors)))
         raise
