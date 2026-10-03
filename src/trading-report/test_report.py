@@ -37,4 +37,13 @@ class Tests(unittest.TestCase):
    report.save({'status':'ok'});self.assertEqual(json.loads((self.root/'report.json').read_text())['status'],'ok');self.assertFalse((self.root/'report.tmp').exists())
   finally:report.ROOT=old
 
+ def test_issues_are_human_readable_and_scoped_to_the_affected_model(self):
+  errors=['История B: unable to open database file','A: состояние устарело; общий период заканчивается последним общим снимком','Нет свежих архивных наблюдений B']
+  rows=report.issues_for(errors)
+  self.assertEqual(rows[0]['code'],'history-b-unavailable')
+  self.assertNotIn('database',rows[0]['detail'])
+  self.assertEqual([row['scope'] for row in report.issues_for(errors,'A')],['A'])
+  self.assertEqual([row['scope'] for row in report.issues_for(errors,'B')],['B','B'])
+  self.assertEqual(report.errors_for(errors,'A'),[errors[1]])
+
 if __name__=='__main__':unittest.main()
