@@ -2,11 +2,15 @@ import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+from market_data import MarketData
 
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
+MARKET = MarketData()
 FILES = {
+    "/screener.js": ("screener.js", "text/javascript; charset=utf-8"),
+    "/screener.css": ("screener.css", "text/css; charset=utf-8"),
     "/model-status.js": ("model-status.js", "text/javascript; charset=utf-8"),
     "/api/research": ("/var/lib/trading-research/report.json", "application/json"),
     "/journal-c.csv": ("/var/lib/trading-research/journal-c.csv", "text/csv; charset=utf-8"),
@@ -79,7 +83,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path in ("/api/state", "/api/scanner"):
+            if path in ("/api/screener", "/api/market-chart", "/api/market-book"):
+                query = parse_qs(urlsplit(self.path).query)
+                if any(len(v) != 1 for v in query.values()) or set(query) - {"symbol", "interval"}:
+                    self.send(400, b"Invalid query", "text/plain")
+                    return
+                kind = {"/api/screener": "screener", "/api/market-chart": "chart", "/api/market-book": "book"}[path]
+                try:
+                    data = MARKET.get(kind, query.get("symbol", [""])[0], query.get("interval", ["5"])[0])
+                except ValueError:
+                    self.send(400, b"Invalid symbol or timeframe", "text/plain")
+                    return
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), "application/json")
+            elif path in ("/api/state", "/api/scanner"):
                 source = STATE if path == "/api/state" else Path("/var/lib/trading-scanner/market.json")
                 state = json.loads(source.read_text())
                 state["server_time"] = time.time()

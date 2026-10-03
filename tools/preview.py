@@ -2,10 +2,11 @@
 import argparse
 import importlib.util
 import json
+import math
 from pathlib import Path
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 PANEL = ROOT/'src/trading-panel'
@@ -14,6 +15,31 @@ report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
 spec2=importlib.util.spec_from_file_location('research_engine',ROOT/'integrations/research/engine.py')
 research=importlib.util.module_from_spec(spec2);spec2.loader.exec_module(research)
+spec3=importlib.util.spec_from_file_location('market_data',PANEL/'market_data.py')
+market=importlib.util.module_from_spec(spec3);spec3.loader.exec_module(market)
+
+def market_fixture(path, query):
+    now=time.time()
+    prices={'BTCUSDT':60000,'ETHUSDT':2300,'SOLUSDT':145,'ONDOUSDT':.5}
+    if path=='/api/screener':
+        rows=[dict(symbol=s,price=p,turnover=(4-i)*80e6,change=(4-i*2.5),range24=5+i,
+                   spread=.008+i*.008,open_interest=20e6,funding=.0001) for i,(s,p) in enumerate(prices.items())]
+        return dict(status='ok',updated=now,rows=rows,eligible=4,rejected=0,limit=100)
+    symbol=query.get('symbol',['BTCUSDT'])[0];interval=query.get('interval',['5'])[0]
+    if symbol not in prices or interval not in market.INTERVALS:
+        return dict(status='error',updated=now,error='Invalid demo symbol')
+    price=prices[symbol]
+    if path=='/api/market-chart':
+        step=market.INTERVALS[interval];end=now//step*step;bars=[]
+        for i in range(180):
+            center=price*(1+.006*math.sin(i*.35)+.001*math.cos(i*.81))
+            o=center*(1+.0005*math.sin(i));c=center*(1-.0005*math.sin(i))
+            bars.append(dict(time=end-(180-i)*step,open=o,close=c,high=max(o,c)*1.0008,
+                             low=min(o,c)*.9992,volume=1000,turnover=price*1000*(1+.2*math.sin(i))))
+        return market.chart_analysis(symbol,interval,bars,now)
+    bids=[[str(price*(1-.00005-i*.00002)),str((30+i%5)*100/price)] for i in range(80)]
+    asks=[[str(price*(1+.00005+i*.00002)),str((35+i%5)*100/price)] for i in range(80)]
+    return market.orderbook_analysis(symbol,dict(s=symbol,ts=now*1000,b=bids,a=asks),now)
 
 def fixtures():
     now = time.time()
@@ -65,7 +91,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         data=fixtures()
-        if path in data:
+        if path in ('/api/screener','/api/market-chart','/api/market-book'):
+            body=json.dumps(market_fixture(path,parse_qs(urlsplit(self.path).query)),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
+        elif path in data:
             body=json.dumps(data[path],ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in ('/journal-a.csv','/journal-b.csv','/journal-c.csv','/journal-d.csv'):
             body=b'\xef\xbb\xbfsymbol,net\nDEMOUSDT,0.6\nDEMOUSDT,-0.4\n';kind='text/csv; charset=utf-8'

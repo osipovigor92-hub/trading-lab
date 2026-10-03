@@ -24,10 +24,33 @@ const root=path.resolve(__dirname,'..');const port=18788;
    await page.getByLabel('Таймфрейм графика').selectOption('15');
    assert.match(await page.locator('.chart-host iframe').getAttribute('src'),/interval=15/);
 
-   for(const name of ['Обзор','Рынок','LIVE','Grid','Тесты','Алерты','Модели']){
+   for(const name of ['Обзор','Скринер','LIVE','Grid','Тесты','Алерты','Модели']){
     await page.getByRole('button',{name,exact:true}).click();await page.waitForTimeout(200);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'horizontal overflow '+name);
    }
+   await page.getByRole('button',{name:'Скринер',exact:true}).click();
+   await page.waitForSelector('#screener-table tbody .coin-button');
+   assert.equal(await page.locator('#screener-table tbody tr').count(),4);
+   await page.getByLabel('Поиск монеты').fill('ondo');
+   assert.equal(await page.locator('#screener-table tbody tr').count(),1);
+   await page.getByRole('button',{name:'ONDOUSDT',exact:true}).click();
+   await page.waitForSelector('#screener-candles svg');
+   await page.waitForSelector('#screener-levels .level-item');
+   assert.match(await page.locator('#screener-candles svg').getAttribute('aria-label'),/ONDOUSDT/);
+   assert.equal(await page.locator('#screener-candles .volume-bar').count(),90);
+   await page.waitForSelector('#screener-orderbook .book-band');
+   assert.equal(await page.locator('#screener-orderbook .book-band').count(),3);
+   assert.equal(await page.locator('#screener-bots article').count(),4);
+   await page.getByLabel('Поиск монеты').fill('');
+   await page.getByLabel('Подборка').selectOption('liquid');
+   assert.equal(await page.locator('#screener-table tbody .coin-button').count(),2);
+   await page.getByLabel('Подборка').selectOption('all');
+   await page.getByLabel('Таймфрейм уровней').selectOption('15');
+   await page.waitForSelector('#screener-candles svg');
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'screener overflow');
+   await page.screenshot({path:path.join(root,'artifacts',`screener-${width}.png`),fullPage:true});
+   await page.getByRole('button',{name:'В обзор',exact:true}).click();
+   assert.equal(await page.getByLabel('Контракт для анализа').inputValue(),'ONDOUSDT');
    await page.getByRole('button',{name:'Модели',exact:true}).click();
    await page.waitForSelector('#research-observations .research-card');
    assert.equal(await page.locator('#research-observations .research-card').count(),6);
@@ -67,6 +90,12 @@ const root=path.resolve(__dirname,'..');const port=18788;
    await page.getByRole('button',{name:'Модели',exact:true}).click();
    assert.equal(await page.locator('.research-match').count(),0);
    assert.match(await page.locator('#page-research').textContent(),/ОТЧЁТ УСТАРЕЛ/);
+   await page.getByRole('button',{name:'Скринер',exact:true}).click();
+   await page.evaluate(t=>{Date.now=()=>t+90000},frozen);
+   await page.waitForTimeout(4500);
+   assert.equal(await page.locator('#screener-table tbody .coin-button').count(),0,'expired tickers stay visible');
+   assert.equal(await page.locator('#screener-orderbook .book-band').count(),0,'expired depth stays visible');
+   assert.equal(await page.locator('#screener-candles svg').count(),0,'expired candles stay visible');
    assert.deepEqual(errors,[]);
    await page.close();
   }

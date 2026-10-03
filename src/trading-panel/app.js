@@ -104,7 +104,7 @@ refresh();
     const old = [...main.children];
     const footer = main.querySelector('footer');
     const pages = {};
-    const names = {overview:'Обзор',alerts:'Алерты',market:'Рынок',live:'LIVE',grid:'Grid',tests:'Тесты',research:'Модели'};
+    const names = {overview:'Обзор',alerts:'Алерты',market:'Скринер',live:'LIVE',grid:'Grid',tests:'Тесты',research:'Модели'};
     const nav = make('nav','dashboard-tabs');
     nav.id = 'dashboard-tabs';
     nav.setAttribute('aria-label','Разделы панели');
