@@ -83,6 +83,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def api_error(self, code, message):
+        self.send(code, json.dumps(dict(status='error', error=message), ensure_ascii=False).encode(),
+                  'application/json; charset=utf-8')
+
     def do_GET(self):
         if self.headers.get("Host") not in (
             "127.0.0.1:8787", "localhost:8787"
@@ -94,7 +98,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/engine-journal":
                 query = parse_qs(urlsplit(self.path).query)
                 if set(query) != {"engine"} or len(query["engine"]) != 1 or query["engine"][0] not in ("freqtrade", "hummingbot", "jesse"):
-                    self.send(400, b"Invalid engine", "text/plain")
+                    self.api_error(400, 'Invalid engine')
                     return
                 data = control_client.call(dict(op="journal", engine=query["engine"][0]))
                 self.send(200, data["csv"].encode(), "text/csv; charset=utf-8")
@@ -108,13 +112,13 @@ class Handler(BaseHTTPRequestHandler):
             elif path in ("/api/screener", "/api/market-chart", "/api/market-book"):
                 query = parse_qs(urlsplit(self.path).query)
                 if any(len(v) != 1 for v in query.values()) or set(query) - {"symbol", "interval"}:
-                    self.send(400, b"Invalid query", "text/plain")
+                    self.api_error(400, 'Invalid query')
                     return
                 kind = {"/api/screener": "screener", "/api/market-chart": "chart", "/api/market-book": "book"}[path]
                 try:
                     data = MARKET.get(kind, query.get("symbol", [""])[0], query.get("interval", ["5"])[0])
                 except ValueError:
-                    self.send(400, b"Invalid symbol or timeframe", "text/plain")
+                    self.api_error(400, 'Invalid symbol or timeframe')
                     return
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), "application/json")
             elif path in ("/api/state", "/api/scanner"):
@@ -134,7 +138,10 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as exc:
             print(type(exc).__name__, str(exc), flush=True)
-            self.send(503, b"State unavailable", "text/plain")
+            if urlsplit(self.path).path.startswith('/api/'):
+                self.api_error(503, 'Data source unavailable')
+            else:
+                self.send(503, b"State unavailable", "text/plain")
 
     def log_message(self, *args):
         pass
