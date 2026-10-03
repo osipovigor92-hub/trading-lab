@@ -108,6 +108,8 @@ class Manager:
             elif not fresh:
                 phase = 'stale'
             error = control.get('error') or raw.get('reason') or ''
+            if units[unit].get('LoadState') == 'not-found':
+                phase, error = 'not_installed', 'Модель пока не установлена'
             if (command.get('id') and not pending and
                     not any(e['id'] == command['id'] and e['outcome'] == 'applied' for e in self.journal)):
                 self.audit(model, command['action'], 'applied', 'Движок подтвердил состояние', command['id'])

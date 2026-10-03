@@ -83,7 +83,7 @@ async function navigate(page,key,width){
    await ft.getByRole('button',{name:'Остановить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест отменён'}).waitFor();
    await ft.getByRole('button',{name:'Повторить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест завершён'}).waitFor();
    await ft.locator('.engine-runs>summary').click();assert.ok(await ft.locator('.engine-run').count()>=2);
-   const csv=await page.request.get('/api/engine-journal?engine=freqtrade');assert.equal(csv.status(),200);assert.match(await csv.text(),/cancelled/);
+   const csv=await page.request.get(`http://127.0.0.1:${port}/api/engine-journal?engine=freqtrade`);assert.equal(csv.status(),200);assert.match(await csv.text(),/cancelled/);
    await page.locator('.models-audit>summary').click();assert.match(await page.locator('.control-log').textContent(),/B.*Отключение.*подтверждено/);
    await page.screenshot({path:path.join(root,'artifacts',`models-${width}.png`),fullPage:true});
    await page.locator('.models-analysis>summary').click();await page.waitForSelector('#research-observations .research-card');

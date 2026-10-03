@@ -28,7 +28,7 @@
   const logBox=make('details','box models-audit');logBox.id='model-control-journal';logBox.append(make('summary','','Журнал управления'));
   const log=make('div','control-log');logBox.append(log);
   page.prepend(heading,modelsBox,engineBox,logBox);
-  const info={A:'Лента + дисбаланс + импульс',B:'График + OFI + VWAP стакана',C:'Импульс в тренде',D:'Возврат к VWAP',freqtrade:'Исторический тест · 7 закрытых дней · Bybit BTC · 5 мин',hummingbot:'PAPER · Pure Market Making · Binance BTC spot · 20 мин',jesse:'Бесплатный исторический тест · 7 закрытых дней · Bybit BTC · 5 мин'};
+  const info={A:'Лента + дисбаланс + импульс',B:'EMA / VWAP + стакан + OFI',C:'Импульс в тренде',D:'Возврат к VWAP',freqtrade:'Исторический тест · 7 закрытых дней · Bybit BTC · 5 мин',hummingbot:'PAPER · Pure Market Making · Binance BTC spot · 20 мин',jesse:'Бесплатный исторический тест · 7 закрытых дней · Bybit BTC · 5 мин'};
   const inflight=new Set(),cards=new Map();let state=null,apiError='';
   function card(id,kind){
    const box=make('article','managed-card');box.dataset.model=id;
