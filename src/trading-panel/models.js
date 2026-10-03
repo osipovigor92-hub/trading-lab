@@ -4,6 +4,13 @@
  const names={running:'Работает',warming:'Прогрев',waiting:'Ожидает данные',paused:'Отключена',stopped:'Служба остановлена',draining:'Завершает позицию',pending:'Применяет команду',halted:'Остановлена по защите',stale:'Нет свежего отчёта',unknown:'Нет отчёта',not_installed:'Не подготовлен',idle:'Готов к тесту',starting:'Запускается',completed:'Тест завершён',cancelled:'Тест отменён',failed:'Ошибка теста',interrupted:'Тест прерван',cancelling:'Останавливается на ПК',lost:'ПК потерял связь'};
  const engineNames={freqtrade:'Freqtrade',hummingbot:'Hummingbot',jesse:'Jesse'};
  const setupCommands={freqtrade:'python3 /opt/trading-lab-repo/tools/prepare_engine.py --engine freqtrade --install',jesse:'python3 /opt/trading-lab-repo/tools/prepare_engine.py --engine jesse --install',hummingbot:'python3 /opt/trading-lab-repo/tools/prepare_engine.py --engine hummingbot --python /opt/hummingbot-env/bin/python'};
+ async function controlJson(response){
+  if(typeof scope.labParseJson==='function')return scope.labParseJson(response,'Управление моделями');
+  const text=await response.text();let value;
+  try{value=JSON.parse(text);}catch(_){throw Error('Управление моделями: сервер вернул некорректный ответ.');}
+  if(!response.ok)throw Error(value?.error||'Управление моделями: HTTP '+response.status);
+  return value;
+ }
  function testSlot(item,engines=[]){
   if(item?.kind!=='engine')return {item,occupiedBy:null};
   const occupied=engines.find(e=>e.id!==item.id&&(e.busy||e.test_active||['running','starting','cancelling','lost'].includes(e.phase)));
@@ -22,7 +29,7 @@
   if(item?.kind==='engine')return {start:!busy&&a.start===true,stop:!busy&&a.stop===true,restart:!busy&&a.restart===true&&item.phase!=='idle'};
   return {start:!busy&&a.start===true&&(off||['draining','pending','stale','unknown'].includes(item.phase)),stop:!busy&&a.stop===true&&!off&&!(item.pending&&item.requested==='stop'),restart:!busy&&a.restart===true&&!item.pending};
  }
- const api={buttons,names,testSlot,executor};if(typeof module!=='undefined')module.exports=api;
+ const api={buttons,names,testSlot,executor,controlJson};if(typeof module!=='undefined')module.exports=api;
  if(typeof document==='undefined')return;
  document.addEventListener('DOMContentLoaded',()=>{
   const page=document.getElementById('page-research');if(!page)return;
@@ -86,7 +93,7 @@
   function enginesNow(){return (state?.engines||[]).map(e=>({...e,busy:e.busy||inflight.has(e.id)}));}
   function render(){
    const now=Date.now()/1000,current=!!state&&now-state.updated>=-1&&now-state.updated<=8;
-   connection.textContent=apiError||(!current?'Управление недоступно: ждём свежий ответ сервера':'Управление подключено · '+date(state.updated));connection.className=current?'models-connection positive':'models-connection muted';
+   connection.textContent=apiError||(!current?'Управление недоступно: ждём свежий ответ сервера':'Управление подключено · '+date(state.updated));connection.className=apiError?'models-connection negative':current?'models-connection positive':'models-connection muted';
    resources.textContent='Один внешний тест за раз.'+(state?.memory?' RAM сервера '+fmt(state.memory.total_gb)+' ГБ · доступно '+fmt(state.memory.available_gb)+' ГБ.':'')+' Freqtrade/Jesse: отдельные исторические тесты; Hummingbot: PAPER по публичному стакану.';
    const pc=state?.worker;worker.className='worker-status '+(current&&pc?.online?'is-online':'is-offline');worker.replaceChildren();
    worker.append(make('strong','',current&&pc?.online?'Мой ПК подключён':pc?.configured?'Мой ПК не подключён':'Исполнитель ПК ещё не подключён'));
@@ -142,13 +149,13 @@
    try{
     const payload={target:id,action,generation:c.item.generation};if(c.item.kind==='engine'&&c.item.execution==='pc')payload.execution='pc';
     const r=await fetch('/api/models-control',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Control':state.token},credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(8000),body:JSON.stringify(payload)});
-    const result=await r.json();if(!r.ok||result.status!=='accepted')throw Error(result.error||'HTTP '+r.status);
+    const result=await controlJson(r);if(result.status!=='accepted')throw Error(result.error||'Управление не приняло команду.');
     c.pendingCommand={id:result.id,action,generation:expected};c.response.textContent='Команда принята. Ждём фактического состояния движка.';c.response.className='control-response muted';await poll(false);
    }catch(e){c.response.textContent=e.message;c.response.className='control-response negative';}finally{inflight.delete(id);render();}
   }
   async function poll(repeat=true){
-   try{if(!document.hidden){const r=await fetch('/api/models-control',{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error('Недоступно');const s=await r.json();if(s.status!=='ok'||!Array.isArray(s.models)||!Array.isArray(s.engines))throw Error('Неверный ответ');state=s;apiError='';render();}}
-   catch{apiError='Управление ещё не подключено. После установки здесь появятся фактические статусы и кнопки.';state=null;render();}
+   try{if(!document.hidden){const r=await fetch('/api/models-control',{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(8000)});const s=await controlJson(r);if(s.status!=='ok'||!Array.isArray(s.models)||!Array.isArray(s.engines))throw Error('Управление моделями: сервер вернул неполные данные.');state=s;apiError='';render();}}
+   catch(e){apiError=e?.message||'Управление ещё не подключено. После установки здесь появятся фактические статусы и кнопки.';state=null;render();}
    finally{if(repeat)setTimeout(poll,3000);}
   }
   poll();setInterval(()=>{if(!document.hidden)render();},1000);
