@@ -106,7 +106,8 @@ async function navigate(page,key,width){
    assert.equal(await page.locator('#research-observations .research-card').count(),6);
    assert.equal(await page.locator('#all-model-status article').count(),4);assert.equal(await page.locator('#research-paper-summary .research-card').count(),2);
    assert.match(await page.locator('#research-paper-summary').textContent(),/PAPER работает/);assert.equal(await page.locator('#page-research .alert-long,#page-research .alert-short').count(),0);
-   await page.locator('#research-observations .research-card details').first().evaluate(e=>e.open=true);await page.waitForTimeout(1200);assert.equal(await page.locator('#research-observations .research-card details').first().getAttribute('open'),'');
+   const researchDetails=page.locator('#research-observations details[data-key="C:BTCUSDT"]');
+   await researchDetails.locator('summary').click();await page.waitForTimeout(1200);assert.equal(await researchDetails.getAttribute('open'),'');
    await page.screenshot({path:path.join(root,'artifacts',`research-${width}.png`),fullPage:true});
    await navigate(page,'journals',width);await page.waitForSelector('#model-journals a');assert.equal(await page.locator('#model-journals a').count(),2);assert.equal(await page.locator('#research-journals a').count(),2);
    assert.equal(await page.locator('#page-journals #lab-report').count(),1);await page.screenshot({path:path.join(root,'artifacts',`journals-${width}.png`),fullPage:true});
