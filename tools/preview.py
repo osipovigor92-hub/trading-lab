@@ -4,6 +4,7 @@ import importlib.util
 import json
 import math
 from pathlib import Path
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -17,6 +18,79 @@ spec2=importlib.util.spec_from_file_location('research_engine',ROOT/'integration
 research=importlib.util.module_from_spec(spec2);spec2.loader.exec_module(research)
 spec3=importlib.util.spec_from_file_location('market_data',PANEL/'market_data.py')
 market=importlib.util.module_from_spec(spec3);spec3.loader.exec_module(market)
+
+# In-memory, synthetic lifecycle. This preview never reads production control files.
+class DemoControl:
+    token = 'isolated-preview-token'
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.models = {m: dict(phase='running', generation=0) for m in 'ABCD'}
+        self.engines = {e: dict(phase='idle' if e != 'hummingbot' else 'not_installed',
+                              generation=0, runs=[]) for e in ('freqtrade', 'hummingbot', 'jesse')}
+        self.audit = []
+
+    def status(self, data, now):
+        with self.lock:
+            rows = []
+            for model, c in self.models.items():
+                if c.get('until', 0) and now >= c['until']:
+                    c.update(phase='running', until=0)
+                source = data['/api/paper'] if model == 'A' else data['/api/model-b'] if model == 'B' else data['/api/research']['models'][model]
+                source['phase'] = c['phase']
+                position = source.get('position')
+                rows.append(dict(id=model, kind='model', installed=True, phase=c['phase'],
+                    generation=c['generation'], fresh=True, equity=source['equity'],
+                    closed=source['closed'], position=position, pending=False,
+                    reason='ДЕМОНСТРАЦИЯ · реальная модель не изменяется',
+                    actions=dict(start=c['phase']=='paused', stop=c['phase']!='paused', restart=True)))
+            engines = []
+            for engine, c in self.engines.items():
+                if c.get('until', 0) and now >= c['until']:
+                    c['phase'] = 'completed'; c['until'] = 0
+                    c['runs'].append(dict(id='DEMO-'+str(c['generation']), started=c['started'],
+                        finished=now, phase='completed', reason='СИНТЕТИЧЕСКИЙ ПРИМЕР · не результат бота',
+                        metrics=dict(count=12, net=-.8), settings=dict(strategy='LabEMATest')))
+                installed = engine != 'hummingbot'
+                engines.append(dict(id=engine, kind='engine', installed=installed, phase=c['phase'],
+                    generation=c['generation'], memory_ok=True, version='DEMO' if installed else None,
+                    required_gb=5 if engine=='hummingbot' else 3,
+                    reason='ДЕМОНСТРАЦИЯ · реальный движок не подключён',
+                    metrics=c['runs'][-1].get('metrics') if c['runs'] else None,
+                    runs=c['runs'][::-1], actions=dict(start=installed and c['phase']!='running',
+                        stop=installed and c['phase']=='running', restart=installed and c['phase']!='running')))
+            return dict(status='ok', token=self.token, updated=now, models=rows, engines=engines,
+                        memory=dict(total_gb=8, available_gb=7), audit=self.audit[::-1])
+
+    def command(self, request):
+        with self.lock:
+            if not isinstance(request, dict) or set(request) != {'target', 'action', 'generation'}:
+                raise ValueError('Недопустимая команда')
+            target, action, generation = (request[k] for k in ('target', 'action', 'generation'))
+            if target not in (*self.models, *self.engines) or action not in ('start', 'stop', 'restart'):
+                raise ValueError('Недопустимая команда')
+            c = self.models.get(target, self.engines.get(target))
+            if type(generation) is not int or generation != c['generation']:
+                raise ValueError('Состояние изменилось. Обновите карточку')
+            if target == 'hummingbot':
+                raise ValueError('Движок не подготовлен')
+            if target in self.engines and action != 'stop' and any(v['phase']=='running' for v in self.engines.values()):
+                raise ValueError('Другой тест ещё работает')
+            c['generation'] += 1
+            now=time.time()
+            if target in self.models:
+                c.update(phase='paused' if action=='stop' else 'warming', until=0 if action=='stop' else now+2)
+            elif action=='stop':
+                c.update(phase='cancelled', until=0)
+                c['runs'].append(dict(id='DEMO-'+str(c['generation']), started=c.get('started', now),
+                    finished=now, phase='cancelled', reason='Тест отменён в демонстрации', metrics=None))
+            else:
+                c.update(phase='running', started=now, until=now+5)
+            uid='DEMO-'+target+'-'+str(c['generation'])
+            self.audit.append(dict(id=uid,time=now,target=target,action=action,outcome='applied',message='ДЕМО'))
+            return dict(status='accepted',id=uid)
+
+CONTROL = DemoControl()
 
 def market_fixture(path, query):
     now=time.time()
@@ -87,6 +161,7 @@ def fixtures():
             v=research.evaluate(model,data['/api/model-b'],r,now)
             m['observations'].append(dict(symbol=r['symbol'],time=now,side=v['side'],checks=v['checks'],confirmations=0,confirmed=False))
     data['/api/research']=rs
+    data['/api/models-control']=CONTROL.status(data, now)
     return data
 
 class Handler(BaseHTTPRequestHandler):
@@ -99,6 +174,13 @@ class Handler(BaseHTTPRequestHandler):
             body=json.dumps(data[path],ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in ('/journal-a.csv','/journal-b.csv','/journal-c.csv','/journal-d.csv'):
             body=b'\xef\xbb\xbfsymbol,net\nDEMOUSDT,0.6\nDEMOUSDT,-0.4\n';kind='text/csv; charset=utf-8'
+        elif path=='/api/engine-journal':
+            engine=parse_qs(urlsplit(self.path).query).get('engine', [''])[0]
+            if engine not in CONTROL.engines:
+                self.send_error(400);return
+            body=('\ufeffrun_id,engine,phase,net_usdt\n'+''.join(
+                f"{r['id']},{engine},{r['phase']},{(r.get('metrics') or {}).get('net', '')}\n"
+                for r in CONTROL.engines[engine]['runs'])).encode();kind='text/csv; charset=utf-8'
         else:
             name='index.html' if path=='/' else path.lstrip('/')
             allowed={p.name:p for p in PANEL.iterdir() if p.suffix in ('.html','.js','.css')}
@@ -117,6 +199,22 @@ class Handler(BaseHTTPRequestHandler):
             "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-src https://www.tradingview-widget.com https://s.tradingview.com; img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
             if chart else "default-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
         self.end_headers();self.wfile.write(body)
+
+    def do_POST(self):
+        if self.path != '/api/models-control':
+            self.send_error(404);return
+        if self.headers.get('X-Lab-Control') != CONTROL.token or self.headers.get('Content-Type')!='application/json':
+            self.send_error(403);return
+        try:
+            length=int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 4096: raise ValueError('Invalid length')
+            value=CONTROL.command(json.loads(self.rfile.read(length)))
+            status=202
+        except (ValueError, KeyError, TypeError) as exc:
+            value=dict(status='error', error=str(exc));status=409
+        body=json.dumps(value,ensure_ascii=False).encode()
+        self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8')
+        self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
     def log_message(self,*args): pass
 
 if __name__=='__main__':

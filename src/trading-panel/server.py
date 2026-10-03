@@ -4,11 +4,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from market_data import MarketData
+import control_client
 
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
 MARKET = MarketData()
 FILES = {
+    "/models.js": ("models.js", "text/javascript; charset=utf-8"),
+    "/models.css": ("models.css", "text/css; charset=utf-8"),
     "/ui.js": ("ui.js", "text/javascript; charset=utf-8"),
     "/layout.js": ("layout.js", "text/javascript; charset=utf-8"),
     "/layout.css": ("layout.css", "text/css; charset=utf-8"),
@@ -86,7 +89,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path in ("/api/screener", "/api/market-chart", "/api/market-book"):
+            if path == "/api/engine-journal":
+                query = parse_qs(urlsplit(self.path).query)
+                if set(query) != {"engine"} or len(query["engine"]) != 1 or query["engine"][0] not in ("freqtrade", "hummingbot", "jesse"):
+                    self.send(400, b"Invalid engine", "text/plain")
+                    return
+                data = control_client.call(dict(op="journal", engine=query["engine"][0]))
+                self.send(200, data["csv"].encode(), "text/csv; charset=utf-8")
+            elif path == "/api/models-control":
+                try:
+                    data = control_client.call(dict(op="status"))
+                    data["token"] = control_client.TOKEN
+                    self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), "application/json")
+                except (OSError, ValueError):
+                    self.send(503, b'{"status":"unavailable","error":"Model controller unavailable"}', "application/json")
+            elif path in ("/api/screener", "/api/market-chart", "/api/market-book"):
                 query = parse_qs(urlsplit(self.path).query)
                 if any(len(v) != 1 for v in query.values()) or set(query) - {"symbol", "interval"}:
                     self.send(400, b"Invalid query", "text/plain")
@@ -119,6 +136,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def do_POST(self):
+        if self.headers.get("Host") not in ("127.0.0.1:8787", "localhost:8787"):
+            self.send(403, b'{"error":"Invalid Host"}', "application/json")
+            return
+        if self.path != "/api/models-control":
+            self.send(404, b'{"error":"Not found"}', "application/json")
+            return
+        if not control_client.authorized(self.headers):
+            self.send(403, b'{"error":"Invalid control token or origin"}', "application/json")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 4096 or self.headers.get("Transfer-Encoding"):
+                raise ValueError("Invalid request size")
+            command = json.loads(self.rfile.read(length))
+            result = control_client.call(dict(op="command", command=command))
+            self.send(202 if result.get("status") == "accepted" else 409,
+                      json.dumps(result, ensure_ascii=False, allow_nan=False).encode(), "application/json")
+        except (ValueError, TypeError):
+            self.send(400, b'{"error":"Invalid command"}', "application/json")
+        except OSError:
+            self.send(503, b'{"error":"Controller unavailable"}', "application/json")
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const s=await res.json(), now=Date.now()/1000;
       const fresh=now-s.updated>=-3 && now-s.updated<=8;
       status.textContent=s.phase==='halted'?'ОСТАНОВЛЕНО · '+s.reason:
-        !fresh?'ДАННЫЕ УСТАРЕЛИ':s.phase==='running'?'PAPER работает':'Ожидание · '+s.reason;
+        !fresh?'ДАННЫЕ УСТАРЕЛИ':s.phase==='paused'?'Модель отключена · поток котировок сохранён':s.phase==='draining'?'Отключены новые входы · завершается позиция':s.phase==='running'?'PAPER работает':'Ожидание · '+s.reason;
       status.className=fresh&&s.phase==='running'?'positive':'negative';
       // Restore user-opened details after repaint.
       const open=new Set([...body.querySelectorAll('details[open]')].map(x=>x.dataset.key));

@@ -27,6 +27,9 @@
       status.className = fresh && s.phase === 'running' ? 'positive' : 'negative';
       status.textContent = s.phase === 'halted' ? 'ЭКСПЕРИМЕНТ ОСТАНОВЛЕН' :
         !fresh ? 'ДАННЫЕ УСТАРЕЛИ' :
+        s.phase === 'paused' ? 'Модель отключена · новые входы запрещены' :
+        s.phase === 'draining' ? 'Новые входы отключены · завершается позиция' :
+        s.phase === 'warming' ? 'Повторный прогрев модели' :
         s.phase === 'running' ? 'Виртуальный эксперимент работает' : 'Ожидание данных';
       body.replaceChildren();
       if (s.reason) line(s.reason);
