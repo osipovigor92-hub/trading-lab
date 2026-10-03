@@ -1,0 +1,30 @@
+[Unit]
+Description=Local PAPER model lifecycle broker
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -B -u /opt/trading-control/manager.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=trading-control
+RuntimeDirectoryMode=0750
+Group=tradingbot
+UMask=0027
+MemoryMax=64M
+CPUQuota=5%
+TasksMax=12
+Nice=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trading-control /run/trading-control
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

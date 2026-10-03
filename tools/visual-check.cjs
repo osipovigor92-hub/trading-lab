@@ -62,8 +62,32 @@ async function navigate(page,key,width){
    await page.getByRole('button',{name:'Сбросить оформление',exact:true}).click();assert.equal(await page.locator('body').getAttribute('data-density'),'comfortable');
    await navigate(page,'market',width);await page.waitForSelector('#screener-table .coin-button');
    assert.equal(await page.getByRole('button',{name:'Избранное ONDOUSDT',exact:true}).getAttribute('aria-pressed'),'true');
-   await navigate(page,'research',width);await page.waitForSelector('#research-observations .research-card');
-   assert.equal(await page.locator('#research-observations .research-card').count(),6);assert.equal(await page.locator('.research-catalog article').count(),3);
+   await navigate(page,'research',width);await page.waitForSelector('#model-controls .managed-card');
+   assert.equal(await page.locator('#model-controls .managed-card').count(),4);assert.equal(await page.locator('#engine-controls .managed-card').count(),3);
+   assert.equal(await page.locator('.research-catalog').count(),0,'source catalog should be replaced by actual test controls');
+   const bCard=page.locator('.managed-card[data-model="B"]');
+   await bCard.getByRole('button',{name:'Отключить Модель B',exact:true}).click();
+   await bCard.locator('.managed-badge').filter({hasText:'Отключена'}).waitFor();
+   assert.match(await bCard.textContent(),/600,2/,'disabling must preserve capital');
+   assert.equal(await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).isEnabled(),true);
+   // Verify server rejection is shown, without pretending a command succeeded.
+   await page.route('**/api/models-control',async route=>{if(route.request().method()==='POST')await route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({status:'error',error:'Состояние изменилось. Повторите действие'})});else await route.continue();});
+   await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).click();
+   await bCard.locator('.control-response').filter({hasText:'Состояние изменилось'}).waitFor();
+   assert.equal(await bCard.locator('.managed-badge').textContent(),'Отключена');await page.unroute('**/api/models-control');
+   await bCard.getByRole('button',{name:'Перезапустить Модель B',exact:true}).click();
+   await bCard.locator('.managed-badge').filter({hasText:'Прогрев'}).waitFor();await bCard.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
+   const ft=page.locator('.managed-card[data-model="freqtrade"]');
+   assert.equal(await page.locator('.managed-card[data-model="hummingbot"]').getByRole('button',{name:'Запустить тест Hummingbot',exact:true}).isDisabled(),true);
+   await ft.getByRole('button',{name:'Запустить тест Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
+   await ft.getByRole('button',{name:'Остановить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест отменён'}).waitFor();
+   await ft.getByRole('button',{name:'Повторить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест завершён'}).waitFor();
+   await ft.locator('.engine-runs>summary').click();assert.ok(await ft.locator('.engine-run').count()>=2);
+   const csv=await page.request.get('/api/engine-journal?engine=freqtrade');assert.equal(csv.status(),200);assert.match(await csv.text(),/cancelled/);
+   await page.locator('.models-audit>summary').click();assert.match(await page.locator('.control-log').textContent(),/B.*Отключение.*подтверждено/);
+   await page.screenshot({path:path.join(root,'artifacts',`models-${width}.png`),fullPage:true});
+   await page.locator('.models-analysis>summary').click();await page.waitForSelector('#research-observations .research-card');
+   assert.equal(await page.locator('#research-observations .research-card').count(),6);
    assert.equal(await page.locator('#all-model-status article').count(),4);assert.equal(await page.locator('#research-paper-summary .research-card').count(),2);
    assert.match(await page.locator('#research-paper-summary').textContent(),/PAPER работает/);assert.equal(await page.locator('#page-research .alert-long,#page-research .alert-short').count(),0);
    await page.locator('#research-observations .research-card details').first().evaluate(e=>e.open=true);await page.waitForTimeout(1200);assert.equal(await page.locator('#research-observations .research-card details').first().getAttribute('open'),'');
@@ -79,7 +103,8 @@ async function navigate(page,key,width){
    const frozen=await page.evaluate(()=>Date.now());await page.evaluate(t=>{Date.now=()=>t+20000},frozen);await page.waitForTimeout(1300);
    assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');assert.ok(await page.locator('.event-neutral').count()>=2,'entry cancellations visible');
    await navigate(page,'chart',width);await page.waitForTimeout(1100);assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');
-   await navigate(page,'research',width);assert.equal(await page.locator('.research-match').count(),0);assert.match(await page.locator('#page-research').textContent(),/ОТЧЁТ УСТАРЕЛ/);
+   await navigate(page,'research',width);await page.locator('.models-analysis>summary').click();assert.equal(await page.locator('.research-match').count(),0);assert.match(await page.locator('#page-research').textContent(),/ОТЧЁТ УСТАРЕЛ/);
+   assert.equal(await page.locator('#model-controls button[data-action]:enabled').count(),0,'stale control reply must disable commands');
    await navigate(page,'market',width);await page.evaluate(t=>{Date.now=()=>t+90000},frozen);await page.waitForTimeout(4500);
    assert.equal(await page.locator('#screener-table .coin-button').count(),0,'expired tickers stay visible');assert.equal(await page.locator('.book-total,.book-level').count(),0,'expired depth stays visible');assert.equal(await page.locator('#screener-candles svg').count(),0,'expired candles stay visible');
    assert.equal(await page.locator('.compact-alert.long,.compact-alert.short,.compact-alert.watch').count(),0,'expired compact alerts stay colored');assert.equal(await page.locator('.screener-summary strong').nth(1).textContent(),'0');assert.deepEqual(errors,[]);await page.close();
@@ -91,6 +116,6 @@ async function navigate(page,key,width){
   await remote.goto(`http://127.0.0.1:${port}/`);await navigate(remote,'chart',1280);await remote.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();await remote.waitForTimeout(15000);
   const provider={frames:remote.frames().map(f=>f.url()),errors:providerErrors,canvases:0};for(const frame of remote.frames())if(/tradingview/.test(frame.url()))provider.canvases+=await frame.locator('canvas').count().catch(()=>0);
   fs.writeFileSync(path.join(root,'artifacts','tradingview-smoke.json'),JSON.stringify(provider,null,2));await remote.locator('.chart-box').screenshot({path:path.join(root,'artifacts','tradingview-provider.png')});console.log('TradingView provider smoke:',JSON.stringify(provider));await remote.close();
-  console.log('VISUAL OK: 320/390/1280 px, ten sections, mobile menu, chart/book, filters/favorites/preferences, journals, deduplication, stale data');
+  console.log('VISUAL OK: 320/390/1280 px, ten sections, model controls, rejection/stop/restart/warmup, native test cards and journals, chart/book, preferences, stale data');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

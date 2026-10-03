@@ -17,7 +17,7 @@
  function positionView(s,now){
   const p=s?.position;
   if(!p||!safeSymbol(p.symbol)||![1,-1].includes(p.side)||!finite(p.quantity)||!finite(p.entry)||p.quantity<=0||p.entry<=0)return null;
-  return {symbol:p.symbol,side:p.side===1?'LONG':'SHORT',entry:p.entry,notional:p.quantity*p.entry,opened:p.opened,current:s.phase==='running'&&fresh(s.updated,now,8)};
+  return {symbol:p.symbol,side:p.side===1?'LONG':'SHORT',entry:p.entry,notional:p.quantity*p.entry,opened:p.opened,current:['running','draining'].includes(s.phase)&&fresh(s.updated,now,8)};
  }
  function domain(bars){const low=Math.min(...bars.map(b=>b.low)),high=Math.max(...bars.map(b=>b.high)),padding=Math.max((high-low)*.08,high*.0005);return {low:low-padding,high:high+padding};}
  const api={fresh,filterRows,botModels,positionView,domain};
@@ -141,7 +141,7 @@
   }
   function renderBots(now){
    const heading=el('div','panel-heading');heading.append(el('h2','','Модели и позиции'),action('Открыть журнал','journals'));botsBox.replaceChildren(heading);summaryValues.models.textContent=String(Object.values(models).filter(Boolean).length);
-   const grid=el('div','screener-bot-grid');for(const id of ['A','B','C','D']){const s=models[id],p=positionView(s,now),active=s&&fresh(s.updated,now,8),card=el('article','screener-bot'),head=el('div','bot-heading');head.append(el('h3','','Модель '+id),el('span','bot-status '+(!active||s?.phase==='halted'?'negative':s.phase==='running'?'positive':'muted'),!s?'Нет отчёта':s.phase==='halted'?'Остановлена':!active?'Устарела':s.phase==='running'?'PAPER':'Прогрев'));card.append(head);
+   const grid=el('div','screener-bot-grid');for(const id of ['A','B','C','D']){const s=models[id],p=positionView(s,now),active=s&&fresh(s.updated,now,8),card=el('article','screener-bot'),head=el('div','bot-heading');head.append(el('h3','','Модель '+id),el('span','bot-status '+(!active||s?.phase==='halted'?'negative':s.phase==='running'?'positive':'muted'),!s?'Нет отчёта':s.phase==='halted'?'Остановлена':!active?'Устарела':s.phase==='running'?'PAPER':s.phase==='paused'?'Отключена':s.phase==='draining'?'Завершает':'Прогрев'));card.append(head);
     const position=el('div','bot-position');if(p){position.append(el('p','position-label '+(p.current?(p.side==='LONG'?'positive':'negative'):'muted'),p.symbol+' · '+p.side+(p.current?'':' · сохранена')));const facts=el('div','position-facts');for(const [label,value]of [['Вход',fmt(p.entry,8)],['Номинал',fmt(p.notional,2)+' USDT']]){const cell=el('div','',label);cell.append(el('b','',value));facts.append(cell);}position.append(facts);}else position.append(el('p','empty-position',!active?'Нет свежего состояния':s.position?'Позиция: некорректные данные':'Открытой позиции нет'));card.append(position);
     if(s?.reason)line(card,s.reason,'bot-reason');let last=null;for(const t of s?.trades||s?.journal_trades||[])if(finite(t.closed)&&(!last||t.closed>last.closed))last=t;if(last)line(card,'Последняя: '+last.symbol+' · net '+fmt(last.net,4)+' USDT','bot-last-close');grid.append(card);
    }botsBox.append(grid);line(botsBox,'PAPER · состояния и позиции моделей. Оборот рынка и заявки стакана не являются доходностью бота.','muted');

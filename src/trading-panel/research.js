@@ -4,11 +4,6 @@
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const fresh=(t,now,max)=>finite(t)&&now-t>=-1&&now-t<=max;
 const VERSION='2026-10-02.1';
-const CATALOG=[
- {name:'Freqtrade',plan:'Бесплатный открытый Python-бот',url:'https://github.com/freqtrade/freqtrade',docs:'https://www.freqtrade.io/en/stable/strategy-101/',feature:'Backtesting, dry-run, веб-интерфейс и проверка lookahead/recursive bias. Подходит для воспроизводимых индикаторных стратегий по свечам.',fit:'Приоритет для следующего этапа тестирования EMA, RSI, Bollinger и объёмных фильтров. Это инструментарий, а не готовая прибыльная стратегия.'},
- {name:'Hummingbot',plan:'Открытый framework · Apache 2.0',url:'https://github.com/hummingbot/hummingbot',docs:'https://hummingbot.org/strategies/',feature:'Стратегии по стакану, market making, управление заявками и коннекторы бирж. Есть paper-trade для поддерживаемых сценариев.',fit:'Полезен для изучения исполнения и спреда. Поддержку Bybit и конкретного paper-режима нужно проверять отдельно; риск запасов и неблагоприятных исполнений остаётся.'},
- {name:'Jesse',plan:'Бесплатное открытое ядро исследований · MIT',url:'https://github.com/jesse-ai/jesse',docs:'https://jesse.trade/pricing',feature:'Python-стратегии, историческое тестирование и исследовательский модуль. Бесплатная оптимизация имеет ограничения по CPU.',fit:'Подходит как альтернативный движок исследований. Live-trading plugin платный: полностью бесплатной live-заменой здесь не считается.'}
-];
 function evaluate(id,s,r,now){
  const c=r?.chart||{},checks=[];
  const add=(label,pass)=>checks.push({label,pass:pass===true});
@@ -55,15 +50,15 @@ function confirm(previous,result,tick,now){
  const next={side:result.side,count:continued?previous.count+1:1,last:tick,start:continued?previous.start:tick};
  next.confirmed=next.count>=3&&tick-next.start>=4;return next;
 }
-const api={evaluate,confirm,VERSION,CATALOG};if(typeof module!=='undefined')module.exports=api;
+const api={evaluate,confirm,VERSION};if(typeof module!=='undefined')module.exports=api;
 if(typeof document==='undefined')return;
 document.addEventListener('DOMContentLoaded',()=>{
  const page=document.getElementById('page-research');if(!page)return;
  const make=(tag,cls,text)=>{const n=document.createElement(tag);n.className=cls||'';n.textContent=text||'';return n;};
  const p=(parent,text,cls='muted')=>parent.append(make('p',cls,text));
  const link=(parent,text,url)=>{const a=make('a','research-link',text+' ↗');a.href=url;a.target='_blank';a.rel='noopener noreferrer';parent.append(a);};
- const hero=make('section','box');hero.append(make('small','eyebrow','ИССЛЕДОВАНИЯ / ВЕРСИЯ '+VERSION),make('h2','','Боты, индикаторы и новые гипотезы'));
- p(hero,'Открытый код позволяет проверить правила, но не подтверждает преимущество над A/B. Сравниваем инструменты и проверяем собственные условия на текущем потоке.');
+ const hero=make('section','box');hero.append(make('small','eyebrow','ИССЛЕДОВАНИЯ / ВЕРСИЯ '+VERSION),make('h2','','Условия C/D и определение индикаторов'));
+ p(hero,'Правила C/D проверяются на текущем потоке. Их преимущество над A/B пока не подтверждено.');
  p(hero,'C и D исполняются отдельной серверной PAPER-службой. Каждая модель имеет собственные 600 виртуальных USDT, позицию и постоянный журнал. Служба работает при закрытом браузере; статусы ниже подтверждают фактическое состояние.');page.append(hero);
  const intro=make('section','box');intro.append(make('h2','','C / Импульс в тренде · D / Возврат к VWAP'));
  p(intro,'C: направление EMA20/50 и VWAP + повышенный RVOL + импульс + лента/стакан. D: сближенные EMA + отклонение от VWAP + начало возврата + лента/стакан.');
@@ -74,9 +69,6 @@ document.addEventListener('DOMContentLoaded',()=>{
  p(details,'OFI — изменения лучших уровней, лента — исполненные сделки. Это разные признаки. Большая заявка может исчезнуть; наблюдение не доказывает намерение участника.');
  p(details,'C/D PAPER: номинал 100 USDT, комиссия 0,055% и остаточное проскальзывание 0,05% на сторону, половина спреда на вход/выход. Цель +0,6 и стоп −0,4 USDT net; удержание 180 с, пауза 120 с, лимит потерь 18 USDT на модель. Исполнение по котировкам с фиксированной надбавкой: это не VWAP полного стакана модели B. Сравнивайте одинаковые периоды и учитывайте различие моделей исполнения. Сравнивать net, просадку, средний результат, число сделок и разрывы данных; учитывать число проверенных вариантов. Пока эти этапы не выполнены, статус — «преимущество не проверено».');
  link(details,'VWAP: TradingView','https://www.tradingview.com/support/solutions/43000502018-volume-weighted-average-price-vwap/');link(details,'ATR: TradingView','https://www.tradingview.com/support/solutions/43000501823-average-true-range-atr/');link(details,'RVOL: TradingView','https://www.tradingview.com/support/solutions/43000635874-how-do-we-calculate-relative-volume-and-relative-volume-at-time/');link(details,'Исследование OFI · акции, не проверка нашей криптомодели','https://arxiv.org/abs/1011.6402');link(details,'Риск подгонки backtest','https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf');page.append(details);
- const catalog=make('section','box');catalog.append(make('h2','','Известные бесплатные инструменты'));
- p(catalog,'Официальные источники проверены 02.10.2026. Бесплатный код не отменяет расходы на сервер, данные и биржевые комиссии. Здесь каталог и ссылки: движки не установлены, API-ключи не подключены. У Jesse бесплатна исследовательская часть; live-плагин платный.');
- const grid=make('div','research-catalog');for(const item of CATALOG){const card=make('article','');card.append(make('h3','',item.name));p(card,item.plan,'');p(card,item.feature,'');p(card,item.fit);link(card,'Исходный код',item.url);link(card,'Документация',item.docs);grid.append(card);}catalog.append(grid);p(catalog,'Известные семейства правил для отдельных тестов: EMA + импульс; RSI/Bollinger + возврат к средней; market making с контролем позиции. C/D — наши собственные PAPER-правила на текущем потоке, а не запущенные Freqtrade/Hummingbot/Jesse.');link(catalog,'Открытые примеры Freqtrade','https://github.com/freqtrade/freqtrade-strategies');link(catalog,'Проверка заглядывания в будущее','https://www.freqtrade.io/en/stable/lookahead-analysis/');page.append(catalog);
  const summary=make('section','box');summary.id='research-paper-summary';summary.append(make('h2','','Серверные PAPER-модели C / D'));intro.before(summary);
  const cards=make('div','research-live');summary.append(cards);
  p(summary,'Источник котировок — поток B. Если источник остановлен, новые входы ждут данных; при разрыве с позицией модель останавливается и сохраняет последнюю оценку. Автоматического сброса убытков или остановок нет.');
