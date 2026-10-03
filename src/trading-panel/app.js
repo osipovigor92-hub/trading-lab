@@ -104,7 +104,7 @@ refresh();
     const old = [...main.children];
     const footer = main.querySelector('footer');
     const pages = {};
-    const names = {overview:'Обзор',alerts:'Алерты',market:'Скринер',live:'LIVE',grid:'Grid',tests:'Тесты',research:'Модели'};
+    const names = {overview:'Обзор',market:'Скринер',alerts:'Алерты',chart:'График',live:'LIVE',research:'Модели',journals:'Журнал',grid:'Grid',tests:'Тесты',settings:'Настройки'};
     const nav = make('nav','dashboard-tabs');
     nav.id = 'dashboard-tabs';
     nav.setAttribute('aria-label','Разделы панели');
@@ -133,13 +133,15 @@ refresh();
     function activate(key) {
       if (!names[key]) key='overview';
       try { sessionStorage.setItem('lab-tab',key); } catch (_) {}
-      document.dispatchEvent(new CustomEvent('lab-tab',{detail:key}));
       for (const k of Object.keys(names)) {
         pages[k].hidden = k !== key;
         buttons[k].classList.toggle('selected',k===key);
         buttons[k].setAttribute('aria-pressed',String(k===key));
       }
+      document.dispatchEvent(new CustomEvent('lab-tab',{detail:key}));
     }
+    window.LabNavigation={activate,names,current:()=>Object.keys(pages).find(k=>!pages[k].hidden)};
+    document.addEventListener('lab-navigate',e=>activate(e.detail));
     for (const [key,label] of Object.entries(names)) {
       const b = make('button','',label);
       b.type='button';
@@ -259,7 +261,8 @@ refresh();
       }
       setTimeout(updateLedger,10000);
     }
-    let selected='overview';
+    let selected='market';
+    try { selected=localStorage.getItem('lab-start-page')||selected; } catch (_) {}
     try { selected=sessionStorage.getItem('lab-tab')||selected; } catch (_) {}
     activate(selected);
     updatePaper(); updateHealth(); updateLedger();

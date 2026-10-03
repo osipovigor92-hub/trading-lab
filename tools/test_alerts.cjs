@@ -11,6 +11,15 @@ test('watch only allowed pending conditions',()=>{const r={...row(),signal:'WAIT
 test('orderbook watcher never becomes entry',()=>{const r={book_time:1000,status:'WATCH_LONG',reasons:[]};assert.equal(W({status:'ok',updated:1000},r,1000).kind,'watch');assert.equal(W({status:'ok',updated:1000},r,1010).kind,'stale');});
 test('chart error and invalid numeric values blocked',()=>{assert.notEqual(B(state(),{...row(),chart_error:'Bad candles'},1000).kind,'entry');assert.equal(B(state(),{...row(),price:NaN},1000).kind,'stale');});
 const {transition}=require('../src/trading-panel/alerts.js');
+const {collectAlerts}=require('../src/trading-panel/alerts.js');
+test('compact screener shares entry, watch, blocked and stale classification',()=>{
+ const b={...state(),observations:[{...row(),symbol:'ZUSDT'}, {...row(),symbol:'AUSDT',signal:'WAIT',reasons:['Нет пробоя локального экстремума последних секунд']}]};
+ const w={status:'ok',updated:1000,rows:[{symbol:'WUSDT',book_time:1000,status:'WATCH_LONG',reasons:[]}]};
+ assert.deepEqual(collectAlerts(b,w,1000).map(x=>[x.r.symbol,x.view.kind]),[['ZUSDT','entry'],['AUSDT','watch'],['WUSDT','watch']]);
+ assert.equal(collectAlerts({...b,position:{}},w,1000).some(x=>x.view.kind==='entry'),false);
+ assert.ok(collectAlerts(b,w,1010).every(x=>x.view.kind==='stale'&&x.view.tone==='neutral'));
+ assert.deepEqual(collectAlerts(null,null,1000),[]);
+});
 test('entry direction change emits a new alert, repeats do not',()=>{
  assert.equal(transition('entry:LONG','entry','LONG').event,null);
  assert.equal(transition('entry:LONG','entry','SHORT').event,'entry');

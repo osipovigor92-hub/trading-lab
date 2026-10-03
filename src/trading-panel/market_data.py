@@ -185,7 +185,9 @@ def orderbook_analysis(symbol, result, stamp):
                        for p, q in sorted(near, key=lambda x: -x[0]*x[1])[:3]]
     return dict(status="ok", symbol=symbol, updated=ts, fetched=stamp,
                 mid=mid, spread=(asks[0][0] - bids[0][0]) / mid * 100,
-                bands=bands, walls=walls, levels=len(bids)+len(asks))
+                bands=bands, walls=walls, levels=len(bids)+len(asks),
+                top={side: [dict(price=p, quantity=q, notional=p*q) for p, q in levels[:5]]
+                     for side, levels in (("bid", bids), ("ask", asks))})
 
 
 class MarketData:

@@ -20,11 +20,12 @@ market=importlib.util.module_from_spec(spec3);spec3.loader.exec_module(market)
 
 def market_fixture(path, query):
     now=time.time()
-    prices={'BTCUSDT':60000,'ETHUSDT':2300,'SOLUSDT':145,'ONDOUSDT':.5}
+    prices={'BTCUSDT':60000,'ETHUSDT':2300,'SOLUSDT':145,'ONDOUSDT':.5,'LINKUSDT':14.2,'AVAXUSDT':11.1}
     if path=='/api/screener':
-        rows=[dict(symbol=s,price=p,turnover=(4-i)*80e6,change=(4-i*2.5),range24=5+i,
-                   spread=.008+i*.008,open_interest=20e6,funding=.0001) for i,(s,p) in enumerate(prices.items())]
-        return dict(status='ok',updated=now,rows=rows,eligible=4,rejected=0,limit=100)
+        rows=[dict(symbol=s,price=p,turnover=(4-i)*80e6 if i<4 else (6-i)*12e6,
+                   change=(4-i*2.5),range24=5+i,spread=.008+i*.008 if i<4 else .03,
+                   open_interest=20e6,funding=.0001) for i,(s,p) in enumerate(prices.items())]
+        return dict(status='ok',updated=now,rows=rows,eligible=len(prices),rejected=0,limit=100)
     symbol=query.get('symbol',['BTCUSDT'])[0];interval=query.get('interval',['5'])[0]
     if symbol not in prices or interval not in market.INTERVALS:
         return dict(status='error',updated=now,error='Invalid demo symbol')
@@ -53,18 +54,19 @@ def fixtures():
           quantity=10,entry_fee=.055,exit_fee=.055,gross=net+.11,net=net,funding=0,reason='ТЕСТОВЫЙ ПРИМЕР'))
     summary=report.stats(trades)
     paper=dict(config=config,updated=now,phase='running',reason='ДЕМОНСТРАЦИЯ',balance=600.2,
-      equity=600.2,peak=600.6,fees=.22,funding=0,closed=2,wins=1,losses=1,position=None,events=[],cooldown_until=0)
+      equity=600.2,peak=600.6,fees=.22,funding=0,closed=2,wins=1,losses=1,
+      position=dict(symbol='ONDOUSDT',side=1,entry=.496,quantity=100/.496,opened=now-40),events=[],cooldown_until=0)
     grid=dict(paper,server_time=now,last_seen=now,halted=False,position=0,fills=0,average=0,
               funding_estimate=0,orders=[],levels=[])
     observations=[]
-    for symbol,signal,side,reasons in [('DEMO-LONG','LONG',1,[]),('DEMO-SHORT','SHORT',-1,[]),('DEMO-WATCH','WAIT',1,['Нет пробоя локального экстремума последних секунд'])]:
+    for symbol,signal,side,reasons in [('BTCUSDT','LONG',1,[]),('SOLUSDT','SHORT',-1,[]),('ONDOUSDT','WAIT',1,['Нет пробоя локального экстремума последних секунд'])]:
         observations.append(dict(symbol=symbol,signal=signal,time=now,price=10,spread=.012,ready=True,
           trade_age=.2,warmup_remaining=0,roundtrip_pct=.222,reasons=reasons,
           bands={k:dict(bid=32000*f,ask=26000*f,covered=True,imbalance=.1) for k,f in [('0.0002',.1),('0.0005',.4),('0.001',1)]},
           chart=dict(end=now-30,side=side,atr_pct=.3,rvol5=1.8),chart_error='',ofi5=side*5000,
           **{f'flow{n}':dict(buy=10000,sell=3000,count=25,ratio=side*.54) for n in (5,15,60)}))
     data={'/api/state':grid,'/api/paper':paper,
-      '/api/model-b':dict(paper,trades=[dict(t,side=1 if t['side']=='LONG' else -1) for t in trades],observations=observations,started=now-600),
+      '/api/model-b':dict(paper,position=None,trades=[dict(t,side=1 if t['side']=='LONG' else -1) for t in trades],observations=observations,started=now-600),
       '/api/live':dict(status='live',updated=now,message='ДЕМОНСТРАЦИЯ: поток не подключён',rows=[]),
       '/api/signals':dict(status='ok',updated=now,rows=[]),
       '/api/scanner':dict(status='ok',server_time=now,finished=now,quote_time=now,universe=0,eligible=0,selected=0,analyzed=0,candidates=0,rows=[],errors=[]),

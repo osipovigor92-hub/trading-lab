@@ -1,116 +1,94 @@
-/* Run with Playwright installed. Starts and stops its own synthetic preview. */
+/* Run with Playwright installed. Own isolated synthetic preview, never production services. */
 const {chromium}=require('playwright');
-const {spawn}=require('node:child_process');const path=require('node:path');const fs=require('node:fs');const assert=require('node:assert/strict');
-const root=path.resolve(__dirname,'..');const port=18788;
+const {spawn}=require('node:child_process'),path=require('node:path'),fs=require('node:fs'),assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'..'),port=18788;
+const sections={overview:'Обзор',market:'Скринер',alerts:'Алерты',chart:'График',live:'LIVE',research:'Модели',journals:'Журнал',grid:'Grid',tests:'Тесты',settings:'Настройки'};
+async function navigate(page,key,width){
+ if(width<=850&&!['overview','market','alerts','research'].includes(key)){
+  await page.getByRole('button',{name:'Ещё',exact:true}).click();
+  await page.getByRole('dialog',{name:'Другие разделы'}).getByRole('button',{name:key==='live'?'Стакан LIVE':sections[key],exact:true}).click();
+ }else await page.getByRole('button',{name:sections[key],exact:true}).click();
+ await page.waitForSelector('#page-'+key+':not([hidden])');
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'horizontal overflow '+key+' at '+width);
+}
 (async()=>{
- const server=spawn(process.env.PYTHON||'python3',[path.join(__dirname,'preview.py'),'--port',String(port)],{stdio:'ignore'});
- let browser;
+ const server=spawn(process.env.PYTHON||'python3',[path.join(__dirname,'preview.py'),'--port',String(port)],{stdio:'ignore'});let browser;
  try{
   for(let i=0;i<50;i++){try{const r=await fetch(`http://127.0.0.1:${port}/`);if(r.ok)break;}catch{}if(i===49)throw Error('Preview not ready');await new Promise(r=>setTimeout(r,100));}
-  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
-  fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});
+  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});
   for(const width of [390,1280]){
    const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
-   // Verify the isolated widget contract without making CI depend on market data availability.
    await page.route('https://www.tradingview-widget.com/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Chart fixture</title><p>Provider fixture</p>'}));
-   await page.goto(`http://127.0.0.1:${port}/`);
-   await page.waitForSelector('.terminal-quote strong');
-   await page.waitForTimeout(1000);
-   await page.screenshot({path:path.join(root,'artifacts',`terminal-${width}.png`),fullPage:true});
-   await page.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();
-   await page.waitForSelector('.chart-host iframe');
-   assert.equal(await page.locator('.chart-host iframe').getAttribute('sandbox'),'allow-scripts allow-same-origin allow-popups');
-   await page.frameLocator('.chart-host iframe').locator('#chart-status').filter({hasText:'Внешние данные'}).waitFor();
-   await page.getByLabel('Таймфрейм графика').selectOption('15');
-   assert.match(await page.locator('.chart-host iframe').getAttribute('src'),/interval=15/);
-
-   for(const name of ['Обзор','Скринер','LIVE','Grid','Тесты','Алерты','Модели']){
-    await page.getByRole('button',{name,exact:true}).click();await page.waitForTimeout(200);
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'horizontal overflow '+name);
-   }
-   await page.getByRole('button',{name:'Скринер',exact:true}).click();
-   await page.waitForSelector('#screener-table tbody .coin-button');
-   assert.equal(await page.locator('#screener-table tbody tr').count(),4);
-   await page.getByLabel('Поиск монеты').fill('ondo');
-   assert.equal(await page.locator('#screener-table tbody tr').count(),1);
-   await page.getByRole('button',{name:'ONDOUSDT',exact:true}).click();
-   await page.waitForSelector('#screener-candles svg');
-   await page.waitForSelector('#screener-levels .level-item');
+   await page.goto(`http://127.0.0.1:${port}/`);await page.waitForSelector('#screener-table .coin-button');
+   assert.equal(await page.evaluate(()=>LabNavigation.current()),'market','first visit starts at the approved screener');
+   assert.equal(await page.locator('#screener-table tbody tr').count(),6);
+   assert.equal(await page.locator('#dashboard-tabs .nav-item').count(),10);
+   assert.equal(await page.locator('.mobile-nav button').count(),5);
+   await page.waitForSelector('#screener-alerts .compact-alert.long');
+   assert.equal(await page.locator('#screener-alerts .compact-alert.watch').count(),1);
+   assert.equal(await page.locator('#screener-bots article').count(),4);
+   await page.getByLabel('Поиск монеты').fill('ondo');assert.equal(await page.locator('#screener-table tbody tr').count(),1);
+   await page.getByRole('button',{name:'ONDOUSDT',exact:true}).click();await page.waitForSelector('#screener-candles svg');
+   await page.locator('.chart-analysis>summary').click();await page.waitForSelector('#screener-levels .level-item');
+   await page.waitForTimeout(1200);assert.equal(await page.locator('.chart-analysis').getAttribute('open'),'');await page.locator('.chart-analysis>summary').click();
    assert.match(await page.locator('#screener-candles svg').getAttribute('aria-label'),/ONDOUSDT/);
    assert.equal(await page.locator('#screener-candles .volume-bar').count(),width===390?45:90);
-   await page.waitForSelector('#screener-orderbook .book-band');
-   assert.equal(await page.locator('#screener-orderbook .book-band').count(),3);
-   assert.equal(await page.locator('#screener-bots article').count(),4);
-   await page.getByLabel('Поиск монеты').fill('');
-   await page.getByLabel('Подборка').selectOption('liquid');
-   assert.equal(await page.locator('#screener-table tbody .coin-button').count(),2);
-   await page.getByLabel('Подборка').selectOption('all');
-   await page.getByLabel('Таймфрейм уровней').selectOption('15');
-   await page.waitForSelector('#screener-candles svg');
-   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'screener overflow');
+   await page.waitForSelector('#screener-orderbook .book-total');assert.equal(await page.locator('#screener-orderbook .book-total').count(),2);
+   assert.equal(await page.locator('#screener-orderbook .book-level').count(),10);
+   await page.locator('.book-details>summary').click();await page.waitForSelector('#screener-orderbook .book-band');
+   await page.waitForTimeout(1300);assert.equal(await page.locator('.book-details').getAttribute('open'),'');assert.equal(await page.locator('.book-band').count(),3);await page.locator('.book-details>summary').click();
+   await page.getByRole('button',{name:'Избранное ONDOUSDT',exact:true}).click();
+   assert.equal(await page.getByRole('button',{name:'Избранное ONDOUSDT',exact:true}).getAttribute('aria-pressed'),'true');
+   await page.getByLabel('Поиск монеты').fill('');await page.getByRole('button',{name:'Дополнительные фильтры',exact:true}).click();
+   await page.getByLabel('Подборка',{exact:true}).selectOption('favorites');assert.equal(await page.locator('#screener-table .coin-button').count(),1);
+   await page.getByLabel('Подборка',{exact:true}).selectOption('all');await page.getByRole('button',{name:'Дополнительные фильтры',exact:true}).click();
+   await page.getByRole('button',{name:'Ликвидные',exact:true}).click();assert.equal(await page.locator('#screener-table .coin-button').count(),2);await page.getByRole('button',{name:'Все',exact:true}).click();
+   await page.getByRole('button',{name:'15 минут',exact:true}).click();await page.waitForSelector('#screener-candles svg');
    assert.equal(await page.locator('#screener-candles').evaluate(e=>e.scrollWidth>e.clientWidth),false,'chart needs horizontal scrolling');
    await page.screenshot({path:path.join(root,'artifacts',`screener-${width}.png`),fullPage:true});
-   await page.getByRole('button',{name:'В обзор',exact:true}).click();
+   await page.screenshot({path:path.join(root,'artifacts',`dashboard-${width}.png`)});
+   await page.getByRole('button',{name:'Открыть график',exact:true}).click();await page.waitForSelector('#page-chart:not([hidden])');
    assert.equal(await page.getByLabel('Контракт для анализа').inputValue(),'ONDOUSDT');
-   await page.getByRole('button',{name:'Модели',exact:true}).click();
-   await page.waitForSelector('#research-observations .research-card');
-   assert.equal(await page.locator('#research-observations .research-card').count(),6);
-   assert.equal(await page.locator('.research-catalog article').count(),3);
-   assert.equal(await page.locator('#all-model-status article').count(),4);
-   assert.equal(await page.locator('#research-paper-summary .research-card').count(),2);
-   assert.equal(await page.locator('#research-journals a').count(),2);
-   assert.match(await page.locator('#research-paper-summary').textContent(),/PAPER работает/);
-   assert.equal(await page.locator('#page-research .alert-long,#page-research .alert-short').count(),0);
-   await page.locator('#research-observations .research-card details').first().evaluate(e=>e.open=true);
-   await page.waitForTimeout(1200);
-   assert.equal(await page.locator('#research-observations .research-card details').first().getAttribute('open'),'');
+   await page.waitForSelector('.terminal-quote strong');await page.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();await page.waitForSelector('.chart-host iframe');
+   assert.equal(await page.locator('.chart-host iframe').getAttribute('sandbox'),'allow-scripts allow-same-origin allow-popups');
+   await page.frameLocator('.chart-host iframe').locator('#chart-status').filter({hasText:'Внешние данные'}).waitFor();
+   await page.getByLabel('Таймфрейм графика').selectOption('15');assert.match(await page.locator('.chart-host iframe').getAttribute('src'),/interval=15/);
+   await page.screenshot({path:path.join(root,'artifacts',`terminal-${width}.png`),fullPage:true});
+   for(const key of Object.keys(sections)){await navigate(page,key,width);await page.waitForTimeout(150);}
+   await page.getByLabel('Плотность интерфейса').selectOption('compact');await page.getByLabel('Стартовый раздел').selectOption('market');await page.reload();await page.waitForSelector('#page-settings:not([hidden])');
+   assert.equal(await page.getByLabel('Плотность интерфейса').inputValue(),'compact');assert.equal(await page.locator('body').getAttribute('data-density'),'compact');
+   await page.getByRole('button',{name:'Сбросить оформление',exact:true}).click();assert.equal(await page.locator('body').getAttribute('data-density'),'comfortable');
+   await navigate(page,'market',width);await page.waitForSelector('#screener-table .coin-button');
+   assert.equal(await page.getByRole('button',{name:'Избранное ONDOUSDT',exact:true}).getAttribute('aria-pressed'),'true');
+   await navigate(page,'research',width);await page.waitForSelector('#research-observations .research-card');
+   assert.equal(await page.locator('#research-observations .research-card').count(),6);assert.equal(await page.locator('.research-catalog article').count(),3);
+   assert.equal(await page.locator('#all-model-status article').count(),4);assert.equal(await page.locator('#research-paper-summary .research-card').count(),2);
+   assert.match(await page.locator('#research-paper-summary').textContent(),/PAPER работает/);assert.equal(await page.locator('#page-research .alert-long,#page-research .alert-short').count(),0);
+   await page.locator('#research-observations .research-card details').first().evaluate(e=>e.open=true);await page.waitForTimeout(1200);assert.equal(await page.locator('#research-observations .research-card details').first().getAttribute('open'),'');
    await page.screenshot({path:path.join(root,'artifacts',`research-${width}.png`),fullPage:true});
-   await page.getByRole('button',{name:'LIVE',exact:true}).click();
-   await page.screenshot({path:path.join(root,'artifacts',`liquidity-${width}.png`),fullPage:true});
-   await page.getByRole('button',{name:'Алерты',exact:true}).click();
-   await page.waitForSelector('#page-alerts .alert-long');
-   assert.equal(await page.locator('.alert-card').count(),3);
-   assert.equal(await page.locator('.alert-watch').count(),1);
-   await page.locator('#page-alerts details').first().evaluate(e=>e.open=true);
-   await page.waitForTimeout(2300);
-   assert.equal(await page.locator('#page-alerts details').first().getAttribute('open'),'');
-   assert.equal(await page.locator('#page-alerts .alert-event').count(),3,'duplicate events');
-   await page.screenshot({path:path.join(root,'artifacts',`alerts-${width}.png`),fullPage:true});
-   await page.getByLabel('Фильтр алертов').selectOption('entry');
-   assert.equal(await page.locator('.alert-card').count(),2);
-   await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.waitForSelector('#page-alerts .alert-long');
+   await navigate(page,'journals',width);await page.waitForSelector('#model-journals a');assert.equal(await page.locator('#model-journals a').count(),2);assert.equal(await page.locator('#research-journals a').count(),2);
+   assert.equal(await page.locator('#page-journals #lab-report').count(),1);await page.screenshot({path:path.join(root,'artifacts',`journals-${width}.png`),fullPage:true});
+   await navigate(page,'live',width);await page.screenshot({path:path.join(root,'artifacts',`liquidity-${width}.png`),fullPage:true});
+   await navigate(page,'alerts',width);await page.waitForSelector('#page-alerts .alert-long');assert.equal(await page.locator('.alert-card').count(),3);assert.equal(await page.locator('.alert-watch').count(),1);
+   await page.locator('#page-alerts details').first().evaluate(e=>e.open=true);await page.waitForTimeout(2300);assert.equal(await page.locator('#page-alerts details').first().getAttribute('open'),'');
+   assert.equal(await page.locator('#page-alerts .alert-event').count(),3,'duplicate events');await page.screenshot({path:path.join(root,'artifacts',`alerts-${width}.png`),fullPage:true});
+   await page.getByLabel('Фильтр алертов').selectOption('entry');assert.equal(await page.locator('.alert-card').count(),2);await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.waitForSelector('#page-alerts .alert-long');
    assert.equal(await page.locator('#page-alerts .alert-event').count(),3,'history must survive reload without duplicates');
-   const frozen=await page.evaluate(()=>Date.now());
-   await page.evaluate(t=>{Date.now=()=>t+20000},frozen);
-   await page.waitForTimeout(1300);
-   assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');
-   assert.ok(await page.locator('.event-neutral').count()>=2,'entry cancellations visible');
-   await page.getByRole('button',{name:'Обзор',exact:true}).click();
-   await page.waitForTimeout(1100);
-   assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');
-   await page.getByRole('button',{name:'Модели',exact:true}).click();
-   assert.equal(await page.locator('.research-match').count(),0);
-   assert.match(await page.locator('#page-research').textContent(),/ОТЧЁТ УСТАРЕЛ/);
-   await page.getByRole('button',{name:'Скринер',exact:true}).click();
-   await page.evaluate(t=>{Date.now=()=>t+90000},frozen);
-   await page.waitForTimeout(4500);
-   assert.equal(await page.locator('#screener-table tbody .coin-button').count(),0,'expired tickers stay visible');
-   assert.equal(await page.locator('#screener-orderbook .book-band').count(),0,'expired depth stays visible');
-   assert.equal(await page.locator('#screener-candles svg').count(),0,'expired candles stay visible');
-   assert.deepEqual(errors,[]);
-   await page.close();
+   const frozen=await page.evaluate(()=>Date.now());await page.evaluate(t=>{Date.now=()=>t+20000},frozen);await page.waitForTimeout(1300);
+   assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');assert.ok(await page.locator('.event-neutral').count()>=2,'entry cancellations visible');
+   await navigate(page,'chart',width);await page.waitForTimeout(1100);assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');
+   await navigate(page,'research',width);assert.equal(await page.locator('.research-match').count(),0);assert.match(await page.locator('#page-research').textContent(),/ОТЧЁТ УСТАРЕЛ/);
+   await navigate(page,'market',width);await page.evaluate(t=>{Date.now=()=>t+90000},frozen);await page.waitForTimeout(4500);
+   assert.equal(await page.locator('#screener-table .coin-button').count(),0,'expired tickers stay visible');assert.equal(await page.locator('.book-total,.book-level').count(),0,'expired depth stays visible');assert.equal(await page.locator('#screener-candles svg').count(),0,'expired candles stay visible');
+   assert.equal(await page.locator('.compact-alert.long,.compact-alert.short,.compact-alert.watch').count(),0,'expired compact alerts stay colored');assert.equal(await page.locator('.screener-summary strong').nth(1).textContent(),'0');assert.deepEqual(errors,[]);await page.close();
   }
-  // Separate best-effort provider smoke test; never substitutes for the deterministic checks.
-  const remote=await browser.newPage({viewport:{width:1280,height:900}}),providerErrors=[];
-  remote.on('pageerror',e=>providerErrors.push(e.message));
-  await remote.goto(`http://127.0.0.1:${port}/`);
-  await remote.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();
-  await remote.waitForTimeout(15000);
-  const provider={frames:remote.frames().map(f=>f.url()),errors:providerErrors,canvases:0};
-  for(const frame of remote.frames())if(/tradingview/.test(frame.url()))provider.canvases+=await frame.locator('canvas').count().catch(()=>0);
-  fs.writeFileSync(path.join(root,'artifacts','tradingview-smoke.json'),JSON.stringify(provider,null,2));
-  await remote.locator('.chart-box').screenshot({path:path.join(root,'artifacts','tradingview-provider.png')});
-  console.log('TradingView provider smoke:',JSON.stringify(provider));await remote.close();
-  console.log('VISUAL OK: 390/1280 px, six tabs, cards, filters, preserved details, deduplication, stale signals');
+  const small=await browser.newPage({viewport:{width:320,height:740}});await small.goto(`http://127.0.0.1:${port}/`);await small.waitForSelector('#screener-candles svg');
+  for(const key of Object.keys(sections))await navigate(small,key,320);await small.close();
+  // Provider smoke is separate: external availability does not substitute for deterministic checks.
+  const remote=await browser.newPage({viewport:{width:1280,height:900}}),providerErrors=[];remote.on('pageerror',e=>providerErrors.push(e.message));
+  await remote.goto(`http://127.0.0.1:${port}/`);await navigate(remote,'chart',1280);await remote.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();await remote.waitForTimeout(15000);
+  const provider={frames:remote.frames().map(f=>f.url()),errors:providerErrors,canvases:0};for(const frame of remote.frames())if(/tradingview/.test(frame.url()))provider.canvases+=await frame.locator('canvas').count().catch(()=>0);
+  fs.writeFileSync(path.join(root,'artifacts','tradingview-smoke.json'),JSON.stringify(provider,null,2));await remote.locator('.chart-box').screenshot({path:path.join(root,'artifacts','tradingview-provider.png')});console.log('TradingView provider smoke:',JSON.stringify(provider));await remote.close();
+  console.log('VISUAL OK: 320/390/1280 px, ten sections, mobile menu, chart/book, filters/favorites/preferences, journals, deduplication, stale data');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
