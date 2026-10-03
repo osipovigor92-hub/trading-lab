@@ -26,7 +26,7 @@ SOURCES = {'A': ('src/scalp-paper/paper.py', Path('/var/lib/scalp-paper/state.js
 
 def targets():
     source = REPO / 'integrations/control'
-    result = {CODE / n: (source / n).read_bytes() for n in ('runtime.py', 'launcher.py', 'manager.py')}
+    result = {CODE / n: (source / n).read_bytes() for n in ('runtime.py', 'launcher.py', 'manager.py', 'remote.py')}
     result[UNIT] = (source / UNIT.name).read_bytes()
     for model, (_, _, unit) in SOURCES.items():
         result[Path('/etc/systemd/system', unit + '.d', 'lab-control.conf')] = (
@@ -72,12 +72,70 @@ def safe(states, now):
     return True
 
 
-def install(files, revision, owner, timeout=600):
+def upgrade_controller(files, saved, revision, owner):
+    """The one approved migration changes the broker only, never model wrappers/state."""
+    manager = CODE / 'manager.py'
+    remote = CODE / 'remote.py'
+    old_sha = '7ce07edd39e6adcd5c93ea942f4231bf2420b6531ef30ba60f63b1691de485a1'
+    if (set(saved.get('files', {})) != {str(p) for p in files if p != remote} or
+            saved['files'].get(str(manager)) != old_sha or remote.exists()):
+        raise RuntimeError('Эта версия управления требует отдельной миграции')
+    for path, body in files.items():
+        if path.is_symlink() or any(p.is_symlink() for p in path.parents):
+            raise RuntimeError('Symlink: ' + str(path))
+        if path != remote and deploy.digest(path) != saved['files'][str(path)]:
+            raise RuntimeError('Установленный файл изменён: ' + str(path))
+        if path not in (manager, remote) and hashlib.sha256(body).hexdigest() != saved['files'][str(path)]:
+            raise RuntimeError('Миграция не должна менять обёртки моделей: ' + str(path))
+    if any(deploy.active('trading-test-' + engine + '.service') for engine in ('freqtrade', 'jesse', 'hummingbot')):
+        raise RuntimeError('Дождитесь окончания внешнего теста')
+    backup = Path(tempfile.mkdtemp(prefix='pc-control-backup-', dir='/opt'))
+    shutil.copy2(manager, backup/'manager.py')
+    shutil.copy2(MANIFEST, backup/'installed.json')
+    was_active = deploy.active('trading-control.service')
+    try:
+        deploy.system('stop', 'trading-control.service')
+        deploy.atomic(manager, files[manager]); deploy.atomic(remote, files[remote])
+        deploy.atomic(MANIFEST, json.dumps(dict(revision=revision, files={str(p):hashlib.sha256(b).hexdigest() for p,b in files.items()})).encode(), 0o640)
+        os.chown(MANIFEST, 0, owner.pw_gid)
+        deploy.system('start', 'trading-control.service')
+        sys.path.insert(0, str(REPO/'src/trading-panel'))
+        import control_client
+        for attempt in range(20):
+            try:
+                response = control_client.call(dict(op='status'))
+                if response.get('status') == 'ok' and isinstance(response.get('worker'), dict):
+                    break
+            except (OSError, ValueError):
+                pass
+            if attempt == 19:
+                raise RuntimeError('Обновлённый контроллер не ответил')
+            time.sleep(.5)
+    except BaseException:
+        deploy.system('stop', 'trading-control.service')
+        deploy.atomic(manager, (backup/'manager.py').read_bytes())
+        remote.unlink(missing_ok=True)
+        deploy.atomic(MANIFEST, (backup/'installed.json').read_bytes(), 0o640)
+        os.chown(MANIFEST, 0, owner.pw_gid)
+        if was_active:
+            deploy.system('start', 'trading-control.service')
+        raise
+    print('Исполнитель ПК поддерживается. Обновлён только контроллер; A/B/C/D не перезапускались.')
+    print('Резервная копия:', backup)
+
+
+def install(files, revision, owner, timeout=600, upgrade=False):
     for path in (ROOT, ROOT/'commands', MANIFEST):
         if path.is_symlink() or any(p.is_symlink() for p in path.parents):
             raise RuntimeError('Недопустимая ссылка в пути управления: ' + str(path))
     saved = json.loads(MANIFEST.read_text()) if MANIFEST.exists() else None
-    preflight(files, saved)
+    try:
+        preflight(files, saved)
+    except RuntimeError:
+        if saved and upgrade:
+            upgrade_controller(files, saved, revision, owner)
+            return
+        raise
     if saved:
         if not deploy.active('trading-control.service'):
             deploy.system('start', 'trading-control.service')
@@ -162,6 +220,7 @@ def install(files, revision, owner, timeout=600):
 
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument('--wait', type=int, default=600)
+    parser.add_argument('--upgrade', action='store_true', help='Upgrade the approved broker version only; no model restarts')
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit('Запусти от root')
@@ -180,7 +239,7 @@ def main():
             if path.suffix == '.py':
                 ast.parse(body, filename=str(path))
         subprocess.run([sys.executable, '-B', '-m', 'unittest', 'discover', '-s', str(REPO / 'integrations/control'), '-v'], check=True, timeout=30)
-        install(files, revision, pwd.getpwnam('tradingbot'), args.wait)
+        install(files, revision, pwd.getpwnam('tradingbot'), args.wait, args.upgrade)
 
 
 if __name__ == '__main__':

@@ -141,6 +141,24 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Host") not in ("127.0.0.1:8787", "localhost:8787"):
             self.send(403, b'{"error":"Invalid Host"}', "application/json")
             return
+        if self.path == '/api/worker':
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                key = self.headers.get('X-Lab-Worker', '')
+                if (not 0 < length <= 32768 or self.headers.get('Transfer-Encoding') or
+                        self.headers.get('Content-Type') != 'application/json' or
+                        not 32 <= len(key) <= 128 or not key.isascii() or
+                        self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site')):
+                    raise ValueError('Invalid worker request')
+                payload = json.loads(self.rfile.read(length))
+                result = control_client.call(dict(op='worker', key=key, payload=payload))
+                self.send(200 if result.get('status') == 'ok' else 409,
+                          json.dumps(result, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            except (ValueError, TypeError):
+                self.send(400, b'{"error":"Invalid worker request"}', 'application/json')
+            except OSError:
+                self.send(503, b'{"error":"Controller unavailable"}', 'application/json')
+            return
         if self.path != "/api/models-control":
             self.send(404, b'{"error":"Not found"}', "application/json")
             return

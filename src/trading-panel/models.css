@@ -18,3 +18,12 @@
 .control-log{margin-top:14px;max-height:420px;overflow:auto}.control-event{display:grid;grid-template-columns:160px 1fr;gap:5px 14px;border-bottom:1px solid #273640;padding:12px 0;font-size:12px;line-height:1.5}.control-event small{grid-column:2;overflow-wrap:anywhere}
 @media(max-width:1150px){.engine-grid{grid-template-columns:1fr}.engine-grid .managed-reason{min-height:0}.engine-grid .managed-actions{max-width:450px}}
 @media(max-width:650px){.models-heading{display:block}.models-heading h2{font-size:23px}.models-connection{margin-top:12px}.managed-grid{grid-template-columns:1fr}.lab-shell .managed-card{padding:16px}.managed-title h4{font-size:17px}.managed-actions button{font-size:11px;min-height:42px}.managed-metrics{gap:25px}.managed-badge{max-width:150px}.control-event{grid-template-columns:1fr}.control-event small{grid-column:1}.models-analysis .research-live{grid-template-columns:1fr}}
+/* Executor choice is a normal decision in the test card, with live machine resources. */
+.engine-execution{display:grid;gap:8px;margin:14px 0}
+.engine-execution select{width:100%;min-width:0;background:var(--surface,#101c24);color:var(--text,#e4edf0);border:1px solid var(--border,#283b43);border-radius:9px;padding:10px;font:inherit}
+.engine-execution select:focus-visible{outline:2px solid #56d5b0;outline-offset:2px}
+.worker-status{border:1px solid #2c4148;border-radius:12px;padding:14px;margin:16px 0;background:#0d1a20}
+.worker-status p{margin:8px 0 0}
+.worker-status.is-online{border-color:#2c7d66}
+.worker-status.is-online strong{color:#71dfbd}
+.worker-status.is-offline strong{color:#c8b689}

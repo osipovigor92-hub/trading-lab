@@ -18,7 +18,7 @@ UNITS = ('trading-panel.service', 'trading-control.service', 'scalp-paper.servic
          'scalp-model-b.service', 'trading-research.service')
 CONTROL_FILES = {
     '/opt/trading-control/runtime.py', '/opt/trading-control/launcher.py',
-    '/opt/trading-control/manager.py', '/etc/systemd/system/trading-control.service',
+    '/opt/trading-control/manager.py', '/opt/trading-control/remote.py', '/etc/systemd/system/trading-control.service',
     *('/etc/systemd/system/' + unit + '.d/lab-control.conf' for unit in UNITS[2:])
 }
 
@@ -88,6 +88,11 @@ def sanitized_status(raw, now):
         if not isinstance(row, dict) or row.get('id') not in ('freqtrade', 'hummingbot', 'jesse'):
             continue
         result['engines'].append({k: row.get(k) for k in ('id', 'phase', 'installed', 'memory_ok', 'required_gb', 'version')})
+    pc=raw.get('worker')
+    if isinstance(pc, dict):
+        mem=pc.get('memory') if isinstance(pc.get('memory'),dict) else {}
+        result['worker']=dict(configured=pc.get('configured') is True,online=pc.get('online') is True,
+            memory={k:mem.get(k) for k in ('total_gb','available_gb')})
     return result
 
 
@@ -113,6 +118,10 @@ def text_report(report):
         lines.append(unit + ': ' + s['load'] + ' / ' + s['active'])
     if c['memory']:
         lines.append('RAM: всего ' + str(c['memory']['total_gb']) + ' ГБ; доступно ' + str(c['memory']['available_gb']) + ' ГБ')
+    if c.get('worker'):
+        pc=c['worker'];mem=pc['memory']
+        lines.append('Мой ПК: '+('подключён' if pc['online'] else 'нет свежего ответа')+
+            ' · настроен: '+str(pc['configured'])+' · RAM исполнителя: '+str(mem.get('total_gb'))+' ГБ')
     for row in c['models']:
         position = ('позиция по последнему сохранённому снимку' if row['has_position'] else 'позиция не подтверждена') if not row['fresh'] else 'есть позиция' if row['has_position'] else 'нет позиции'
         lines.append('Модель ' + row['id'] + ': ' + str(row['phase']) + ' · ' + position)
