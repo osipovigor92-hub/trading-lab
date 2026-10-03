@@ -39,10 +39,29 @@ def archive(db,model,rows):
             if old and old[0]!=data:raise ValueError('Archived trade changed: '+model+' '+key)
             db.execute('INSERT OR IGNORE INTO trades VALUES(?,?,?,?,?)',(model,key,opened,closed,data))
 
+def open_history(path):
+    """Open B's WAL archive without ever writing to the model directory.
+
+    A normal read-only connection sees the active WAL.  If Model B has stopped
+    cleanly and SQLite removed the shared-memory sidecar, a normal read-only
+    open can fail even though the checkpointed main archive is safe to read.
+    The immutable fallback is only used in that case; its timestamps still go
+    through the normal freshness checks below.
+    """
+    uri = path.as_uri()
+    try:
+        return sqlite3.connect(uri+'?mode=ro', uri=True, timeout=3)
+    except sqlite3.OperationalError as first:
+        try:
+            return sqlite3.connect(uri+'?mode=ro&immutable=1', uri=True, timeout=3)
+        except sqlite3.OperationalError:
+            raise first
+
+
 def ingest(db,path):
     row=db.execute("SELECT v FROM meta WHERE k='cursor'").fetchone()
     cursor=row[0] if row else 0
-    src=sqlite3.connect(path.as_uri()+'?mode=ro',uri=True,timeout=3)
+    src=open_history(path)
     src.execute('PRAGMA query_only=ON')
     count=0
     try:
