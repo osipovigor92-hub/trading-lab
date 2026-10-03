@@ -86,6 +86,7 @@ async function navigate(page,key,width){
    const hb=page.locator('.managed-card[data-model="hummingbot"]'),jesse=page.locator('.managed-card[data-model="jesse"]');
    assert.match(await ft.locator('.engine-readiness').textContent(),/3 ГБ всего, 2 ГБ доступно/);
    assert.match(await hb.locator('.engine-readiness').textContent(),/5 ГБ всего, 4 ГБ доступно/);
+   assert.match(await hb.locator('.engine-readiness').textContent(),/Окружение не подготовлено/);
    await ft.locator('.engine-prepare>summary').click();assert.match(await ft.locator('.setup-command').textContent(),/--engine freqtrade --install/);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'setup commands need to fit narrow screens');
    await page.waitForTimeout(1200);assert.equal(await ft.locator('.engine-prepare').getAttribute('open'),'');await ft.locator('.engine-prepare>summary').click();

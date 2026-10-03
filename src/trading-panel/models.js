@@ -96,10 +96,10 @@
      if(m){if(id==='hummingbot'){metric(c.metrics,'Оценка портфеля',fmt(m.equity));metric(c.metrics,'Оборот, USDT',fmt(m.turnover));}else{metric(c.metrics,'Profit factor',fmt(m.profit_factor));metric(c.metrics,'Просадка, %',fmt(m.drawdown_pct));}}
      c.position.textContent=item?.version?'Движок '+item.version+(item.settings?.start?' · '+date(item.settings.start)+' — '+date(item.settings.end):''):item?.installed?'Движок подготовлен':'Ожидает подготовки движка';
      c.readiness.replaceChildren();
-     const required=item?.required_gb;
+     const required=item?.required_gb,prepared=current&&item?item.installed:null,ramReady=current&&item?item.memory_ok:null;
      const checks=[
-      [current&&item?item.installed:null,'Окружение зарегистрировано'],
-      [current&&item?item.memory_ok:null,'Память'+(Number.isFinite(required)?' · нужно '+fmt(required)+' ГБ всего, '+fmt(required-1)+' ГБ доступно':'')],
+      [prepared,prepared===true?'Окружение зарегистрировано':prepared===false?'Окружение не подготовлено':'Окружение'],
+      [ramReady,(ramReady===false?'Памяти недостаточно':'Память')+(Number.isFinite(required)?' · нужно '+fmt(required)+' ГБ всего, '+fmt(required-1)+' ГБ доступно':'')],
       [current&&item?!slot.occupiedBy:null,slot.occupiedBy?'Слот занят: '+(engineNames[slot.occupiedBy]||slot.occupiedBy):'Других тестов нет']
      ];
      for(const [pass,label]of checks){const li=make('li',pass===true?'is-ready':pass===false?'is-blocked':'is-unknown');li.append(make('span','readiness-dot',pass===true?'✓':pass===false?'!':'—'),make('span','',label+(pass==null?' · нет свежих данных':'')));c.readiness.append(li);}
