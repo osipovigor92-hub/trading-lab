@@ -106,26 +106,35 @@ def ft_config():
                            price_last_balance=0, check_depth_of_market=dict(enabled=False, bids_to_ask_delta=1)),
         exit_pricing=dict(price_side='same', use_order_book=True, order_book_top=1),
         unfilledtimeout=dict(entry=10, exit=10, unit='minutes'),
-        order_types=dict(entry='limit', exit='limit', stoploss='market', stoploss_on_exchange=False),
-        api_server=dict(enabled=False), telegram=dict(enabled=False))
+        order_types=dict(entry='limit', exit='limit', stoploss='market', stoploss_on_exchange=False))
 
 
 def parse_ft(folder):
     files = sorted(folder.glob('*.zip')) + sorted(folder.glob('*.json'))
     for path in reversed(files):
-        if path.suffix == '.zip':
-            with ZipFile(path) as archive:
-                candidates = [json.loads(archive.read(n)) for n in archive.namelist()
-                              if n.endswith('.json') and archive.getinfo(n).file_size <= 16 * 1024**2]
-        else:
-            candidates = [json.loads(path.read_text())]
+        try:
+            if path.suffix == '.zip':
+                with ZipFile(path) as archive:
+                    candidates = [json.loads(archive.read(n)) for n in archive.namelist()
+                                  if n.endswith('.json') and archive.getinfo(n).file_size <= 16 * 1024**2]
+            else:
+                candidates = [json.loads(path.read_text())]
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError):
+            continue
         for obj in candidates:
-            if 'LabEMATest' in obj.get('strategy', {}):
-                result = obj['strategy']['LabEMATest']
+            strategy = obj.get('strategy') if isinstance(obj, dict) else None
+            if isinstance(strategy, dict) and isinstance(strategy.get('LabEMATest'), dict):
+                result = strategy['LabEMATest']
                 return dict(count=result['total_trades'], net=result['profit_total_abs'],
                     profit_factor=result.get('profit_factor'), drawdown_pct=result.get('max_drawdown_account', 0) * 100,
                     win_rate=result.get('wins', 0) / result['total_trades'] * 100 if result['total_trades'] else None,
                     equity=result.get('final_balance')), result.get('trades', [])
+    log = folder.parent / 'native.log'
+    if log.exists():
+        errors = [line.rsplit(' - ', 1)[-1].strip() for line in log.read_text(errors='replace').splitlines()
+                  if ' - ERROR - ' in line or ' - CRITICAL - ' in line]
+        if errors:
+            raise ValueError('Freqtrade не сохранил отчёт: ' + errors[-1][:240])
     raise ValueError('Freqtrade не создал отчёт теста')
 
 
@@ -138,8 +147,15 @@ def freqtrade(run_dir, update):
     update(settings=settings, reason='Freqtrade загружает исторические свечи')
     common = [sys.executable, '-m', 'freqtrade']
     def command(args):
-        with (run_dir / 'native.log').open('a') as log:
-            subprocess.run(common + args + ['--userdir', str(run_dir)], stdout=log, stderr=subprocess.STDOUT, check=True, timeout=1200)
+        try:
+            with (run_dir / 'native.log').open('a') as log:
+                subprocess.run(common + args + ['--userdir', str(run_dir)], stdout=log, stderr=subprocess.STDOUT, check=True, timeout=1200)
+        except subprocess.CalledProcessError as exc:
+            try:
+                parse_ft(run_dir / 'results')
+            except ValueError as report_error:
+                raise ValueError(str(report_error)) from exc
+            raise
     command(['download-data', '--config', str(config), '--timerange',
              (start - timedelta(days=1)).strftime('%Y%m%d') + '-' + end.strftime('%Y%m%d'),
              '--pairs', 'BTC/USDT:USDT', '--timeframes', '5m', '--trading-mode', 'futures'])
