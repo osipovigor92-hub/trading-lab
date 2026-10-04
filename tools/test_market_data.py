@@ -4,6 +4,9 @@ import math
 from pathlib import Path
 import threading
 import unittest
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'src/trading-panel'))
 
 spec = importlib.util.spec_from_file_location('market_data', Path(__file__).resolve().parents[1]/'src/trading-panel/market_data.py')
 market = importlib.util.module_from_spec(spec)

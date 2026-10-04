@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {filterRows,qualityScore,positionView,fresh,domain,botModels,chartBars}=require('../src/trading-panel/screener.js');
+const {filterRows,qualityScore,positionView,fresh,domain,botModels,chartBars,selectionView,selectionDefaults,validateSelection}=require('../src/trading-panel/screener.js');
 const rows=[{symbol:'BTCUSDT',turnover:1e8,spread:.01,range24:2,change:4},{symbol:'ONDOUSDT',turnover:3e7,spread:.02,range24:8,change:-5},{symbol:'THINUSDT',turnover:1e6,spread:.15,range24:20,change:10}];
 test('screeners distinguish activity, tight spread, movers and bot universe',()=>{
  assert.deepEqual(filterRows(rows,{preset:'active'}).map(r=>r.symbol),['ONDOUSDT']);
@@ -40,4 +40,14 @@ test('chart window pans back in history and sort direction flips',()=>{
  assert.deepEqual(filterRows(rows,{sort:'turnover',dir:'asc'}).map(r=>r.symbol),['THINUSDT','ONDOUSDT','BTCUSDT']);
  assert.deepEqual(filterRows(rows,{sort:'change'}).map(r=>r.symbol),['THINUSDT','BTCUSDT','ONDOUSDT']);
  assert.deepEqual(filterRows(rows,{sort:'quality',dir:'asc'}).map(r=>r.symbol),['THINUSDT','ONDOUSDT','BTCUSDT']);
+});
+test('selection thresholds and old or mismatched verification cannot mark a coin passed',()=>{
+ const verdict={status:'passed',samples:5,chart_time:1000,candle_end:970,book_time:1000,checks:Array.from({length:12},()=>({state:'pass'}))};
+ assert.equal(selectionView(verdict,1000,1000,1000).status,'passed');
+ for(const change of [{samples:4},{book_time:987},{chart_time:924},{candle_end:879},{checks:[]},{book_time:1003}])assert.equal(selectionView({...verdict,...change},1000,1000,1000).status,'pending');
+ assert.equal(selectionView(verdict,1000,1001,1001).status,'pending');
+ assert.equal(selectionView(verdict,1000,1000,1046).status,'pending');
+ assert.equal(selectionView(null,1000,1000,1000).status,'pending');
+ assert.deepEqual(validateSelection({}),selectionDefaults);
+ for(const v of [{oi_min:NaN},{spread_max:-1},{range_min:31},{oi_min:Infinity},{rvol_min:'1'},{unknown:1}])assert.throws(()=>validateSelection(v));
 });

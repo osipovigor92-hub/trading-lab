@@ -8,6 +8,7 @@ import threading
 import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+import selection
 
 SYMBOL = re.compile(r"^[A-Z0-9]{2,24}USDT$")
 INTERVALS = {"1": 60, "5": 300, "15": 900, "60": 3600}
@@ -71,8 +72,10 @@ def ticker_rows(result, stamp):
                              change=number(row["price24hPcnt"]) * 100,
                              range24=(high / low - 1) * 100,
                              spread=(ask - bid) / ((ask + bid) / 2) * 100,
+                             volume24=optional(row.get("volume24h")),
                              open_interest=optional(row.get("openInterestValue")),
-                             funding=optional(row.get("fundingRate"))))
+                             funding=optional(row.get("fundingRate")),
+                             funding_interval_hours=optional(row.get("fundingIntervalHour"))))
         except (ValueError, KeyError, TypeError):
             rejected += 1
     rows.sort(key=lambda r: (-r["turnover"], r["symbol"]))
@@ -183,7 +186,21 @@ def orderbook_analysis(symbol, result, stamp):
         near = [(p, q) for p, q in levels if abs(p / mid - 1) <= .001]
         walls[name] = [dict(price=p, notional=p*q, distance_pct=abs(p/mid-1)*100)
                        for p, q in sorted(near, key=lambda x: -x[0]*x[1])[:3]]
+    def impact(levels, buying):
+        quantity = 100.0 / mid
+        left, value = quantity, 0.0
+        for price, size in levels:
+            take = min(left, size)
+            value += take * price
+            left -= take
+            if left <= quantity * 1e-10:
+                vwap, best = value / quantity, levels[0][0]
+                return max(0.0, (vwap / best - 1 if buying else 1 - vwap / best) * 100)
+        return None
+
     return dict(status="ok", symbol=symbol, updated=ts, fetched=stamp,
+                seq=optional(result.get("seq")), buy_impact=impact(asks, True),
+                sell_impact=impact(bids, False),
                 mid=mid, spread=(asks[0][0] - bids[0][0]) / mid * 100,
                 bands=bands, walls=walls, levels=len(bids)+len(asks),
                 top={side: [dict(price=p, quantity=q, notional=p*q) for p, q in levels[:5]]
@@ -199,6 +216,11 @@ class MarketData:
         self.lock = threading.Lock()
         self.entries = OrderedDict()
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="public-market")
+        self.selection_lock = threading.Lock()
+        self.selection_watch = []
+        self.selection_until = 0
+        self.selection_cursor = 0
+        self.book_history = OrderedDict()
         self.stop_event = None
         self.prefetcher = None
         if background:
@@ -214,12 +236,83 @@ class MarketData:
             while not self.stop_event.is_set():
                 try:
                     self.get("screener")
+                    self._selection_tick()
                 except Exception:
                     pass
                 self.stop_event.wait(1)
 
         self.prefetcher = threading.Thread(target=refresh, name="public-screener-prefetch", daemon=True)
         self.prefetcher.start()
+
+    def _peek(self, key):
+        with self.lock:
+            return self.entries.get(key, {}).get('data')
+
+    def selection_snapshot(self, filters=None, search='', now=None):
+        filters = selection.parse_filters(filters)
+        if not isinstance(search, str) or not re.fullmatch(r'[A-Z0-9]{0,24}', search):
+            raise ValueError('Некорректный поиск монеты')
+        now = time.time() if now is None else now
+        tickers = self.get('screener')
+        stamp = tickers.get('updated', 0)
+        if tickers.get('status') != 'ok' or not selection.fresh(stamp, now, 45):
+            return dict(status='pending', source_time=stamp, rows=[], filters=filters,
+                        error='Нет свежих котировок Bybit', analysis_limit=selection.ANALYSIS_LIMIT)
+        eligible = [r['symbol'] for r in tickers['rows'] if search in r['symbol'] and
+                    all(c['state'] == 'pass' for c in selection.ticker_checks(r, stamp, filters, now))]
+        with self.selection_lock:
+            self.selection_watch = eligible[:selection.ANALYSIS_LIMIT]
+            self.selection_until = self.clock() + 30
+            histories = {symbol: list(values) for symbol, values in self.book_history.items()}
+            watch = list(self.selection_watch)
+        rows = []
+        for row in tickers['rows']:
+            chart = self._peek(('chart', row['symbol'], '1'))
+            verdict = selection.evaluate(row, stamp, chart, histories.get(row['symbol'], []), filters, now)
+            rows.append(dict(symbol=row['symbol'], selection=verdict))
+        counts = {state: sum(r['selection']['status'] == state for r in rows)
+                  for state in ('passed', 'pending', 'rejected')}
+        return dict(status='ok', source_time=stamp, rows=rows, filters=filters,
+                    counts=counts, analyzing=watch, analysis_limit=selection.ANALYSIS_LIMIT)
+
+    def _selection_tick(self):
+        with self.selection_lock:
+            expired = self.clock() > self.selection_until
+        if expired:
+            self.selection_snapshot()
+        with self.selection_lock:
+            if not self.selection_watch:
+                return
+            symbol = self.selection_watch[self.selection_cursor % len(self.selection_watch)]
+            self.selection_cursor += 1
+        self.get('chart', symbol, '1')
+        self.get('book', symbol)
+        # Completed books are harvested by the shared cache on each background tick.
+        # Record all watched symbols now rather than waiting a full shortlist rotation.
+        with self.selection_lock:
+            watch = list(self.selection_watch)
+        for watched in watch:
+            book = self._peek(('book', watched, ''))
+            if book:
+                self._record_book(watched, book, time.time())
+
+    def _record_book(self, symbol, book, now):
+        if (book.get('status') != 'ok' or book.get('symbol') != symbol or
+                not selection.fresh(book.get('updated'), now, 12)):
+            return
+        if not selection.finite(book.get('seq')):
+            return
+        with self.selection_lock:
+            history = self.book_history.setdefault(symbol, [])
+            if history and (book['updated'] < history[-1]['updated'] or book['seq'] < history[-1]['seq']):
+                history.clear()
+            if not history or (book['updated'] - history[-1]['updated'] >= 1.5 and book['seq'] > history[-1]['seq']):
+                history.append(book)
+            history[:] = [b for b in history[-selection.BOOK_SAMPLES:]
+                          if selection.fresh(b['updated'], now, 60)]
+            self.book_history.move_to_end(symbol)
+            while len(self.book_history) > 24:
+                self.book_history.popitem(last=False)
 
     def _load(self, kind, symbol, interval):
         if kind == "screener":
