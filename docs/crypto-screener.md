@@ -25,6 +25,57 @@ The **Скринер** tab lists the top 100 valid Bybit linear USDT perpetual t
 
 ## Deployment and resource use
 
+### Stage 1: smart coin selection
+
+The **«Умный отбор · фильтры и проверка»** section adds adjustable eligibility
+thresholds. Each row exposes every check, its value and threshold, and one of
+**«прошёл»**, **«проверяется»**, **«отсев»**. Use **«Показать»** to show passed,
+pending or rejected rows. Defaults are heuristics for screening, not validated
+trading parameters. They can be changed and reset; preferences are saved in the
+browser. This stage does not alter the existing quality score or model rules.
+
+| Check | Default | Unit / calculation |
+| --- | --- | --- |
+| 24h turnover | ≥20 million | USDT |
+| Spread | ≤0.03% | Quoted spread and worst spread across 5 books |
+| 24h range | 1–30% | Existing daily high/low range |
+| ATR(14) | 0.08–0.8% | Closed 1-minute candles |
+| Relative volume | ≥1× | Mean base quantity of last 5 closed minutes / previous 20 |
+| Open interest | ≥1 million | `openInterestValue`, USDT |
+| Absolute funding | ≤0.05% | `fundingRate` ×100, per contract interval; interval shown when available |
+| Depth | ≥5,000 | Minimum Bid and Ask USDT inside ±0.1% over 5 books |
+| Impact | ≤0.05% | Worst VWAP movement from best quote for quantity equal to ~100 USDT at mid, both sides, 5 books |
+
+The base 24h volume must be positive. Missing OI, funding or quantity means
+**«проверяется»**, never an assumed zero. Any known failed threshold gives
+**«отсев»**. Passing requires all checks and five distinct exchange book sequences
+at least 1.5 seconds apart within 60 seconds; the latest must be at most 12 seconds
+old. The entire ±0.1% band must be covered. Candles expire after 75 seconds,
+their last closed minute after 120 seconds, and tickers after 45 seconds.
+The browser also expires passed results and rejects a verification from a
+different ticker snapshot. A failed refresh cannot preserve a passed label.
+
+`GET /api/market-selection` accepts the 11 named numeric thresholds in
+`selection.DEFAULT_FILTERS` and optional uppercase alphanumeric `search` (≤24
+characters). Unknown, repeated, empty, nonfinite, out-of-bounds and inverted
+range/ATR parameters return 400. This endpoint reads only public market data.
+
+To fit the small VDS, ticker checks cover the top 100, but candles and order
+books warm for only **up to 8 pairs**, prioritised by turnover after ticker
+thresholds and the current search. Other pairs remain pending until analysed;
+there is no claim that all 100 books have been checked. Use search to prioritise
+a specific pair. Initial collection can take about a minute when eight pairs
+are eligible, longer if the exchange is unavailable. Several browsers share the
+same cache; the most recent request sets the shortlist for 30 seconds. Without
+browser requests the default shortlist is warmed. Memory remains bounded:
+24 cached responses, histories for 24 symbols with 5 summaries each, and the
+existing 2 workers / 2 outstanding upstream calls. No new service is required.
+
+Offline checks: `python tools/check.py`. Browser checks additionally run
+`node tools/test_selection_ui.cjs` for threshold changes, reset/persistence,
+explanations retained across refresh, pending/stale/error data, and widths
+1280/390/320. The preview uses explicitly synthetic data.
+
 This update changes the panel only. Existing `tools/update.sh <full SHA>` installs it; no service, VPN, firewall, account or model configuration changes. New endpoints are read-only `/api/screener`, `/api/market-chart?symbol=BTCUSDT&interval=5`, and `/api/market-book?symbol=BTCUSDT`. A fixed hostname and allowlisted public endpoints prevent arbitrary URL requests. Query symbols/timeframes are validated. No credentials are used.
 
 Two background workers, at most two outstanding requests, 24 cached results, 6-second upstream timeout, 2 MB response cap. Cached data is shared across browsers. The panel service prefetches the shared top-100 ticker snapshot every 5 seconds even when no browser has opened the screener. The browser continues updating its selected screener symbol and alert/model snapshots while another section of the same dashboard is open; only DOM painting is deferred for the hidden section. Candles refresh after 25 seconds and the selected book after 2 seconds. A transient refresh error retains the last verified response until its actual timestamp expires; it is never relabelled as fresh. Local UI expires tickers at 45 seconds, candles at 75 seconds since fetch (also checks last closed candle end), and books at 8 seconds. Source errors hide the corresponding data. The feature works when B is halted, except B's trade flow and bot feed-dependent execution. The browser cannot promise background sound while the whole browser tab is suspended, but server-side snapshots and PAPER models continue independently of the open panel section.
