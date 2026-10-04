@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {buttons,testSlot,executor}=require('../src/trading-panel/models.js');
+const {buttons,testSlot,executor,operationsSummary}=require('../src/trading-panel/models.js');
 const row=(phase,kind='model')=>({kind,phase,actions:{start:true,stop:true,restart:true}});
 test('actual state governs model buttons; stale and pending commands stay disabled',()=>{
  assert.deepEqual(buttons(row('running')),{start:false,stop:true,restart:true,new_run:false});
@@ -40,4 +40,13 @@ test('one test slot disables other engines, preserves cancellation and never ena
  assert.equal(buttons(testSlot(j,[{...ft,phase:'idle',busy:true},j]).item).start,false);
  assert.equal(buttons(testSlot(j,[{...ft,phase:'starting'},j]).item).start,false);
  assert.deepEqual(testSlot(row('running'),[ft]).item,row('running'),'model controls keep their own lifecycle');
+});
+
+test('operations summary reports only confirmed controller state',()=>{
+ const state={models:[{phase:'running'},{phase:'warming'},{phase:'halted'},{phase:'paused'}],worker:{configured:true,online:true},engines:[
+  {id:'freqtrade',test_active:true,phase:'running',executors:{vds:{installed:false,memory_ok:false},pc:{installed:true,memory_ok:true}}},
+  {id:'jesse',phase:'idle',executors:{vds:{installed:true,memory_ok:true},pc:{installed:true,memory_ok:true}}},
+  {id:'hummingbot',phase:'not_installed',executors:{vds:{installed:false,memory_ok:false},pc:{installed:false,memory_ok:false}}}]};
+ const live=operationsSummary(state,true);assert.equal(live.activeModels,2);assert.equal(live.protectedModels,1);assert.equal(live.activeEngine,'freqtrade');assert.equal(live.workerOnline,true);assert.equal(live.readyPc,2);assert.equal(live.readyVds,1);
+ const stale=operationsSummary(state,false);assert.equal(stale.workerOnline,false);assert.equal(stale.activeEngine,'freqtrade');
 });
