@@ -1,4 +1,4 @@
-/* Smart selection in an isolated preview; no production feeds or positions. */
+/* Smart selection and ranking in an isolated preview; no production feeds or positions. */
 const {chromium}=require('playwright');
 const {spawn}=require('node:child_process'),path=require('node:path'),fs=require('node:fs'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18792;
@@ -14,6 +14,8 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
     try{
     if(mode==='html')return route.fulfill({contentType:'text/html',body:'<html>temporarily unavailable</html>'});
     const response=await route.fetch(),data=await response.json();
+    if(mode==='mismatch')data.source_time-=5;
+    if(mode==='invalid_rating')for(const row of data.rows)row.selection.rating.score=101;
     if(mode==='stale')for(const row of data.rows)row.selection.book_time=Date.now()/1000-60;
     if(mode==='pending')for(const row of data.rows)if(row.symbol==='BTCUSDT'){row.selection.status='pending';row.selection.samples=3;for(const c of row.selection.checks)if(['depth','book_spread','impact','coverage'].includes(c.key)){c.state='pending';c.value=null;}}
     await route.fulfill({response,json:data});
@@ -22,11 +24,28 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
    await page.goto(`http://127.0.0.1:${port}/`);
    await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
    assert.equal(await page.locator('.selection-row[data-state=rejected]').count(),2);
+   assert.equal(await page.locator('.selection-row[data-rating=pending]').count(),0);
+   assert.deepEqual(await page.locator('#screener-table .coin-button').allTextContents(),['BTCUSDT','ETHUSDT','SOLUSDT','LINKUSDT','ONDOUSDT','AVAXUSDT'],'rating sort keeps passed candidates first');
    const btc=page.locator('#screener-table tbody tr',{has:page.getByRole('button',{name:'BTCUSDT',exact:true})});
-   await btc.evaluate(el=>el.dataset.kept='yes');await btc.locator('.selection-row>summary').click();
+   assert.equal(await btc.locator('.selection-row').getAttribute('data-rating'),'83');
+   assert.equal(await btc.locator('.rating-compact').textContent(),'Рейтинг: 83 / 100');
+   await btc.evaluate(el=>el.dataset.kept='yes');
+   if(width===1280){await btc.locator('.rating-button').click();assert.equal(await btc.locator('.rating-button').getAttribute('aria-expanded'),'true');}
+   else await btc.locator('.selection-row>summary').click();
+   assert.equal(await btc.locator('.rating-breakdown h3').textContent(),'Рейтинг: 83 / 100');
+   assert.deepEqual(await btc.locator('.rating-part b').allTextContents(),['25 / 25','20 / 25','13 / 25','25 / 25']);
+   assert.match(await btc.locator('.rating-breakdown').textContent(),/Ликвидность высокая.*320.*USDT.*Спред узкий.*0,01%.*Объём около среднего.*1×.*Стакан подтверждает.*5 снимков/);
+   assert.equal(await btc.locator('.rating-part').last().evaluate(el=>{const r=el.getBoundingClientRect(),s=el.closest('.screener-scroll').getBoundingClientRect();return r.top>=s.top&&r.bottom<=s.bottom;}),true,'all four rating parts are visible when expanded at '+width);
    assert.match(await btc.locator('.selection-reasons').textContent(),/Открытый интерес.*20.*000.*000/);
    assert.match(await btc.locator('.selection-reasons').textContent(),/Снимки стакана: 5 \/ 5/);
    assert.equal(await btc.locator('.coin-price').evaluate(el=>{const r=el.getBoundingClientRect(),s=el.closest('.screener-scroll').getBoundingClientRect();return r.top>=s.top&&r.bottom<=s.bottom;}),true,'price remains visible when reasons open at '+width);
+   await page.screenshot({path:path.join(root,'artifacts',`ranking-${width}.png`),fullPage:true});
+   if(width===1280){
+    await page.getByRole('button',{name:'Сортировать: Рейтинг',exact:true}).click();
+    assert.deepEqual(await page.locator('#screener-table .coin-button').allTextContents(),['LINKUSDT','SOLUSDT','ETHUSDT','BTCUSDT','AVAXUSDT','ONDOUSDT'],'ascending rating keeps rejected candidates last');
+    await page.getByRole('button',{name:'Сортировать: Рейтинг',exact:true}).click();
+   }
+   await page.locator('.ranking-method>summary').click();assert.match(await page.locator('.ranking-method').textContent(),/Четыре части по 25.*Шкала фиксирована/);await page.locator('.ranking-method>summary').click();
    await page.locator('.selection-panel>summary').click();
    assert.equal(await page.getByLabel('Оборот 24ч от, млн USDT',{exact:true}).inputValue(),'20');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'open filters and reasons overflow at '+width);
@@ -50,16 +69,25 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
    await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
    mode='pending';await until(async()=>await page.locator('.selection-reasons').filter({hasText:'Снимки стакана: 3 / 5'}).count()>0);
    assert.match(await btc.locator('.selection-reasons').textContent(),/Снимки стакана: 3 \/ 5/);
+   assert.equal(await btc.locator('.selection-row').getAttribute('data-rating'),'pending');
+   assert.equal(await btc.locator('.rating-button').textContent(),'—');
+   assert.deepEqual(await btc.locator('.rating-part b').allTextContents(),['25 / 25','— / 25','13 / 25','— / 25'],'known parts remain visible without inventing or rescaling the total');
    mode='stale';await until(async()=>await page.locator('.selection-reasons').filter({hasText:'Данные проверки устарели'}).count()>0);
    assert.equal(await page.locator('.selection-row[data-state=passed]').count(),0);
+   assert.equal(await page.locator('.selection-row[data-rating=pending]').count(),6);
    mode='html';await until(async()=> (await page.locator('.selection-summary').textContent()).includes('Не удалось обновить'));
    assert.equal(await page.locator('.selection-row[data-state=passed]').count(),0);
-   mode='normal';await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
+   assert.equal(await page.locator('.selection-row[data-rating=pending]').count(),6);
+   mode='mismatch';await until(async()=>await page.locator('.selection-reasons').filter({hasText:'Ожидание проверки свежих котировок'}).count()===6);
+   assert.equal(await page.locator('.selection-row[data-rating=pending]').count(),6);
+   mode='invalid_rating';await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
+   assert.equal(await page.locator('.selection-row[data-rating=pending]').count(),6,'malformed totals cannot be displayed or used for sorting');
+   mode='normal';await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4&&await page.locator('.selection-row[data-rating=pending]').count()===0);
    await page.getByLabel('Поиск монеты',{exact:true}).fill('link');await until(async()=>await page.locator('#screener-table .coin-button').count()===1);
    assert.equal(await page.locator('#screener-table .coin-button').textContent(),'LINKUSDT');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    assert.deepEqual(errors,[],'browser errors at '+width);await page.unrouteAll({behavior:'wait'});await page.close();
   }
-  console.log('Smart selection UI: thresholds, reasons, persistence, pending/stale/errors and widths 1280/390/320 passed');
+  console.log('Smart selection and ranking UI: score parts, ordering, thresholds, persistence, partial/stale/malformed/error data and widths 1280/390/320 passed');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

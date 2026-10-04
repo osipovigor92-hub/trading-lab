@@ -1,5 +1,6 @@
-"""Eligibility filters for public market data. No score, direction or order execution."""
+"""Eligibility filters and their measured inputs; no direction or order execution."""
 import math
+import ranking
 
 DEFAULT_FILTERS = dict(turnover_min=20_000_000.0, spread_max=.03,
                        range_min=1.0, range_max=30.0, atr_min=.08, atr_max=.8,
@@ -118,9 +119,11 @@ def evaluate(row, stamp, chart, books, filters, now):
                        state='pass' if book and book['covered'] else 'fail' if book else 'pending'))
     state = 'rejected' if any(c['state'] == 'fail' for c in checks) else (
         'pending' if any(c['state'] == 'pending' for c in checks) else 'passed')
-    return dict(status=state, checks=checks, ticker_time=stamp,
+    verdict = dict(status=state, checks=checks, ticker_time=stamp,
                 chart_time=chart.get('updated') if chart_ok else None,
                 candle_end=chart.get('candle_end') if chart_ok else None,
                 book_time=book['updated'] if book else None,
                 samples=book['samples'] if book else len(books),
                 funding_interval_hours=row.get('funding_interval_hours'))
+    verdict['rating'] = ranking.evaluate(verdict, now)
+    return verdict

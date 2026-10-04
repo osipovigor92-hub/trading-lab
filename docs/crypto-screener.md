@@ -3,12 +3,12 @@
 The **Скринер** tab lists the top 100 valid Bybit linear USDT perpetual tickers by 24-hour turnover. Search, minimum turnover, sorting and presets run locally. Expiry futures, pre-listing rows, malformed and duplicate tickers are excluded. This does not change the symbol selection or entry rules of trading models.
 
 - Price, 24-hour change, turnover in USDT, daily high/low range and quoted bid/ask spread.
-- A transparent **«Качество»** score (0–100): 24-hour turnover plus the current
-  quoted spread. It is an execution/liquidity ordering aid, not a price forecast,
-  buy recommendation or replacement for the model conditions.
+- A transparent **«Рейтинг»** score (0–100): four integer parts for liquidity,
+  spread, relative volume and the order book, with measured values and explanations.
+  It describes observed market conditions; see Stage 2 below for the fixed formula.
 - Presets: all, active/liquid (range ≥3%, turnover ≥20M USDT, spread ≤0.03%), tight spread (turnover ≥50M, spread ≤0.02%), gainers, losers, and observed/open-position bot symbols.
 - Selecting a coin requests up to 180 closed 1/5/15/60-minute candles and a 200-level REST book. A chart starts with 90 candles (45 on small screens), turnover bars and VWAP of the last 60 candles. `− / % / +` changes the visible candle range and therefore the price scale; the chosen scale is saved separately for each timeframe and is not reset by a quote update or an internal panel switch. TradingView links and the overview chart support any selected screener symbol. Mobile rows show turnover, range and spread under each coin without horizontal scrolling.
-- The chart supports time zoom around the pointer, price zoom over the right axis, drag panning, pinch zoom and double-click reset. Views are stored per symbol and timeframe; previously saved per-timeframe scale is used as a starting point. Desktop column headings sort 24-hour change, turnover, spread or quality in either direction; a changed price briefly highlights up/down with reduced-motion support.
+- The chart supports time zoom around the pointer, price zoom over the right axis, drag panning, pinch zoom and double-click reset. Views are stored per symbol and timeframe; previously saved per-timeframe scale is used as a starting point. Desktop column headings sort 24-hour change, turnover, spread or rating in either direction; a changed price briefly highlights up/down with reduced-motion support.
 - Support/resistance: strict 2-left/2-right confirmed swing lows/highs, clustered within max(0.05% close, 0.25 ATR14) total width; up to three nearest zones below/above the last closed price. Zones crossing the price are omitted. Pivot counts describe history, not independent tests or probabilities. Lines beyond the visible candle price scale are shown in the level list only. This is a descriptive heuristic, not a validated trading strategy.
 - Book volume: price × base quantity in USDT, separated by ±0.02/0.05/0.10% nested bands. Three largest visible price levels per side within ±0.10%. Partial depth is marked as a lower bound. Changes between distinct snapshots no more than 12 seconds apart also include cancellations and changing band membership. They are not a reconstruction of all book events or proof of execution. Snapshot age is shown.
 - Bot activity: actual saved A/B/C/D phases and positions, entry notional and last close. Stale or halted positions are explicitly historical. Grid stays in its existing tab. C/D still require their separate `install_research.py` installation.
@@ -32,7 +32,7 @@ thresholds. Each row exposes every check, its value and threshold, and one of
 **«прошёл»**, **«проверяется»**, **«отсев»**. Use **«Показать»** to show passed,
 pending or rejected rows. Defaults are heuristics for screening, not validated
 trading parameters. They can be changed and reset; preferences are saved in the
-browser. This stage does not alter the existing quality score or model rules.
+browser. Selection thresholds determine eligibility separately from the rating.
 
 | Check | Default | Unit / calculation |
 | --- | --- | --- |
@@ -75,6 +75,49 @@ Offline checks: `python tools/check.py`. Browser checks additionally run
 `node tools/test_selection_ui.cjs` for threshold changes, reset/persistence,
 explanations retained across refresh, pending/stale/error data, and widths
 1280/390/320. The preview uses explicitly synthetic data.
+
+### Stage 2: candidate rating and explanations
+
+The old turnover/quoted-spread-only score is replaced by a server-calculated
+rating. Click the desktop score or expand the selection line under the symbol
+on any screen to see four parts, their observed values and labels such as
+**«Ликвидность высокая»**, **«Спред узкий»**, **«Объём растёт»** and
+**«Стакан подтверждает»**. The method can be expanded above the list.
+
+Each part is clamped to 0–25 and rounded to the nearest integer (half up).
+The final 0–100 score is exactly the sum of the displayed parts.
+Let `clamp(x)` bound x to 0–1. Percent values below use percentage points,
+so a 0.01% spread is the number `0.01`.
+
+| Part | Raw points before rounding | Explanation / input |
+| --- | --- | --- |
+| Liquidity | `25 × clamp((log10(T) − log10(2,000,000)) / 2)`; zero when T=0 | T is 24h turnover in USDT: 2M gives 0, 20M gives 13, 200M gives 25; «высокая» at ≥100M |
+| Spread | `25 × clamp(1 − S / 0.05)` | S is the larger of the quoted spread and worst spread of five books; «узкий» at ≤0.02% |
+| Volume | `25 × clamp(R / 2)` | R is mean base quantity per minute over the last five closed minutes / the previous twenty; 1× gives 13, 2× gives 25; «растёт» means ≥1.2× that baseline |
+| Book | `15 × clamp(D / 20,000) + 10 × clamp(1 − I / 0.05)` | D is the lowest Bid/Ask depth in USDT inside ±0.1% across five books; I is their worst estimated impact in %, for ~100 USDT; «подтверждает» requires all current book checks to pass |
+
+These anchors are explicit screening heuristics, not a trained predictor or
+a probability of profit. Changing eligibility thresholds does not rescale the
+four components. A fully observed coin that fails a threshold can retain a
+numeric rating and its **«отсев»** state. Rating sorting groups passed coins
+first, pending coins second, rejected coins last in both directions; known
+scores precede unavailable ones inside a group. Equal ratings use turnover,
+then symbol for stable ordering.
+
+The final score requires all 12 selection checks to have known finite values
+(coverage must be true), five complete books, and the same source freshness
+limits as Stage 1. Missing OI/funding or an incomplete book cannot produce a
+complete score. Known component points remain visible but are neither replaced
+by zero nor renormalised; the total shows **«проверяется»** / **«—»**.
+The browser checks freshness and that all four parts add up to the total;
+a stale source, different ticker snapshot, malformed total or failed API
+refresh removes the complete rating. There is no ticker-only fallback.
+
+Rating is calculated from the existing selection data, with no added upstream
+requests, caches, workers or services. It does not change model entry rules,
+positions or journals. Tests cover exact sums, rounding and anchors, monotonic
+responses, worst-book measurements, invalid/missing/stale inputs, threshold
+independence, sort grouping and desktop/mobile expansion with live refresh.
 
 This update changes the panel only. Existing `tools/update.sh <full SHA>` installs it; no service, VPN, firewall, account or model configuration changes. New endpoints are read-only `/api/screener`, `/api/market-chart?symbol=BTCUSDT&interval=5`, and `/api/market-book?symbol=BTCUSDT`. A fixed hostname and allowlisted public endpoints prevent arbitrary URL requests. Query symbols/timeframes are validated. No credentials are used.
 
