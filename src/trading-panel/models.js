@@ -29,7 +29,18 @@
   if(item?.kind==='engine')return {start:!busy&&a.start===true,stop:!busy&&a.stop===true,restart:!busy&&a.restart===true&&item.phase!=='idle'};
   return {start:!busy&&a.start===true&&(off||['draining','pending','stale','unknown'].includes(item.phase)),stop:!busy&&a.stop===true&&!off&&!(item.pending&&item.requested==='stop'),restart:!busy&&a.restart===true&&!item.pending,new_run:!busy&&a.new_run===true&&!item.pending};
  }
- const api={buttons,names,testSlot,executor,controlJson};if(typeof module!=='undefined')module.exports=api;
+ function operationsSummary(state,current=true){
+  const models=Array.isArray(state?.models)?state.models:[],engines=Array.isArray(state?.engines)?state.engines:[];
+  const worker=state?.worker||{};
+  const activeModels=models.filter(x=>['running','warming','waiting','draining'].includes(x?.phase)).length;
+  const protectedModels=models.filter(x=>['halted','stale','unknown','stopped'].includes(x?.phase)).length;
+  const activeEngine=engines.find(x=>x?.test_active||['running','starting','cancelling','lost'].includes(x?.phase));
+  const readyVds=engines.filter(x=>x?.executors?.vds?.installed&&x?.executors?.vds?.memory_ok).length;
+  const readyPc=engines.filter(x=>x?.executors?.pc?.installed&&x?.executors?.pc?.memory_ok).length;
+  return {current,activeModels,protectedModels,activeEngine:activeEngine?.id||null,
+   workerOnline:current&&worker.online===true,workerConfigured:worker.configured===true,readyVds,readyPc};
+ }
+ const api={buttons,names,testSlot,executor,controlJson,operationsSummary};if(typeof module!=='undefined')module.exports=api;
  if(typeof document==='undefined')return;
  document.addEventListener('DOMContentLoaded',()=>{
   const page=document.getElementById('page-research');if(!page)return;
@@ -41,6 +52,8 @@
   const heading=make('div','page-heading models-heading');heading.append(make('div','', ''));
   heading.firstChild.append(make('small','eyebrow','УПРАВЛЕНИЕ / PAPER'),make('h2','','Модели и тестовые боты'));
   const connection=make('p','muted','Подключаем управление…');connection.setAttribute('role','status');heading.append(connection);
+  const overview=make('section','models-ops-overview');overview.id='models-ops-overview';overview.setAttribute('aria-label','Состояние торговой лаборатории');
+  const overviewGrid=make('div','models-ops-grid');overview.append(overviewGrid);
   const modelsBox=make('section','box models-section');modelsBox.id='model-controls';modelsBox.append(make('h3','','Текущие модели A / B / C / D'));
   modelsBox.append(make('p','muted','Отключение запрещает новые входы. Открытая PAPER-позиция завершается по прежним правилам. Перезапуск сохраняет капитал и журнал. Для другого бюджета создай новый PAPER-тест: прежний баланс, позиции и журнал останутся в архиве.'));
   const modelGrid=make('div','managed-grid');modelsBox.append(modelGrid);
@@ -54,7 +67,7 @@
   const engineGrid=make('div','engine-grid');engineBox.append(engineGrid);
   const logBox=make('details','box models-audit');logBox.id='model-control-journal';logBox.append(make('summary','','Журнал управления'));
   const log=make('div','control-log');logBox.append(log);
-  page.prepend(heading,modelsBox,engineBox,logBox);
+  page.prepend(heading,overview,modelsBox,engineBox,logBox);
   const info={A:'Лента + дисбаланс + импульс',B:'EMA / VWAP + стакан + OFI',C:'Импульс в тренде',D:'Возврат к VWAP',freqtrade:'Исторический тест · 7 закрытых дней · Bybit BTC · 5 мин',hummingbot:'PAPER · Pure Market Making · Binance BTC spot · 20 мин',jesse:'Бесплатный исторический тест · 7 закрытых дней · Bybit BTC · 5 мин'};
   const inflight=new Set(),cards=new Map();let state=null,apiError='';
   function card(id,kind){
@@ -109,6 +122,12 @@
   function render(){
    const now=Date.now()/1000,current=!!state&&now-state.updated>=-1&&now-state.updated<=8;
    connection.textContent=apiError||(!current?'Управление недоступно: ждём свежий ответ сервера':'Управление подключено · '+date(state.updated));connection.className=apiError?'models-connection negative':current?'models-connection positive':'models-connection muted';
+   const summary=operationsSummary(state,current);overviewGrid.replaceChildren();
+   const opCard=(label,value,note,cls='')=>{const n=make('div','models-ops-card '+cls);n.append(make('span','muted',label),make('strong','',value),make('small','muted',note));overviewGrid.append(n);};
+   opCard('Модели A–D',current?summary.activeModels+' активны':'Нет связи',current?(summary.protectedModels?summary.protectedModels+' требуют внимания':'Защитных остановок нет'):'Ждём свежий ответ',current&&summary.protectedModels?'is-warning':'');
+   opCard('Внешний тест',summary.activeEngine?(engineNames[summary.activeEngine]||summary.activeEngine):'Свободно',summary.activeEngine?'Занят единый тестовый слот':'Можно запускать подготовленный движок',summary.activeEngine?'is-working':'');
+   opCard('Мой ПК',summary.workerOnline?'Подключён':summary.workerConfigured?'Не в сети':'Не настроен',summary.workerOnline?summary.readyPc+' движка готовы':summary.workerConfigured?'Запусти туннель и агент':'Требуется первичное подключение',summary.workerOnline?'is-online':'is-warning');
+   opCard('VDS',current?summary.readyVds+' движка готовы':'Нет связи',state?.memory?'RAM '+fmt(state.memory.available_gb)+' ГБ доступно':'Память не подтверждена');
    resources.textContent='Один внешний тест за раз.'+(state?.memory?' RAM сервера '+fmt(state.memory.total_gb)+' ГБ · доступно '+fmt(state.memory.available_gb)+' ГБ.':'')+' Freqtrade/Jesse: отдельные исторические тесты; Hummingbot: PAPER по публичному стакану.';
    const pc=state?.worker;worker.className='worker-status '+(current&&pc?.online?'is-online':'is-offline');worker.replaceChildren();
    worker.append(make('strong','',current&&pc?.online?'Мой ПК подключён':pc?.configured?'Мой ПК не подключён':'Исполнитель ПК ещё не подключён'));
