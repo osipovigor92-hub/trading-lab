@@ -1,5 +1,5 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');
-const {classifyB:B,classifyWatch:W}=require('../src/trading-panel/alerts.js');
+const {classifyB:B,classifyWatch:W,classifyResearch:R}=require('../src/trading-panel/alerts.js');
 const row=()=>({symbol:'TEST',price:10,spread:.01,time:1000,trade_age:.2,ready:true,signal:'LONG',chart:{end:990,side:1},reasons:[]});
 const state=()=>({updated:1000,phase:'running',cooldown_until:0,position:null});
 test('valid B long and short',()=>{assert.equal(B(state(),row(),1000).kind,'entry');assert.equal(B(state(),{...row(),signal:'SHORT',chart:{end:990,side:-1}},1000).tone,'short');});
@@ -10,6 +10,13 @@ test('halt and contradictory packet cannot issue entry',()=>{assert.notEqual(B({
 test('watch only allowed pending conditions',()=>{const r={...row(),signal:'WAIT',reasons:['Нет пробоя локального экстремума последних секунд']};assert.equal(B(state(),r,1000).kind,'watch');r.reasons.push('Широкий спред');assert.equal(B(state(),r,1000).kind,'wait');});
 test('orderbook watcher never becomes entry',()=>{const r={book_time:1000,status:'WATCH_LONG',reasons:[]};assert.equal(W({status:'ok',updated:1000},r,1000).kind,'watch');assert.equal(W({status:'ok',updated:1000},r,1010).kind,'stale');});
 test('chart error and invalid numeric values blocked',()=>{assert.notEqual(B(state(),{...row(),chart_error:'Bad candles'},1000).kind,'entry');assert.equal(B(state(),{...row(),price:NaN},1000).kind,'stale');});
+test('research alerts need a fresh confirmed C/D snapshot and preserve position blocks',()=>{
+ const research={updated:1000,phase:'running',position:null,cooldown_until:0};
+ const candidate={symbol:'TESTUSDT',time:1000,side:1,confirmed:true,checks:[{label:'Тренд',pass_:true}]};
+ assert.equal(R('C',research,candidate,1000).kind,'entry');
+ assert.equal(R('D',{...research,position:{symbol:'TESTUSDT'}},candidate,1000).kind,'blocked');
+ assert.equal(R('C',research,{...candidate,time:990},1000).kind,'stale');
+});
 const {transition}=require('../src/trading-panel/alerts.js');
 const {collectAlerts}=require('../src/trading-panel/alerts.js');
 test('compact screener shares entry, watch, blocked and stale classification',()=>{
