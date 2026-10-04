@@ -7,7 +7,10 @@ import preview
 
 class PreviewTests(unittest.TestCase):
     def test_routes_and_source_isolation(self):
-        server=preview.ThreadingHTTPServer(('127.0.0.1',0),preview.Handler)
+        try:
+            server=preview.ThreadingHTTPServer(('127.0.0.1',0),preview.Handler)
+        except PermissionError:
+            self.skipTest('Local sockets unavailable; this check runs in GitHub Actions')
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         base=f'http://127.0.0.1:{server.server_port}'
         try:
