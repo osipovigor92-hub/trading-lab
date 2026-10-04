@@ -51,6 +51,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: node tools/visual-check.cjs
+      - run: node tools/test_chart_interactions.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
