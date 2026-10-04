@@ -249,7 +249,7 @@ class WorkerTests(unittest.TestCase):
             env=dict(os.environ,LAB_WORKER_JOB=uid),start_new_session=True)
         try:
             try:(Path('/proc')/str(process.pid)/'environ').read_bytes()
-            except PermissionError:
+            except (PermissionError, FileNotFoundError):
                 self.skipTest('This runtime restricts /proc; the real process recovery check runs in GitHub Actions')
             remote.atomic(self.root/'delivery.json',dict(job_id=uid,report=dict(phase='running')))
             worker=agent.Agent(self.root,SimpleNamespace())
@@ -265,10 +265,12 @@ class WorkerTests(unittest.TestCase):
         folder=self.root/'code';folder.mkdir();control=self.root/'control';control.mkdir()
         main=folder/'manager.py';main.write_bytes(old)
         additional=folder/'runtime.py';additional.write_bytes(b'unchanged')
+        launcher=folder/'launcher.py';launcher.write_bytes(b'old loader')
         pc=folder/'remote.py';manifest=control/'installed.json'
         saved=dict(files={str(main):'7ce07edd39e6adcd5c93ea942f4231bf2420b6531ef30ba60f63b1691de485a1',
-                          str(additional):hashlib.sha256(b'unchanged').hexdigest()})
-        manifest.write_text(json.dumps(saved));files={main:b'new broker',pc:b'new remote',additional:b'unchanged'}
+                          str(additional):hashlib.sha256(b'unchanged').hexdigest(),
+                          str(launcher):hashlib.sha256(b'old loader').hexdigest()})
+        manifest.write_text(json.dumps(saved));files={main:b'new broker',pc:b'new remote',additional:b'unchanged',launcher:b'new loader'}
         backup=self.root/'backup';backup.mkdir()
         digest=lambda p:saved['files'][str(p)]
         active=lambda u:u=='trading-control.service'
@@ -279,12 +281,14 @@ class WorkerTests(unittest.TestCase):
                 patch.object(control_client,'call',return_value=dict(status='ok',worker={})): 
             install_control.upgrade_controller(files,saved,'b'*40,SimpleNamespace(pw_gid=0))
             self.assertEqual(main.read_bytes(),b'new broker');self.assertEqual(pc.read_bytes(),b'new remote')
+            self.assertEqual(launcher.read_bytes(),b'new loader')
             self.assertTrue(all(c.args[-1]=='trading-control.service' for c in system.call_args_list))
-            main.write_bytes(old);pc.unlink();manifest.write_text(json.dumps(saved));system.reset_mock()
+            main.write_bytes(old);pc.unlink();launcher.write_bytes(b'old loader');manifest.write_text(json.dumps(saved));system.reset_mock()
             with patch.object(control_client,'call',side_effect=OSError('unavailable')):
                 with self.assertRaisesRegex(RuntimeError,'не ответил'):
                     install_control.upgrade_controller(files,saved,'b'*40,SimpleNamespace(pw_gid=0))
             self.assertEqual(main.read_bytes(),old);self.assertFalse(pc.exists())
+            self.assertEqual(launcher.read_bytes(),b'old loader')
             self.assertEqual(json.loads(manifest.read_text()),saved)
             self.assertTrue(all(c.args[-1]=='trading-control.service' for c in system.call_args_list))
             with self.assertRaisesRegex(RuntimeError,'миграции'):
