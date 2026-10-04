@@ -28,3 +28,8 @@
 .worker-status.is-online{border-color:#2c7d66}
 .worker-status.is-online strong{color:#71dfbd}
 .worker-status.is-offline strong{color:#c8b689}
+
+/* Compact operational health strip above model controls. */
+.models-ops-overview{margin:0 0 14px}.models-ops-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.models-ops-card{min-width:0;padding:12px 14px;border:1px solid var(--line,#263b3d);border-radius:12px;background:rgba(255,255,255,.025);display:grid;gap:4px}.models-ops-card strong{font-size:1.05rem;overflow-wrap:anywhere}.models-ops-card small{line-height:1.3}.models-ops-card.is-online{border-color:rgba(62,190,140,.45)}.models-ops-card.is-warning{border-color:rgba(232,173,70,.45)}.models-ops-card.is-working{border-color:rgba(79,157,255,.5)}
+@media(max-width:760px){.models-ops-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.models-ops-card{padding:10px 11px}}
+@media(max-width:360px){.models-ops-grid{grid-template-columns:1fr}}
