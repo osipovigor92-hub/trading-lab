@@ -57,6 +57,44 @@ class ControlTests(unittest.TestCase):
                 self.assertEqual(r['status'],'accepted');self.assertEqual(write.call_args[0][1]['generation'],2)
                 self.assertTrue(thread.called)
                 with self.assertRaises(ValueError):m.command(dict(target='A',action='start',generation=1))
+    def test_new_run_only_accepts_bounded_paper_settings_and_keeps_lifecycle_allowlist(self):
+        with tempfile.TemporaryDirectory() as d,patch.object(manager,'ROOT',Path(d)):
+            (Path(d)/'commands').mkdir(); m=manager.Manager()
+            item=self.item(phase='paused');item['actions']['new_run']=True
+            with patch.object(m,'models',return_value=[item]),patch.object(m,'audit'),patch.object(manager.threading,'Thread') as thread:
+                good=dict(target='A',action='new_run',generation=1,experiment=dict(capital=300,notional=75,max_loss=9))
+                for bad in [
+                    dict(good, shell='x'),
+                    dict(target='A',action='new_run',generation=1,experiment=dict(capital=300,notional=75)),
+                    dict(target='A',action='new_run',generation=1,experiment=dict(capital=9,notional=1,max_loss=1)),
+                    dict(target='A',action='new_run',generation=1,experiment=dict(capital=300,notional=301,max_loss=9)),
+                    dict(target='freqtrade',action='new_run',generation=1,experiment=dict(capital=300,notional=75,max_loss=9)),
+                ]:
+                    with self.assertRaises(ValueError):m.command(bad)
+                result=m.command(good)
+                self.assertEqual(result['status'],'accepted');self.assertTrue(thread.called)
+
+    def test_new_run_archives_stopped_state_before_writing_clean_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d); control=base/'control';(control/'commands').mkdir(parents=True)
+            root=base/'paper';root.mkdir()
+            (root/'state.json').write_text(json.dumps(dict(phase='paused',position=None,config=dict(capital=600))))
+            (root/'journal-report.json').write_text(json.dumps(dict(recorded=2)))
+            (control/'commands'/'A.json').write_text(json.dumps(dict(action='stop',generation=4)))
+            storage=dict(manager.EXPERIMENT_STORAGE,A=dict(root=root,unit='paper-test.service',files=('state.json','journal-report.json')))
+            writes=[];audits=[]
+            def write(path,data):
+                path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(data));writes.append((path,data))
+            with patch.object(manager,'ROOT',control),patch.object(manager,'EXPERIMENT_STORAGE',storage),patch.object(manager,'atomic',side_effect=write),patch.object(manager,'system') as system,patch.object(manager,'unit_status',return_value=dict(ActiveState='active')),patch.object(manager.os,'chown'),patch.object(manager.pwd,'getpwnam',return_value=SimpleNamespace(pw_gid=1)):
+                m=manager.Manager();m.audit=lambda *args:audits.append(args)
+                m.new_experiment('A',dict(capital=300.,notional=75.,max_loss=9.),'1234abcd-ignored')
+            archives=list((root/'archives').iterdir());self.assertEqual(len(archives),1)
+            self.assertTrue((archives[0]/'state.json').is_file());self.assertTrue((archives[0]/'journal-report.json').is_file())
+            self.assertFalse((root/'state.json').exists())
+            record=json.loads((control/'experiments'/'A.json').read_text());self.assertEqual(record['settings']['capital'],300.)
+            command=json.loads((control/'commands'/'A.json').read_text());self.assertEqual(command['action'],'start');self.assertEqual(command['generation'],5)
+            self.assertEqual(system.call_args_list[0].args,('stop','paper-test.service'));self.assertEqual(system.call_args_list[-1].args,('start','paper-test.service'))
+            self.assertEqual(audits[-1][2],'delivered')
     def test_stop_does_not_kill_the_shared_market_feed(self):
         with tempfile.TemporaryDirectory() as d,patch.object(manager,'ROOT',Path(d)),patch.object(manager,'system') as system:
             m=manager.Manager();m.audit=lambda *a:None
