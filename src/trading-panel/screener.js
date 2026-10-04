@@ -5,13 +5,22 @@
  const fresh=(t,now,limit)=>finite(t)&&now-t>=-2&&now-t<=limit;
  const safeSymbol=s=>typeof s==='string'&&/^[A-Z0-9]{2,24}USDT$/.test(s);
  const fmt=(v,n=2)=>finite(v)?v.toLocaleString('ru-RU',{maximumFractionDigits:n}):'—';
- function filterRows(rows,{search='',preset='all',sort='turnover',minimum=0,bots=new Set(),favorites=new Set()}={}){
-  const allowed=rows.filter(r=>safeSymbol(r.symbol)&&finite(r.turnover)&&r.turnover>=minimum&&r.symbol.includes(search.toUpperCase())&&(
+ const clamp=(value,low=0,high=1)=>Math.min(high,Math.max(low,value));
+ function qualityScore(row){
+  if(!finite(row?.turnover)||row.turnover<=0||!finite(row?.spread)||row.spread<0)return 0;
+  // Selection quality, not a price forecast: public 24h liquidity plus current spread.
+  const liquidity=clamp(Math.log10(row.turnover/1e6)/3)*60;
+  const execution=clamp(1-row.spread/.08)*40;
+  return Math.round(liquidity+execution);
+ }
+ function filterRows(rows,{search='',preset='all',sort='turnover',minimum=0,bots=new Set(),favorites=new Set(),dir=''}={}){
+  const allowed=rows.map(r=>({...r,quality:finite(r.quality)?r.quality:qualityScore(r)})).filter(r=>safeSymbol(r.symbol)&&finite(r.turnover)&&r.turnover>=minimum&&r.symbol.includes(search.toUpperCase())&&(
    preset==='all'||preset==='active'&&r.range24>=3&&r.turnover>=2e7&&r.spread<=.03||
    preset==='liquid'&&r.turnover>=5e7&&r.spread<=.02||preset==='up'&&r.change>=3||
    preset==='down'&&r.change<=-3||preset==='bots'&&bots.has(r.symbol)||preset==='favorites'&&favorites.has(r.symbol)));
-  const key=['turnover','range24','spread','change'].includes(sort)?sort:'turnover';
-  return allowed.sort((a,b)=>(key==='spread'?1:-1)*(a[key]-b[key])||a.symbol.localeCompare(b.symbol));
+  const key=['quality','turnover','range24','spread','change'].includes(sort)?sort:'turnover';
+  const sign=(key==='spread'?1:-1)*(dir==='asc'?-1:1);
+  return allowed.sort((a,b)=>sign*(a[key]-b[key])||a.symbol.localeCompare(b.symbol));
  }
  function botModels(a,b,cd){return {A:a,B:b,C:cd?.models?.C?{...cd.models.C,updated:cd.updated}:null,D:cd?.models?.D?{...cd.models.D,updated:cd.updated}:null};}
  function positionView(s,now){
@@ -20,8 +29,9 @@
   return {symbol:p.symbol,side:p.side===1?'LONG':'SHORT',entry:p.entry,notional:p.quantity*p.entry,opened:p.opened,current:['running','draining'].includes(s.phase)&&fresh(s.updated,now,8)};
  }
  function domain(bars){const low=Math.min(...bars.map(b=>b.low)),high=Math.max(...bars.map(b=>b.high)),padding=Math.max((high-low)*.08,high*.0005);return {low:low-padding,high:high+padding};}
- function chartBars(bars,width,scale=1){const base=width<560?45:90,safe=finite(scale)?Math.min(3,Math.max(.5,scale)):1,count=Math.max(20,Math.min(bars.length,Math.round(base/safe)));return bars.slice(-count);}
- const api={fresh,filterRows,botModels,positionView,domain,chartBars};
+ function barCount(width,scale,total){const base=width<560?45:90,safe=finite(scale)?Math.min(8,Math.max(.3,scale)):1;return Math.min(total,Math.max(20,Math.round(base/safe)));}
+ function chartBars(bars,width,scale=1,offset=0){const count=barCount(width,scale,bars.length),back=Math.max(0,Math.min(bars.length-count,Math.round(finite(offset)?offset:0)));return bars.slice(bars.length-count-back,bars.length-back);}
+ const api={fresh,qualityScore,filterRows,botModels,positionView,domain,chartBars,barCount};
  if(typeof module!=='undefined')module.exports=api;
  if(typeof document==='undefined')return;
  scope.LabScreener=api;
@@ -44,20 +54,22 @@
   const presets=[['all','Все'],['active','Активные'],['liquid','Ликвидные'],['up','Рост'],['down','Падение']];
   const preset=makeSelect('Подборка',[...presets,['bots','Монеты ботов'],['favorites','Избранное']]);
   for(const [value,text]of presets){const b=el('button','preset-chip',text);b.type='button';b.setAttribute('aria-pressed',String(value==='all'));b.addEventListener('click',()=>{preset.value=value;render();});presetButtons[value]=b;chips.append(b);}controls.append(chips);
-  const sorts=[['turnover','Оборот ↓'],['range24','Диапазон ↓'],['spread','Спред ↑'],['change','Рост цены ↓']],sorting=makeSelect('Сортировка',sorts),sortLabel=el('label','sort-control');sortLabel.append(sorting);controls.append(sortLabel);
+  const sorts=[['quality','Качество ↓'],['turnover','Оборот ↓'],['range24','Диапазон ↓'],['spread','Спред ↑'],['change','Рост цены ↓']],sorting=makeSelect('Сортировка',sorts),sortLabel=el('label','sort-control');sortLabel.append(sorting);controls.append(sortLabel);
   const filtersButton=el('button','icon-button');filtersButton.type='button';filtersButton.setAttribute('aria-label','Дополнительные фильтры');filtersButton.setAttribute('aria-expanded','false');filtersButton.setAttribute('aria-controls','screener-extra-filters');filtersButton.append(icon('filter'));controls.append(filtersButton);marketBox.append(controls);
   const filters=el('div','screener-extra-filters');filters.id='screener-extra-filters';filters.hidden=true;
   const minimum=makeSelect('Оборот от',[['0','Любой'],['10000000','10 млн USDT'],['50000000','50 млн USDT'],['100000000','100 млн USDT']]),mobileSort=makeSelect('Порядок монет',sorts);
   for(const [name,node,cls]of [['Подборка',preset,''],['Оборот от',minimum,''],['Порядок монет',mobileSort,'mobile-sort']]){const l=el('label',cls,name);l.append(node);filters.append(l);}marketBox.append(filters);
   filtersButton.addEventListener('click',()=>{filters.hidden=!filters.hidden;filtersButton.setAttribute('aria-expanded',String(!filters.hidden));});
   const scroll=el('div','scroll screener-scroll'),table=el('table','screener-table');table.id='screener-table';const head=el('thead'),headerRow=el('tr');
-  for(const name of ['Монета','Цена, USDT','24 ч','Оборот','Спред',''])headerRow.append(el('th','',name));headerRow.lastChild.append(el('span','sr-only','Избранное'));head.append(headerRow);
+  const sortDirs={};
+  const thSort=(label,key)=>{const th=el('th'),b=el('button','th-sort',label);b.type='button';b.dataset.sort=key;b.dataset.label=label;b.setAttribute('aria-label','Сортировать: '+label);b.addEventListener('click',()=>{if(sorting.value===key)sortDirs[key]=sortDirs[key]==='asc'?'desc':'asc';else{sorting.value=key;mobileSort.value=key;sortDirs[key]='desc';}tableSignature='';render();});th.append(b);return th;};
+  headerRow.append(el('th','','Монета'),el('th','','Цена, USDT'),thSort('24 ч','change'),thSort('Оборот','turnover'),thSort('Спред','spread'),thSort('Качество','quality'),el('th',''));headerRow.lastChild.append(el('span','sr-only','Избранное'));head.append(headerRow);
   const tbody=el('tbody');table.append(head,tbody);scroll.append(table);marketBox.append(scroll);
   const counter=el('p','screener-counter'),status=el('p','screener-status','Получаем публичные данные Bybit…');status.id='screener-status';status.setAttribute('role','status');marketBox.append(counter,status);
   const alertsBox=el('section','box screener-alerts');alertsBox.id='screener-alerts';const alertHead=el('div','panel-heading'),alertList=el('div');alertHead.append(el('h2','','Алерты'),action('Все алерты','alerts'));alertsBox.append(alertHead,alertList);root.append(alertsBox);
   const panel=el('section','box screener-detail');panel.id='screener-detail';root.append(panel);
   const toolbar=el('div','screener-detail-toolbar'),title=el('h2','','BTCUSDT · 5 мин'),timeChips=el('div','time-chips'),timeframe={value:'5'},timeButtons={};timeChips.setAttribute('role','group');timeChips.setAttribute('aria-label','Таймфрейм уровней');
-  for(const [value,text,label]of [['1','1м','1 минута'],['5','5м','5 минут'],['15','15м','15 минут'],['60','1ч','1 час']]){const b=el('button','time-chip',text);b.type='button';b.setAttribute('aria-label',label);b.setAttribute('aria-pressed',String(value==='5'));b.addEventListener('click',()=>{timeframe.value=value;setChartScale(scaleFor(value),false);for(const [v,n]of Object.entries(timeButtons))n.setAttribute('aria-pressed',String(v===value));choose(selected);});timeButtons[value]=b;timeChips.append(b);}
+  for(const [value,text,label]of [['1','1м','1 минута'],['5','5м','5 минут'],['15','15м','15 минут'],['60','1ч','1 час']]){const b=el('button','time-chip',text);b.type='button';b.setAttribute('aria-label',label);b.setAttribute('aria-pressed',String(value==='5'));b.addEventListener('click',()=>{timeframe.value=value;updateScaleControls();for(const [v,n]of Object.entries(timeButtons))n.setAttribute('aria-pressed',String(v===value));choose(selected);});timeButtons[value]=b;timeChips.append(b);}
   const scaleControls=el('div','chart-scale-controls');scaleControls.setAttribute('role','group');scaleControls.setAttribute('aria-label','Масштаб графика');
   const scaleOut=el('button','chart-scale-button','−');scaleOut.type='button';scaleOut.setAttribute('aria-label','Уменьшить масштаб графика');
   const scaleValue=el('button','chart-scale-value','100%');scaleValue.type='button';scaleValue.setAttribute('aria-label','Сбросить масштаб графика');
@@ -69,27 +81,51 @@
   const analysis=el('details','chart-analysis'),metrics=el('div','terminal-metrics'),levelsBox=el('div','screener-levels');levelsBox.id='screener-levels';analysis.append(el('summary','','Уровни и показатели'),metrics,levelsBox);panel.append(analysis);
   const explanation=el('details','screener-method');explanation.append(el('summary','','Как рассчитываются уровни'));
   line(explanation,'До 180 закрытых свечей. Экстремумы подтверждаются двумя барами слева и справа. Близкие экстремумы объединяются в зоны шириной до max(0,05% цены; 0,25 ATR).');
-  line(explanation,'Три ближайшие зоны ниже и выше последнего закрытия. Число экстремумов не является вероятностью отскока. На графике последние 90 свечей, на телефоне — 45; голубая линия — VWAP последних 60 свечей, столбцы — исполненный оборот в USDT.');analysis.append(explanation);
+  line(explanation,'Три ближайшие зоны ниже и выше последнего закрытия. Число экстремумов не является вероятностью отскока. По умолчанию видно 90 свечей, на телефоне — 45. Колесо меняет масштаб времени, колесо над правой шкалой — масштаб цены; перетаскивание сдвигает вид, щипок меняет масштаб, двойной клик сбрасывает. Голубая линия — VWAP 60 свечей, столбцы — оборот в USDT.');analysis.append(explanation);
   const bookBox=el('section','box screener-orderbook');bookBox.id='screener-orderbook';root.append(bookBox);
   const botsBox=el('section','box screener-bots');botsBox.id='screener-bots';root.append(botsBox);
-  let snapshot=null,chart=null,book=null,models={},bState=null,wState=null,selected='BTCUSDT',generation=0,tickerError='',chartError='',bookError='';
-  let previousBook=null,bookChange=null,tableSignature='',chartSignature='',chartInfoSignature='',bookSignature='',botSignature='',bookOpen=false,tickerStamp=0,focusSelected=false,chartScale=1,chartScales={};
+  let snapshot=null,chart=null,book=null,models={},bState=null,wState=null,researchState=null,selected='BTCUSDT',generation=0,tickerError='',chartError='',bookError='';
+  let previousBook=null,bookChange=null,tableSignature='',chartSignature='',chartInfoSignature='',bookSignature='',botSignature='',bookOpen=false,tickerStamp=0,focusSelected=false;
   const favorites=new Set(),priceHistory=new Map(),tableRows=new Map(),compactAlertRows=new Map();
-  try{for(const s of JSON.parse(localStorage.getItem('lab-favorites-v1')||'[]').slice(0,100))if(safeSymbol(s))favorites.add(s);const s=localStorage.getItem('lab-selected-coin');if(safeSymbol(s))selected=s;const saved=JSON.parse(localStorage.getItem('lab-screener-chart-scale-v1')||'{}');if(saved&&typeof saved==='object')chartScales=saved;}catch{}
-  const scaleFor=interval=>finite(chartScales[interval])?Math.min(3,Math.max(.5,chartScales[interval])):1;
-  function updateScaleControls(){scaleValue.textContent=Math.round(chartScale*100)+'%';scaleOut.disabled=chartScale<=.5;scaleIn.disabled=chartScale>=3;}
-  function setChartScale(value,persist=true){chartScale=Math.round(Math.min(3,Math.max(.5,finite(value)?value:1))*4)/4;chartScales[timeframe.value]=chartScale;if(persist)try{localStorage.setItem('lab-screener-chart-scale-v1',JSON.stringify(chartScales));}catch{}chartSignature='';updateScaleControls();render();}
-  chartScale=scaleFor(timeframe.value);updateScaleControls();
-  scaleOut.addEventListener('click',()=>setChartScale(chartScale-.25));scaleIn.addEventListener('click',()=>setChartScale(chartScale+.25));scaleValue.addEventListener('click',()=>setChartScale(1));
-  chartHost.addEventListener('wheel',event=>{if(!event.ctrlKey&&!event.metaKey)return;event.preventDefault();setChartScale(chartScale+(event.deltaY<0?.25:-.25));},{passive:false});
+  const SCALE_MIN=.3,SCALE_MAX=8,PRICE_MIN=.2,PRICE_MAX=10,legacyScales={};let chartViews={};
+  try{for(const s of JSON.parse(localStorage.getItem('lab-favorites-v1')||'[]').slice(0,100))if(safeSymbol(s))favorites.add(s);const s=localStorage.getItem('lab-selected-coin');if(safeSymbol(s))selected=s;
+   const legacy=JSON.parse(localStorage.getItem('lab-screener-chart-scale-v1')||'{}');for(const k of ['1','5','15','60'])if(finite(legacy?.[k]))legacyScales[k]=Math.min(3,Math.max(.5,legacy[k]));
+   const saved=JSON.parse(localStorage.getItem('lab-screener-chart-view-v2')||'{}');if(saved&&typeof saved==='object'&&!Array.isArray(saved))chartViews=saved;}catch{}
+  const viewKey=()=>selected+':'+timeframe.value;
+  const defaultView=()=>({scale:legacyScales[timeframe.value]||1,offset:0,pScale:1,pCenter:null});
+  function getView(){const v=chartViews[viewKey()];return clampView(v&&typeof v==='object'&&!Array.isArray(v)?{...defaultView(),...v}:defaultView());}
+  function persistViews(){try{const keys=Object.keys(chartViews).slice(-40),out={};for(const k of keys)out[k]=chartViews[k];chartViews=out;localStorage.setItem('lab-screener-chart-view-v2',JSON.stringify(out));}catch{}}
+  function clampView(v){v.scale=Math.min(SCALE_MAX,Math.max(SCALE_MIN,finite(v.scale)?v.scale:1));v.offset=Math.max(0,Math.round(finite(v.offset)?v.offset:0));v.pScale=Math.min(PRICE_MAX,Math.max(PRICE_MIN,finite(v.pScale)?v.pScale:1));if(!finite(v.pCenter))v.pCenter=null;const total=chart?.candles?.length||0;if(total)v.offset=Math.min(v.offset,Math.max(0,total-barCount(chartHost.clientWidth,v.scale,total)));return v;}
+  function applyView(patch){chartViews[viewKey()]=clampView({...getView(),...patch});persistViews();chartSignature='';updateScaleControls();render();}
+  function resetView(){delete chartViews[viewKey()];persistViews();chartSignature='';updateScaleControls();render();}
+  function updateScaleControls(){const v=getView();scaleValue.textContent=Math.round(v.scale*100)+'%';scaleOut.disabled=v.scale<=SCALE_MIN;scaleIn.disabled=v.scale>=SCALE_MAX;}
+  updateScaleControls();
+  scaleOut.addEventListener('click',()=>applyView({scale:getView().scale/1.25}));scaleIn.addEventListener('click',()=>applyView({scale:getView().scale*1.25}));scaleValue.addEventListener('click',resetView);
+  function viewDomain(pixels){if(!chart?.candles?.length)return null;const v=getView(),bars=chartBars(chart.candles,pixels,v.scale,v.offset);if(!bars.length)return null;const b=domain(bars),half=(b.high-b.low)/2/v.pScale,center=finite(v.pCenter)?v.pCenter:(b.high+b.low)/2;return {v,bars,count:bars.length,total:chart.candles.length,center,half};}
+  function viewCoords(e){const rect=chartHost.getBoundingClientRect();if(!rect.width||!rect.height)return null;const w=Math.max(250,Math.round(rect.width));return {w,right:w-78,px:(e.clientX-rect.left)*w/rect.width,py:(e.clientY-rect.top)*254/rect.height};}
+  chartHost.addEventListener('wheel',e=>{const c=viewCoords(e),d=c&&viewDomain(c.w);if(!d)return;e.preventDefault();const factor=e.deltaY<0?1.15:1/1.15;
+   if(c.px>=c.right){const fy=Math.min(1,Math.max(0,(c.py-18)/138)),anchor=d.center+d.half*(1-2*fy),pScale=Math.min(PRICE_MAX,Math.max(PRICE_MIN,d.v.pScale*factor)),half=d.half*d.v.pScale/pScale;applyView({pScale,pCenter:anchor-half*(1-2*fy)});}
+   else{const fx=Math.min(1,Math.max(0,(c.px-12)/Math.max(1,c.right-12))),index=d.total-d.v.offset-d.count+fx*(d.count-1),scale=Math.min(SCALE_MAX,Math.max(SCALE_MIN,d.v.scale*factor)),count=barCount(c.w,scale,d.total);applyView({scale,offset:Math.round(d.total-count-index+fx*(count-1))});}
+  },{passive:false});
+  let drag=null,pinch=null;const pointers=new Map();
+  chartHost.addEventListener('pointerdown',e=>{const c=viewCoords(e),d=c&&viewDomain(c.w);if(!d)return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});try{chartHost.setPointerCapture(e.pointerId);}catch{}
+   if(pointers.size===2){const p=[...pointers.values()];pinch={distance:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)||1,scale:d.v.scale};drag=null;return;}
+   drag={zone:c.px>=c.right?'price':c.py>=232?'time':'body',x:e.clientX,y:e.clientY,w:c.w,view:d.v,center:d.center,half:d.half,count:d.count};});
+  chartHost.addEventListener('pointermove',e=>{if(pinch&&pointers.has(e.pointerId)){pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});const p=[...pointers.values()];if(p.length===2)applyView({scale:pinch.scale*Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)/pinch.distance});return;}
+   if(!drag||!pointers.has(e.pointerId))return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)<2)return;
+   if(drag.zone==='price')applyView({pScale:drag.view.pScale*Math.exp(-dy*.005)});
+   else if(drag.zone==='time')applyView({scale:drag.view.scale*Math.exp(-dx*.005)});
+   else applyView({offset:drag.view.offset+Math.round(dx/Math.max(4,(drag.w-98)/Math.max(1,drag.count))),pCenter:drag.center+dy/138*2*drag.half});});
+  const endPointer=e=>{pointers.delete(e.pointerId);if(pointers.size<2)pinch=null;if(!pointers.size)drag=null;};chartHost.addEventListener('pointerup',endPointer);chartHost.addEventListener('pointercancel',endPointer);
+  chartHost.addEventListener('dblclick',resetView);
   const visible=()=>!document.hidden&&!page.hidden;
   const chartFresh=now=>chart?.symbol===selected&&chart.interval===timeframe.value&&chart.status==='ok'&&fresh(chart.updated,now,75)&&fresh(chart.candle_end,now,Number(timeframe.value)*60+75);
-  const activeAlerts=now=>scope.LabAlerts.collectAlerts(bState,wState,now);
+  const activeAlerts=now=>scope.LabAlerts.collectAlerts(bState,wState,now,researchState);
   const turnover=v=>finite(v)?v>=1e9?fmt(v/1e9,2)+' млрд':fmt(v/1e6,1)+' млн':'—';
   const svgNode=(tag,attrs={})=>{const n=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v]of Object.entries(attrs))n.setAttribute(k,String(v));return n;};
   function addText(svg,x,y,text,cls='chart-axis'){const n=svgNode('text',{x,y,class:cls});n.textContent=text;svg.append(n);}
   function drawChart(data){
-   chartHost.replaceChildren();const pixels=Math.max(250,Math.round(chartHost.clientWidth)),right=pixels-78,bars=chartBars(data.candles,pixels,chartScale),d=domain(bars),svg=svgNode('svg',{viewBox:'0 0 '+pixels+' 254',role:'img','aria-label':selected+' · свечи, поддержка, сопротивление и оборот USDT · масштаб '+Math.round(chartScale*100)+'%'});
+   chartHost.replaceChildren();const pixels=Math.max(250,Math.round(chartHost.clientWidth)),right=pixels-78,view=getView(),bars=chartBars(data.candles,pixels,view.scale,view.offset),base=domain(bars),half=(base.high-base.low)/2/view.pScale,center=finite(view.pCenter)?view.pCenter:(base.high+base.low)/2,d={low:center-half,high:center+half},svg=svgNode('svg',{viewBox:'0 0 '+pixels+' 254',role:'img','aria-label':selected+' · свечи, уровни и оборот USDT · масштаб времени '+Math.round(view.scale*100)+'% и цены '+Math.round(view.pScale*100)+'%'});
    const x=i=>12+i*(right-20)/Math.max(1,bars.length-1),y=p=>18+(d.high-p)/(d.high-d.low)*138;
    for(let i=0;i<=4;i++){const p=d.low+(d.high-d.low)*i/4,yp=y(p);svg.append(svgNode('line',{x1:8,x2:right,y1:yp,y2:yp,class:'chart-grid'}));addText(svg,right+7,yp+3,fmt(p,8));}
    const labels=[],sides=new Set();
@@ -99,7 +135,7 @@
    const width=Math.max(1,Math.min(8,(right-20)/Math.max(1,bars.length-1)*.7)),maxVolume=Math.max(1,...bars.map(b=>b.turnover));
    for(const [i,b]of bars.entries()){const cls=b.close>=b.open?'candle-up':'candle-down',xp=x(i);svg.append(svgNode('line',{x1:xp,x2:xp,y1:y(b.high),y2:y(b.low),class:cls}),svgNode('rect',{x:xp-width/2,y:Math.min(y(b.open),y(b.close)),width,height:Math.max(1,Math.abs(y(b.open)-y(b.close))),class:cls}),svgNode('rect',{x:xp-width/2,y:230-b.turnover/maxVolume*38,width,height:Math.max(0,b.turnover/maxVolume*38),class:cls+' volume-bar'}));}
    addText(svg,8,188,'Оборот · USDT');addText(svg,right+7,206,fmt(maxVolume,0));
-   for(const i of [0,Math.floor(bars.length/3),Math.floor(bars.length*2/3),bars.length-1])addText(svg,Math.max(8,x(i)-18),247,new Date(bars[i].time*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}));const closeY=y(data.price);svg.append(svgNode('rect',{x:right+3,y:closeY-8,width:74,height:16,rx:2,class:'chart-close-marker'}));addText(svg,right+6,closeY+3,fmt(data.price,8),'chart-close-text');chartHost.append(svg);
+   for(const i of [0,Math.floor(bars.length/3),Math.floor(bars.length*2/3),bars.length-1])addText(svg,Math.max(8,x(i)-18),247,new Date(bars[i].time*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}));if(data.price>=d.low&&data.price<=d.high){const closeY=y(data.price);svg.append(svgNode('rect',{x:right+3,y:closeY-8,width:74,height:16,rx:2,class:'chart-close-marker'}));addText(svg,right+6,closeY+3,fmt(data.price,8),'chart-close-text');}chartHost.append(svg);
   }
   function spark(symbol,now){
    const candles=symbol===selected&&chartFresh(now),values=candles?chart.candles.slice(-24).map(b=>b.close):(priceHistory.get(symbol)||[]).filter(v=>fresh(v[0],now,180)).map(v=>v[1]);if(values.length<2)return null;
@@ -111,17 +147,19 @@
   function createTableRow(r,now){
    const tr=el('tr'),td=el('td'),cell=el('div','coin-cell'),identity=el('div'),name=el('div','coin-name-row'),button=el('button','coin-button',r.symbol),trendHost=el('span','coin-trend-host'),tags=el('div','coin-tags'),mobileTurnover=el('div','coin-mobile-facts');button.type='button';button.addEventListener('click',()=>choose(r.symbol));name.append(button,trendHost);identity.append(name,tags,mobileTurnover);cell.append(coin(r.symbol),identity);td.append(cell);tr.append(td);
    const price=el('td'),priceValue=el('span','coin-price'),mobileFacts=el('div','mobile-quote-facts'),mobileChange=el('span'),mobileSpread=el('small');mobileFacts.append(mobileChange,mobileSpread);price.append(priceValue,mobileFacts);
-   const changeCell=el('td'),turnoverCell=el('td'),spreadCell=el('td');tr.append(price,changeCell,turnoverCell,spreadCell);
+   const changeCell=el('td'),turnoverCell=el('td'),spreadCell=el('td'),qualityCell=el('td','quality-score');tr.append(price,changeCell,turnoverCell,spreadCell,qualityCell);
    const favoriteCell=el('td'),favorite=el('button','favorite-button'),mobileFavorite=el('button','favorite-button favorite-mobile');for(const b of [favorite,mobileFavorite]){b.type='button';b.setAttribute('aria-label','Избранное '+r.symbol);b.append(icon('star'));}const toggleFavorite=()=>{if(favorites.has(r.symbol))favorites.delete(r.symbol);else favorites.add(r.symbol);try{localStorage.setItem('lab-favorites-v1',JSON.stringify([...favorites]));}catch{}render();};favorite.addEventListener('click',toggleFavorite);mobileFavorite.addEventListener('click',toggleFavorite);name.append(mobileFavorite);favoriteCell.append(favorite);tr.append(favoriteCell);
-   const item={tr,button,trendHost,tags,mobileTurnover,priceValue,mobileChange,mobileSpread,changeCell,turnoverCell,spreadCell,favorite,mobileFavorite};updateTableRow(item,r,now);return item;
+   const item={tr,button,trendHost,tags,mobileTurnover,priceValue,mobileChange,mobileSpread,changeCell,turnoverCell,spreadCell,qualityCell,favorite,mobileFavorite,lastPrice:null};updateTableRow(item,r,now);return item;
   }
   function updateTableRow(item,r,now){
-   const change=(r.change>0?'+':'')+fmt(r.change)+'%',positive=r.change>=0;item.tr.className=r.symbol===selected?'selected-coin':'';item.button.setAttribute('aria-pressed',String(selected===r.symbol));item.trendHost.replaceChildren();const trend=spark(r.symbol,now);if(trend)item.trendHost.append(trend);updateCoinTags(item.tags,r.symbol,now);item.mobileTurnover.textContent='Оборот '+turnover(r.turnover)+' USDT';item.priceValue.textContent=fmt(r.price,8);item.mobileChange.className=positive?'positive':'negative';item.mobileChange.textContent=change;item.mobileSpread.textContent='Спред '+fmt(r.spread,3)+'%';item.changeCell.className=positive?'positive':'negative';item.changeCell.textContent=change;item.turnoverCell.textContent=turnover(r.turnover);item.spreadCell.className=r.spread>.03?'negative':'';item.spreadCell.textContent=fmt(r.spread,3)+'%';for(const b of [item.favorite,item.mobileFavorite])b.setAttribute('aria-pressed',String(favorites.has(r.symbol)));
+   const change=(r.change>0?'+':'')+fmt(r.change)+'%',positive=r.change>=0;item.tr.className=r.symbol===selected?'selected-coin':'';item.button.setAttribute('aria-pressed',String(selected===r.symbol));item.trendHost.replaceChildren();const trend=spark(r.symbol,now);if(trend)item.trendHost.append(trend);updateCoinTags(item.tags,r.symbol,now);item.mobileTurnover.textContent='Оборот '+turnover(r.turnover)+' USDT';
+   if(finite(item.lastPrice)&&finite(r.price)&&r.price!==item.lastPrice){item.priceValue.classList.remove('flash-up','flash-down');void item.priceValue.offsetWidth;item.priceValue.classList.add(r.price>item.lastPrice?'flash-up':'flash-down');}if(finite(r.price))item.lastPrice=r.price;
+   item.priceValue.textContent=fmt(r.price,8);item.mobileChange.className=positive?'positive':'negative';item.mobileChange.textContent=change;item.mobileSpread.textContent='Спред '+fmt(r.spread,3)+'%';item.changeCell.className=positive?'positive':'negative';item.changeCell.textContent=change;item.turnoverCell.textContent=turnover(r.turnover);item.spreadCell.className=r.spread>.03?'negative':'';item.spreadCell.textContent=fmt(r.spread,3)+'%';item.qualityCell.textContent=fmt(r.quality,0)+' / 100';item.qualityCell.className='quality-score '+(r.quality>=70?'positive':r.quality<45?'negative':'');for(const b of [item.favorite,item.mobileFavorite])b.setAttribute('aria-pressed',String(favorites.has(r.symbol)));
   }
   function clearTableRows(){for(const item of tableRows.values())item.tr.remove();tableRows.clear();const empty=tbody.querySelector('[data-empty]');if(empty)empty.remove();}
   function patchTableRows(rows,now){
    const wanted=new Set(rows.map(r=>r.symbol));for(const [symbol,item]of tableRows)if(!wanted.has(symbol)){item.tr.remove();tableRows.delete(symbol);}const existingEmpty=tbody.querySelector('[data-empty]');if(existingEmpty)existingEmpty.remove();
-   if(!rows.length){const tr=el('tr');tr.dataset.empty='true';const td=el('td','','Монет с выбранными условиями нет.');td.colSpan=6;tr.append(td);tbody.append(tr);return;}
+   if(!rows.length){const tr=el('tr');tr.dataset.empty='true';const td=el('td','','Монет с выбранными условиями нет.');td.colSpan=7;tr.append(td);tbody.append(tr);return;}
    for(const r of rows){let item=tableRows.get(r.symbol);if(!item){item=createTableRow(r,now);tableRows.set(r.symbol,item);}else updateTableRow(item,r,now);}
    for(const [index,r]of rows.entries()){const item=tableRows.get(r.symbol),current=tbody.children[index];if(current!==item.tr)tbody.insertBefore(item.tr,current||null);}
   }
@@ -131,9 +169,10 @@
    status.textContent=!snapshot||snapshot.status==='pending'?'Получаем список контрактов…':!usable?'СКРИНЕР УСТАРЕЛ · текущие цены скрыты':refreshIssue?'Bybit · последнее подтверждённое обновление '+new Date(snapshot.updated*1000).toLocaleTimeString('ru-RU')+' · повторяем обновление':'Bybit · '+new Date(snapshot.updated*1000).toLocaleTimeString('ru-RU')+' · '+fmt(now-snapshot.updated,0)+' с';status.className='screener-status'+(usable?'':' negative');
    if(!usable){clearTableRows();tableSignature='';summaryValues.coins.textContent='—';counter.textContent='Ожидание свежих котировок';return;}
    const coins=new Set();for(const s of Object.values(models)){const p=positionView(s,now);if(p?.current)coins.add(p.symbol);}if((bState?.feed_phase||bState?.phase)==='running'&&fresh(bState.updated,now,8))for(const r of bState.observations||[])coins.add(r.symbol);
-   const rows=filterRows(snapshot.rows,{search:search.value,preset:preset.value,sort:sorting.value,minimum:Number(minimum.value),bots:coins,favorites});summaryValues.coins.textContent=String(rows.length);
-   const signature=[snapshot.updated,chart?.candle_end,chartFresh(now),search.value,preset.value,sorting.value,minimum.value,selected,...favorites,displayedPositions(now),...coins].join('|');if(signature===tableSignature)return;tableSignature=signature;const savedScroll=scroll.scrollTop;
-   counter.textContent=rows.length+' из '+snapshot.rows.length+' · до 100 пар по обороту · USDT';patchTableRows(rows,now);scroll.scrollTop=savedScroll;
+   const rows=filterRows(snapshot.rows,{search:search.value,preset:preset.value,sort:sorting.value,minimum:Number(minimum.value),bots:coins,favorites,dir:sortDirs[sorting.value]});summaryValues.coins.textContent=String(rows.length);
+   for(const b of headerRow.querySelectorAll('.th-sort')){const on=b.dataset.sort===sorting.value;b.classList.toggle('active',on);b.setAttribute('aria-sort',on?(sortDirs[b.dataset.sort]==='asc'?'ascending':'descending'):'none');b.textContent=b.dataset.label+(on?(sortDirs[b.dataset.sort]==='asc'?' ▲':' ▼'):'');}
+   const signature=[snapshot.updated,chart?.candle_end,chartFresh(now),search.value,preset.value,sorting.value,sortDirs[sorting.value],minimum.value,selected,...favorites,displayedPositions(now),...coins].join('|');if(signature===tableSignature)return;tableSignature=signature;const savedScroll=scroll.scrollTop;
+   counter.textContent=rows.length+' из '+snapshot.rows.length+' · до 100 пар по обороту · качество = ликвидность 24ч + текущий спред, не прогноз цены';patchTableRows(rows,now);scroll.scrollTop=savedScroll;
    if(focusSelected){const row=tbody.querySelector('.selected-coin');if(row){const bounds=scroll.getBoundingClientRect(),r=row.getBoundingClientRect();if(r.bottom>bounds.bottom)scroll.scrollTop+=r.bottom-bounds.bottom;else if(r.top<bounds.top)scroll.scrollTop+=r.top-bounds.top;}focusSelected=false;}
   }
   function renderLevels(now){
@@ -142,10 +181,10 @@
    if(!usable){const unavailable='unavailable|'+chartStatus.textContent;if(chartInfoSignature!==unavailable){chartInfoSignature=unavailable;metrics.replaceChildren();levelsBox.replaceChildren();quickLevels.replaceChildren();chartHost.replaceChildren(el('p','muted','Ожидание свежего анализа.'));}chartSignature='';return;}
    const last=chart.candles.at(-1)||{},infoSignature=[selected,timeframe.value,chart.candle_end,chart.candles.length,last.time,last.open,last.high,last.low,last.close,chart.price,chart.atr_pct,chart.rvol,chart.turnover_window,JSON.stringify(chart.levels)].join('|');
    if(infoSignature!==chartInfoSignature){metrics.replaceChildren();levelsBox.replaceChildren();quickLevels.replaceChildren();for(const [key,value]of [['Цена закрытия',fmt(chart.price,8)],['ATR(14)',fmt(chart.atr_pct,3)+'%'],['RVOL · 5 / 20',fmt(chart.rvol)+'×'],['Оборот 60 свечей',turnover(chart.turnover_window)+' USDT']]){const c=el('div');c.append(el('span','muted',key),el('b','',value));metrics.append(c);}for(const [side,label]of [['support','Поддержка'],['resistance','Сопротивление']]){const group=el('div','level-group '+side),levels=chart.levels.filter(l=>l.side===side);group.append(el('h3','',label));if(!levels.length)line(group,'Подтверждённых зон в истории нет.');for(const [i,l]of levels.entries()){const row=el('div','level-item');row.append(el('b','',fmt(l.price,8)+' USDT'),el('span','muted',fmt(l.distance_pct,2)+'% от закрытия · экстремумов '+l.pivots));group.append(row);if(i===0)quickLevels.append(el('span',side,label+' '+fmt(l.price,8)));}levelsBox.append(group);}chartInfoSignature=infoSignature;}
-   const signature=infoSignature+'|'+chartHost.clientWidth+'|'+chartScale+'|'+displayedPositions(now);if(signature!==chartSignature){drawChart(chart);chartSignature=signature;}
+   const signature=infoSignature+'|'+chartHost.clientWidth+'|'+JSON.stringify(getView())+'|'+displayedPositions(now);if(signature!==chartSignature){drawChart(chart);chartSignature=signature;}
   }
   function createCompactAlert(source,r,v){const card=el('button','compact-alert'),body=el('div','compact-alert-body'),heading=el('div'),stamp=el('small','compact-alert-time'),symbol=el('b'),pill=el('span','signal-pill'),description=el('p');card.type='button';heading.append(symbol,pill);body.append(stamp,heading,description);card.append(coin(r.symbol),body,icon('arrow'));card.addEventListener('click',()=>{if(safeSymbol(r.symbol)){choose(r.symbol);panel.scrollIntoView({block:'center',behavior:'smooth'});}else go('alerts');});return {card,stamp,symbol,pill,description};}
-  function updateCompactAlert(item,source,r,v){const stamp=r.time||r.book_time;item.card.className='compact-alert '+v.tone;item.stamp.textContent=finite(stamp)?new Date(stamp*1000).toLocaleTimeString('ru-RU'):'—';item.symbol.textContent=r.symbol;item.pill.className='signal-pill '+v.tone;item.pill.textContent=v.kind==='entry'?v.direction:v.kind==='watch'?'Наблюдать':'WAIT';item.description.textContent=v.kind==='entry'?'Условия входа модели B выполнены':v.kind==='watch'?'Ожидание подтверждения · '+source:v.reasons[0]||v.label;}
+  function updateCompactAlert(item,source,r,v){const stamp=r.time||r.book_time;item.card.className='compact-alert '+v.tone;item.stamp.textContent=finite(stamp)?new Date(stamp*1000).toLocaleTimeString('ru-RU'):'—';item.symbol.textContent=r.symbol;item.pill.className='signal-pill '+v.tone;item.pill.textContent=v.kind==='entry'?v.direction:v.kind==='watch'?'Наблюдать':'WAIT';item.description.textContent=v.kind==='entry'?'Условия входа модели '+source+' выполнены':v.kind==='watch'?'Ожидание подтверждения · '+source:v.reasons[0]||v.label;}
   function renderAlerts(now){
    const rows=activeAlerts(now);summaryValues.alerts.textContent=String(rows.filter(x=>['entry','watch'].includes(x.view.kind)).length);const current=rows.filter(x=>x.view.kind!=='stale').slice(0,3),empty=alertList.querySelector('[data-empty]');
    if(!current.length){for(const item of compactAlertRows.values())item.card.remove();compactAlertRows.clear();if(!empty){const note=el('p','compact-alert empty','Нет свежих условий. Подтверждения появятся здесь после обновления данных.');note.dataset.empty='true';alertList.append(note);}return;}
@@ -177,7 +216,7 @@
   async function get(path){const res=await scope.labFetch(path);if(!res.ok)throw Error('HTTP '+res.status);return res.json();}
   async function listPoll(){try{const next=await get('/api/screener');snapshot=next;tickerError='';if(Array.isArray(snapshot.rows)&&snapshot.updated!==tickerStamp){tickerStamp=snapshot.updated;const symbols=new Set();for(const r of snapshot.rows){if(!safeSymbol(r.symbol)||!finite(r.price))continue;symbols.add(r.symbol);let h=priceHistory.get(r.symbol)||[];if(h.length&&snapshot.updated-h.at(-1)[0]>45)h=[];h.push([snapshot.updated,r.price]);priceHistory.set(r.symbol,h.slice(-40));}for(const s of priceHistory.keys())if(!symbols.has(s))priceHistory.delete(s);}render();}catch(e){tickerError='Скринер недоступен: '+e.message;render();}finally{setTimeout(listPoll,2000);}}
   async function detailPoll(repeat=true){const token=generation,s=selected,interval=timeframe.value;try{const results=await Promise.allSettled([get('/api/market-chart?symbol='+encodeURIComponent(s)+'&interval='+interval),get('/api/market-book?symbol='+encodeURIComponent(s))]);if(token!==generation)return;for(const [i,r]of results.entries()){if(i===0){if(r.status==='fulfilled'){chart=r.value;chartError='';}else chartError='Свечи недоступны: '+r.reason.message;}else{if(r.status==='fulfilled'){book=r.value;bookError='';if(book?.status==='ok'&&book.symbol===s&&book.updated!==previousBook?.updated){const now=Date.now()/1000;if(previousBook?.symbol===s&&previousBook.status==='ok'&&book.updated>previousBook.updated&&book.updated-previousBook.updated<=12&&fresh(book.updated,now,8)){const b=book.bands['0.001'],p=previousBook.bands['0.001'];bookChange={time:book.updated,seconds:book.updated-previousBook.updated,bid:b.bid-p.bid,ask:b.ask-p.ask};}else bookChange=null;previousBook=book;}}else bookError='Стакан недоступен: '+r.reason.message;}}render();}finally{if(repeat)setTimeout(detailPoll,2000);}}
-  async function botPoll(){try{const results=await Promise.allSettled(['/api/paper','/api/model-b','/api/research','/api/signals'].map(get)),states=results.map(r=>r.status==='fulfilled'?r.value:null);models=botModels(...states);bState=states[1];wState=states[3];render();}finally{setTimeout(botPoll,2000);}}
+  async function botPoll(){try{const results=await Promise.allSettled(['/api/paper','/api/model-b','/api/research','/api/signals'].map(get)),states=results.map(r=>r.status==='fulfilled'?r.value:null);models=botModels(...states);bState=states[1];researchState=states[2];wState=states[3];render();}finally{setTimeout(botPoll,2000);}}
   function choose(symbol){if(!safeSymbol(symbol))return;selected=symbol;focusSelected=true;try{localStorage.setItem('lab-selected-coin',symbol);}catch{}generation++;chart=null;book=null;previousBook=null;bookChange=null;chartError='';bookError='';chartSignature='';chartInfoSignature='';bookSignature='';render();detailPoll(false);}
   search.addEventListener('input',render);preset.addEventListener('change',render);minimum.addEventListener('change',render);sorting.addEventListener('change',()=>{mobileSort.value=sorting.value;render();});mobileSort.addEventListener('change',()=>{sorting.value=mobileSort.value;render();});
   expand.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('lab-symbol',{detail:selected})));
