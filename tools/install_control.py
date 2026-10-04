@@ -73,29 +73,42 @@ def safe(states, now):
 
 
 def upgrade_controller(files, saved, revision, owner):
-    """The one approved migration changes the broker only, never model wrappers/state."""
+    """Upgrade broker/loader only; live PAPER processes and their state stay intact."""
     manager = CODE / 'manager.py'
     remote = CODE / 'remote.py'
-    old_sha = '7ce07edd39e6adcd5c93ea942f4231bf2420b6531ef30ba60f63b1691de485a1'
-    if (set(saved.get('files', {})) != {str(p) for p in files if p != remote} or
-            saved['files'].get(str(manager)) != old_sha or remote.exists()):
+    launcher = CODE / 'launcher.py'
+    permitted = {manager, remote, launcher}
+    known = {str(path) for path in files}
+    saved_files = saved.get('files', {})
+    optional_remote = known - {str(remote)}
+    if set(saved_files) not in (known, optional_remote):
         raise RuntimeError('Эта версия управления требует отдельной миграции')
     for path, body in files.items():
         if path.is_symlink() or any(p.is_symlink() for p in path.parents):
             raise RuntimeError('Symlink: ' + str(path))
-        if path != remote and deploy.digest(path) != saved['files'][str(path)]:
+        saved_hash = saved_files.get(str(path))
+        if saved_hash is None:
+            if path != remote or path.exists():
+                raise RuntimeError('Эта версия управления требует отдельной миграции')
+            continue
+        if deploy.digest(path) != saved_hash:
             raise RuntimeError('Установленный файл изменён: ' + str(path))
-        if path not in (manager, remote) and hashlib.sha256(body).hexdigest() != saved['files'][str(path)]:
+        if path not in permitted and hashlib.sha256(body).hexdigest() != saved_hash:
             raise RuntimeError('Миграция не должна менять обёртки моделей: ' + str(path))
     if any(deploy.active('trading-test-' + engine + '.service') for engine in ('freqtrade', 'jesse', 'hummingbot')):
         raise RuntimeError('Дождитесь окончания внешнего теста')
     backup = Path(tempfile.mkdtemp(prefix='pc-control-backup-', dir='/opt'))
-    shutil.copy2(manager, backup/'manager.py')
+    previous = {}
+    for path in permitted:
+        previous[path] = path.read_bytes() if path.exists() else None
+        if previous[path] is not None:
+            (backup / path.name).write_bytes(previous[path])
     shutil.copy2(MANIFEST, backup/'installed.json')
     was_active = deploy.active('trading-control.service')
     try:
         deploy.system('stop', 'trading-control.service')
-        deploy.atomic(manager, files[manager]); deploy.atomic(remote, files[remote])
+        for path in permitted:
+            deploy.atomic(path, files[path])
         deploy.atomic(MANIFEST, json.dumps(dict(revision=revision, files={str(p):hashlib.sha256(b).hexdigest() for p,b in files.items()})).encode(), 0o640)
         os.chown(MANIFEST, 0, owner.pw_gid)
         deploy.system('start', 'trading-control.service')
@@ -113,14 +126,17 @@ def upgrade_controller(files, saved, revision, owner):
             time.sleep(.5)
     except BaseException:
         deploy.system('stop', 'trading-control.service')
-        deploy.atomic(manager, (backup/'manager.py').read_bytes())
-        remote.unlink(missing_ok=True)
+        for path, body in previous.items():
+            if body is None:
+                path.unlink(missing_ok=True)
+            else:
+                deploy.atomic(path, body)
         deploy.atomic(MANIFEST, (backup/'installed.json').read_bytes(), 0o640)
         os.chown(MANIFEST, 0, owner.pw_gid)
         if was_active:
             deploy.system('start', 'trading-control.service')
         raise
-    print('Исполнитель ПК поддерживается. Обновлён только контроллер; A/B/C/D не перезапускались.')
+    print('Обновлены контроллер и загрузчик PAPER-настроек; A/B/C/D не перезапускались.')
     print('Резервная копия:', backup)
 
 
