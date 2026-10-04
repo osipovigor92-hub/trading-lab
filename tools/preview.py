@@ -25,7 +25,9 @@ class DemoControl:
 
     def __init__(self):
         self.lock = threading.RLock()
-        self.models = {m: dict(phase='running', generation=0) for m in 'ABCD'}
+        self.models = {m: dict(phase='running', generation=0,
+                               settings=dict(capital=600.,notional=100.,max_loss=18.),archived=0)
+                       for m in 'ABCD'}
         self.engines = {e: dict(phase='idle' if e != 'hummingbot' else 'not_installed',
                               generation=0, runs=[]) for e in ('freqtrade', 'hummingbot', 'jesse')}
         self.pc_engines = {e: dict(phase='idle' if e != 'hummingbot' else 'not_installed',
@@ -56,11 +58,14 @@ class DemoControl:
                 source = data['/api/paper'] if model == 'A' else data['/api/model-b'] if model == 'B' else data['/api/research']['models'][model]
                 source['phase'] = c['phase']
                 position = source.get('position')
+                settings=c['settings']
                 rows.append(dict(id=model, kind='model', installed=True, phase=c['phase'],
                     generation=c['generation'], fresh=True, equity=source['equity'],
                     closed=source['closed'], position=position, pending=False,
                     reason='ДЕМОНСТРАЦИЯ · реальная модель не изменяется',
-                    actions=dict(start=c['phase']=='paused', stop=c['phase']!='paused', restart=True)))
+                    experiment=dict(group='CD' if model in 'CD' else model,id='DEMO-'+model+'-20261003T120000-1234abcd',created=now,settings=settings,archived=c['archived']),
+                    new_run_note='готов к новому тесту; прошлый журнал будет сохранён' if c['phase']=='paused' else 'сначала нажми «Отключить», чтобы запретить новые входы',
+                    actions=dict(start=c['phase']=='paused', stop=c['phase']!='paused', restart=True,new_run=c['phase']=='paused')))
             engines = []
             for engine, c in self.engines.items():
                 local=self.engine_item(engine,c,now,'vds')
@@ -72,14 +77,21 @@ class DemoControl:
 
     def command(self, request):
         with self.lock:
-            if not isinstance(request, dict) or set(request) not in ({'target', 'action', 'generation'}, {'target', 'action', 'generation', 'execution'}):
+            if not isinstance(request, dict):
+                raise ValueError('Недопустимая команда')
+            new_run=request.get('action')=='new_run'
+            fields={'target','action','generation','experiment'} if new_run else {'target','action','generation'}
+            fields_ok=set(request)==fields if new_run else set(request) in (fields,fields|{'execution'})
+            if not fields_ok:
                 raise ValueError('Недопустимая команда')
             target, action, generation = (request[k] for k in ('target', 'action', 'generation'))
             execution=request.get('execution','vds')
-            if target not in (*self.models, *self.engines) or action not in ('start', 'stop', 'restart'):
+            if target not in (*self.models, *self.engines) or action not in ('start', 'stop', 'restart', 'new_run'):
                 raise ValueError('Недопустимая команда')
             if execution not in ('pc','vds') or target in self.models and 'execution' in request:
                 raise ValueError('Недопустимый исполнитель')
+            if action=='new_run' and target not in self.models:
+                raise ValueError('Новый тест доступен только для моделей')
             c = self.models[target] if target in self.models else (self.pc_engines if execution=='pc' else self.engines)[target]
             if type(generation) is not int or generation != c['generation']:
                 raise ValueError('Состояние изменилось. Обновите карточку')
@@ -90,7 +102,12 @@ class DemoControl:
             c['generation'] += 1
             now=time.time()
             if target in self.models:
-                c.update(phase='paused' if action=='stop' else 'warming', until=0 if action=='stop' else now+2)
+                if action=='new_run':
+                    settings=request.get('experiment',{})
+                    if not all(isinstance(settings.get(key),(int,float)) for key in ('capital','notional','max_loss')) or not 10<=settings['capital']<=1e6 or not 1<=settings['notional']<=settings['capital'] or not 0<settings['max_loss']<settings['capital']:
+                        raise ValueError('Некорректные PAPER-настройки')
+                    c.update(settings={key:float(settings[key]) for key in ('capital','notional','max_loss')},archived=c['archived']+1,phase='warming',until=now+2)
+                else:c.update(phase='paused' if action=='stop' else 'warming', until=0 if action=='stop' else now+2)
             elif action=='stop':
                 c.update(phase='cancelled', until=0)
                 c['runs'].append(dict(id='DEMO-'+str(c['generation']), started=c.get('started', now),
