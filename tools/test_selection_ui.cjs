@@ -2,6 +2,7 @@
 const {chromium}=require('playwright');
 const {spawn}=require('node:child_process'),path=require('node:path'),fs=require('node:fs'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18792;
+async function until(predicate){const end=Date.now()+15000;while(Date.now()<end){if(await predicate())return;await new Promise(r=>setTimeout(r,100));}throw Error('Selection condition was not met within 15 seconds');}
 (async()=>{
  const server=spawn(process.env.PYTHON||'python3',[path.join(__dirname,'preview.py'),'--port',String(port)],{stdio:'ignore'});let browser;
  try{
@@ -19,7 +20,7 @@ const root=path.resolve(__dirname,'..'),port=18792;
     }catch{try{await route.abort();}catch{}}
    });
    await page.goto(`http://127.0.0.1:${port}/`);
-   await page.waitForFunction(()=>document.querySelectorAll('.selection-row[data-state=passed]').length===4);
+   await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
    assert.equal(await page.locator('.selection-row[data-state=rejected]').count(),2);
    const btc=page.locator('#screener-table tbody tr',{has:page.getByRole('button',{name:'BTCUSDT',exact:true})});
    await btc.evaluate(el=>el.dataset.kept='yes');await btc.locator('.selection-row>summary').click();
@@ -32,7 +33,7 @@ const root=path.resolve(__dirname,'..'),port=18792;
    await page.screenshot({path:path.join(root,'artifacts',`selection-${width}.png`),fullPage:true});
    await page.waitForTimeout(2300);assert.equal(await btc.getAttribute('data-kept'),'yes');assert.equal(await btc.locator('.selection-row').getAttribute('open'),'');
    await page.getByLabel('Состояние отбора',{exact:true}).selectOption('passed');
-   await page.waitForFunction(()=>document.querySelectorAll('#screener-table .coin-button').length===4);
+   await until(async()=>await page.locator('#screener-table .coin-button').count()===4);
    assert.equal(await page.locator('.selection-row[data-state=rejected]').count(),0);
    await page.getByLabel('Состояние отбора',{exact:true}).selectOption('all');
    await page.getByLabel('Спред до, %',{exact:true}).fill('-1');await page.getByRole('button',{name:'Применить отбор',exact:true}).click();
@@ -42,19 +43,19 @@ const root=path.resolve(__dirname,'..'),port=18792;
    assert.match(await page.locator('.selection-message').textContent(),/Минимум/);
    await page.getByRole('button',{name:'Сбросить пороги',exact:true}).click();
    await page.getByLabel('Оборот 24ч от, млн USDT',{exact:true}).fill('500');await page.getByRole('button',{name:'Применить отбор',exact:true}).click();
-   await page.waitForFunction(()=>document.querySelectorAll('.selection-row[data-state=rejected]').length===6);
+   await until(async()=>await page.locator('.selection-row[data-state=rejected]').count()===6);
    await page.reload();await page.locator('.selection-panel>summary').click();
    assert.equal(await page.getByLabel('Оборот 24ч от, млн USDT',{exact:true}).inputValue(),'500');
    await page.getByRole('button',{name:'Сбросить пороги',exact:true}).click();
-   await page.waitForFunction(()=>document.querySelectorAll('.selection-row[data-state=passed]').length===4);
-   mode='pending';await page.waitForFunction(()=>[...document.querySelectorAll('.selection-reasons')].some(e=>e.textContent.includes('Снимки стакана: 3 / 5')));
+   await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
+   mode='pending';await until(async()=>await page.locator('.selection-reasons').filter({hasText:'Снимки стакана: 3 / 5'}).count()>0);
    assert.match(await btc.locator('.selection-reasons').textContent(),/Снимки стакана: 3 \/ 5/);
-   mode='stale';await page.waitForFunction(()=>[...document.querySelectorAll('.selection-reasons')].some(e=>e.textContent.includes('Данные проверки устарели')));
+   mode='stale';await until(async()=>await page.locator('.selection-reasons').filter({hasText:'Данные проверки устарели'}).count()>0);
    assert.equal(await page.locator('.selection-row[data-state=passed]').count(),0);
-   mode='html';await page.waitForFunction(()=>document.querySelector('.selection-summary')?.textContent.includes('Не удалось обновить'));
+   mode='html';await until(async()=> (await page.locator('.selection-summary').textContent()).includes('Не удалось обновить'));
    assert.equal(await page.locator('.selection-row[data-state=passed]').count(),0);
-   mode='normal';await page.waitForFunction(()=>document.querySelectorAll('.selection-row[data-state=passed]').length===4);
-   await page.getByLabel('Поиск монеты',{exact:true}).fill('link');await page.waitForFunction(()=>document.querySelectorAll('#screener-table .coin-button').length===1);
+   mode='normal';await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
+   await page.getByLabel('Поиск монеты',{exact:true}).fill('link');await until(async()=>await page.locator('#screener-table .coin-button').count()===1);
    assert.equal(await page.locator('#screener-table .coin-button').textContent(),'LINKUSDT');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    assert.deepEqual(errors,[],'browser errors at '+width);await page.unrouteAll({behavior:'wait'});await page.close();
