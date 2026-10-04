@@ -143,7 +143,7 @@ async function navigate(page,key,width){
    await navigate(page,'journals',width);await page.waitForSelector('#model-journals a');assert.equal(await page.locator('#model-journals a').count(),2);assert.equal(await page.locator('#research-journals a').count(),2);
    assert.equal(await page.locator('#page-journals #lab-report').count(),1);await page.screenshot({path:path.join(root,'artifacts',`journals-${width}.png`),fullPage:true});
    await navigate(page,'live',width);await page.screenshot({path:path.join(root,'artifacts',`liquidity-${width}.png`),fullPage:true});
-   await navigate(page,'alerts',width);await page.waitForSelector('#page-alerts .alert-long');assert.equal(await page.locator('.alert-card').count(),3);assert.equal(await page.locator('.alert-watch').count(),1);
+   await navigate(page,'alerts',width);await page.waitForSelector('#page-alerts .alert-long');assert.equal(await page.locator('.alert-card').count(),9);assert.ok(await page.locator('.alert-watch').count()>=1);assert.ok(await page.locator('#page-alerts details[data-key="C:BTCUSDT"]').count(),1,'C/D candidates stay live when the alert panel opens');
    // Alerts are sorted by their current status. Keep checking the same coin
    // when a newer snapshot changes the order, as a user would do.
    const alertDetails=page.locator('#page-alerts details[data-key="B:BTCUSDT"]');

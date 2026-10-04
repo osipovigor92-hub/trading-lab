@@ -1,7 +1,10 @@
 """Lifecycle wrappers for the imported, hash-checked engines. Original files stay intact."""
 import ast
 import importlib.util
+import json
+import math
 from pathlib import Path
+import re
 import sys
 import time
 from runtime import Runtime, blocked_cycle
@@ -9,6 +12,57 @@ from runtime import Runtime, blocked_cycle
 SOURCES = {'A': Path('/opt/scalp-paper/paper.py'),
            'B': Path('/opt/scalp-model-b/model_b.py'),
            'CD': Path('/opt/trading-research/engine.py')}
+EXPERIMENTS = Path('/var/lib/trading-control/experiments')
+
+
+def group(model):
+    return 'CD' if model == 'CD' else model
+
+
+def configured_experiment(model):
+    """Load only the manager-written, bounded PAPER settings and fail closed on damage."""
+    path = EXPERIMENTS / (group(model) + '.json')
+    if path.is_symlink() or any(parent.is_symlink() for parent in (path.parent,)):
+        raise RuntimeError('Недопустимая ссылка в настройках PAPER-теста')
+    if not path.exists():
+        return None
+    try:
+        record = json.loads(path.read_text())
+        if (not isinstance(record, dict) or set(record) != {'version', 'id', 'created', 'settings'} or
+                record['version'] != 1 or not isinstance(record['id'], str) or
+                not re.fullmatch(r'[A-Z]{1,2}-[0-9T-]{15,32}-[0-9a-f]{8}', record['id']) or
+                not isinstance(record['created'], (int, float)) or isinstance(record['created'], bool) or
+                not isinstance(record['settings'], dict) or set(record['settings']) != {'capital', 'notional', 'max_loss'}):
+            raise ValueError('Некорректный формат')
+        settings = {}
+        for key in ('capital', 'notional', 'max_loss'):
+            value = record['settings'][key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError('Некорректное число')
+            settings[key] = float(value)
+        if not 10 <= settings['capital'] <= 1_000_000 or not 1 <= settings['notional'] <= settings['capital'] or not 0 < settings['max_loss'] < settings['capital']:
+            raise ValueError('Значение вне границ')
+        return dict(id=record['id'], created=float(record['created']), settings=settings)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise RuntimeError('Настройки PAPER-теста недоступны: ' + str(exc)[:120])
+
+
+def configure(model, namespace):
+    record = configured_experiment(model)
+    key = 'C' if model == 'B' else 'CONFIG'
+    if record:
+        updated = dict(namespace[key])
+        updated.update(record['settings'])
+        namespace[key] = updated
+    namespace['_LAB_EXPERIMENT'] = record
+    return record
+
+
+def stamp_experiment(state, record):
+    if record:
+        state['experiment'] = dict(id=record['id'], created=record['created'],
+                                   settings=dict(record['settings']))
+    return state
 
 
 def patch_a(source):
@@ -40,9 +94,20 @@ def load(model, path=None):
     else:
         code = compile(path.read_text(), str(path), 'exec')
     exec(code, ns)
+    record = configure(model, ns)
+    if model in ('B', 'CD'):
+        initial = ns['initial']
+        if model == 'B':
+            def managed_initial():
+                return stamp_experiment(initial(), record)
+        else:
+            def managed_initial(now):
+                return stamp_experiment(initial(now), record)
+        ns['initial'] = managed_initial
     if model == 'A':
         save = ns['save']
         def managed_save(s):
+            stamp_experiment(s, record)
             ns['_CONTROL'].decorate(s)
             save(s)
         ns['save'] = managed_save
@@ -62,6 +127,7 @@ def load(model, path=None):
         ns['cycle'] = managed_cycle
         def managed_atomic(path, s):
             if path == ns['STATE']:
+                stamp_experiment(s, record)
                 if s.get('updated') != s.get('feed_updated'):
                     s['feed_phase'] = 'halted' if s.get('phase') == 'halted' else 'waiting'
                 ctl.prepare(s)
@@ -87,6 +153,7 @@ def load(model, path=None):
             return dict(source, phase=source.get('feed_phase', source.get('phase'))) if isinstance(source, dict) else {}
         ns['evaluate'] = lambda model, source, r, now: evaluate(model, feed(source), r, now)
         def managed_cycle(state, source, now):
+            stamp_experiment(state, record)
             olds, skipped = {}, set()
             for model, s in state['models'].items():
                 ctl = controls[model]

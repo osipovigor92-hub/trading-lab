@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {filterRows,positionView,fresh,domain,botModels,chartBars}=require('../src/trading-panel/screener.js');
+const {filterRows,qualityScore,positionView,fresh,domain,botModels,chartBars}=require('../src/trading-panel/screener.js');
 const rows=[{symbol:'BTCUSDT',turnover:1e8,spread:.01,range24:2,change:4},{symbol:'ONDOUSDT',turnover:3e7,spread:.02,range24:8,change:-5},{symbol:'THINUSDT',turnover:1e6,spread:.15,range24:20,change:10}];
 test('screeners distinguish activity, tight spread, movers and bot universe',()=>{
  assert.deepEqual(filterRows(rows,{preset:'active'}).map(r=>r.symbol),['ONDOUSDT']);
@@ -8,6 +8,8 @@ test('screeners distinguish activity, tight spread, movers and bot universe',()=
  assert.deepEqual(filterRows(rows,{preset:'bots',bots:new Set(['BTCUSDT'])}).map(r=>r.symbol),['BTCUSDT']);
  assert.deepEqual(filterRows(rows,{search:'ondo',minimum:5e7}),[]);
  assert.deepEqual(filterRows(rows,{sort:'range24'}).map(r=>r.symbol),['THINUSDT','ONDOUSDT','BTCUSDT']);
+ assert.deepEqual(filterRows(rows,{sort:'quality'}).map(r=>r.symbol),['BTCUSDT','ONDOUSDT','THINUSDT']);
+ assert.ok(qualityScore(rows[0])>qualityScore(rows[2]),'liquidity/spread quality is not a price forecast');
 });
 test('position notional and stale halted position remain separate',()=>{
  const s={phase:'running',updated:100,position:{symbol:'BTCUSDT',side:1,quantity:2,entry:100,opened:90}};
@@ -28,4 +30,14 @@ test('chart scale changes the visible candle range without changing source data'
  assert.equal(chartBars(bars,390,1).length,45);
  assert.equal(chartBars(bars,390,3).length,20);
  assert.equal(bars.length,180);
+});
+test('chart window pans back in history and sort direction flips',()=>{
+ const bars=Array.from({length:180},(_,i)=>({time:i,low:1,high:2}));
+ assert.equal(chartBars(bars,1000,1).at(-1).time,179);
+ assert.equal(chartBars(bars,1000,1,10).at(-1).time,169);
+ assert.equal(chartBars(bars,1000,1,999).at(-1).time,89);
+ assert.equal(chartBars(bars,1000,1,-5).at(-1).time,179);
+ assert.deepEqual(filterRows(rows,{sort:'turnover',dir:'asc'}).map(r=>r.symbol),['THINUSDT','ONDOUSDT','BTCUSDT']);
+ assert.deepEqual(filterRows(rows,{sort:'change'}).map(r=>r.symbol),['THINUSDT','BTCUSDT','ONDOUSDT']);
+ assert.deepEqual(filterRows(rows,{sort:'quality',dir:'asc'}).map(r=>r.symbol),['THINUSDT','ONDOUSDT','BTCUSDT']);
 });

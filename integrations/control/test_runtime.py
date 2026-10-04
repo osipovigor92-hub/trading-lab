@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 import runtime
+import launcher
 from runtime import Runtime, blocked_cycle
 from launcher import load, patch_a
 
@@ -73,6 +74,16 @@ class LifecycleTests(unittest.TestCase):
         for kind, file in [('A','src/scalp-paper/paper.py'),('B','src/scalp-model-b/model_b.py'),('CD','integrations/research/engine.py')]:
             p=REPO/file; before=p.read_bytes(); model=load(kind,p)
             self.assertTrue(callable(model['main'])); self.assertEqual(before,p.read_bytes())
+    def test_manager_written_budget_is_applied_only_to_a_fresh_paper_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d);record=dict(version=1,id='B-20261003T120000-1234abcd',created=1000.,settings=dict(capital=300.,notional=75.,max_loss=9.))
+            (folder/'B.json').write_text(json.dumps(record))
+            with patch.object(launcher,'EXPERIMENTS',folder):
+                b=load('B',REPO/'src/scalp-model-b/model_b.py');state=b['initial']()
+            self.assertEqual(state['config']['capital'],300.)
+            self.assertEqual(state['config']['notional'],75.)
+            self.assertEqual(state['config']['max_loss'],9.)
+            self.assertEqual(state['experiment']['id'],record['id'])
     def test_cd_pause_is_independent_and_b_feed_can_be_paused(self):
         cd=load('CD',REPO/'integrations/research/engine.py'); s=cd['initial'](100)
         self.request('stop',model='C'); self.request('start',model='D')

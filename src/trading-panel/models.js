@@ -27,7 +27,7 @@
  function buttons(item,current=true){
   const a=item?.actions||{},off=['paused','stopped'].includes(item?.phase),busy=item?.busy||!current;
   if(item?.kind==='engine')return {start:!busy&&a.start===true,stop:!busy&&a.stop===true,restart:!busy&&a.restart===true&&item.phase!=='idle'};
-  return {start:!busy&&a.start===true&&(off||['draining','pending','stale','unknown'].includes(item.phase)),stop:!busy&&a.stop===true&&!off&&!(item.pending&&item.requested==='stop'),restart:!busy&&a.restart===true&&!item.pending};
+  return {start:!busy&&a.start===true&&(off||['draining','pending','stale','unknown'].includes(item.phase)),stop:!busy&&a.stop===true&&!off&&!(item.pending&&item.requested==='stop'),restart:!busy&&a.restart===true&&!item.pending,new_run:!busy&&a.new_run===true&&!item.pending};
  }
  const api={buttons,names,testSlot,executor,controlJson};if(typeof module!=='undefined')module.exports=api;
  if(typeof document==='undefined')return;
@@ -42,7 +42,7 @@
   heading.firstChild.append(make('small','eyebrow','УПРАВЛЕНИЕ / PAPER'),make('h2','','Модели и тестовые боты'));
   const connection=make('p','muted','Подключаем управление…');connection.setAttribute('role','status');heading.append(connection);
   const modelsBox=make('section','box models-section');modelsBox.id='model-controls';modelsBox.append(make('h3','','Текущие модели A / B / C / D'));
-  modelsBox.append(make('p','muted','Отключение запрещает новые входы. Открытая PAPER-позиция завершается по прежним правилам. Перезапуск сохраняет капитал и журнал, затем заново накапливает условия входа.'));
+  modelsBox.append(make('p','muted','Отключение запрещает новые входы. Открытая PAPER-позиция завершается по прежним правилам. Перезапуск сохраняет капитал и журнал. Для другого бюджета создай новый PAPER-тест: прежний баланс, позиции и журнал останутся в архиве.'));
   const modelGrid=make('div','managed-grid');modelsBox.append(modelGrid);
   const engineBox=make('section','box models-section');engineBox.id='engine-controls';engineBox.append(make('h3','','Тесты Freqtrade / Hummingbot / Jesse'));
   const resources=make('p','muted','Один внешний тест за раз.');engineBox.append(resources);
@@ -66,6 +66,21 @@
    for(const [action,label]of Object.entries(kind==='engine'?{start:'Запустить тест',stop:'Остановить',restart:'Повторить'}:{start:'Включить',stop:'Отключить',restart:'Перезапустить'})){
     const b=make('button',action==='start'?'control-primary':'control-secondary',label);b.type='button';b.disabled=true;b.setAttribute('aria-label',label+' '+title.textContent);b.dataset.action=action;b.addEventListener('click',()=>command(id,action));actions.append(b);buttons[action]=b;
    }box.append(actions);
+   let paperSettings,paperFields,paperNote,newRunButton,paperDirty=false;
+   if(kind==='model'){
+    paperSettings=make('section','paper-settings');paperSettings.append(make('h5','','Новый PAPER-тест'));
+    paperSettings.append(make('p','muted','Параметры применяются только к новому прогону. Текущий баланс и журнал не переписываются.'));
+    const fieldGrid=make('div','paper-settings-grid');paperFields={};
+    for(const [key,label,min,step] of [['capital','Бюджет, USDT','10','1'],['notional','Вход, USDT','1','1'],['max_loss','Лимит потерь, USDT','0.01','0.01']]){
+     const labelNode=make('label','paper-setting');labelNode.append(make('span','',label));const input=make('input');input.type='number';input.inputMode='decimal';input.min=min;input.step=step;input.required=true;input.setAttribute('aria-label',label+' для модели '+id);input.addEventListener('input',()=>{paperDirty=true;paperNote.textContent='Параметры изменены. Они не затронут текущий прогон.';});labelNode.append(input);fieldGrid.append(labelNode);paperFields[key]=input;
+    }
+    paperSettings.append(fieldGrid);
+    const presets=make('div','paper-presets');presets.append(make('span','muted','Бюджет:'));
+    for(const value of [100,300,600,1000]){const preset=make('button','paper-preset',value+' USDT');preset.type='button';preset.addEventListener('click',()=>{paperFields.capital.value=String(value);if(Number(paperFields.notional.value)>value||!paperFields.notional.value)paperFields.notional.value=String(Math.min(100,value));if(Number(paperFields.max_loss.value)>=value||!paperFields.max_loss.value)paperFields.max_loss.value=String(Math.max(.5,Math.min(18,value*.03)));paperDirty=true;paperNote.textContent='Выбран бюджет '+value+' USDT. Проверь размер входа и лимит потерь.';});presets.append(preset);}
+    paperSettings.append(presets);
+    paperNote=make('p','paper-settings-note');paperNote.setAttribute('role','status');paperSettings.append(paperNote);
+    newRunButton=make('button','new-run-button','Сохранить и начать новый тест');newRunButton.type='button';newRunButton.disabled=true;newRunButton.addEventListener('click',()=>command(id,'new_run'));paperSettings.append(newRunButton);box.append(paperSettings);
+   }
    const response=make('p','control-response');response.setAttribute('role','status');box.append(response);
    let runs, runBody, readiness, selector, prepareCode, prepareNote;
    if(kind==='engine'){
@@ -86,7 +101,7 @@
    }else{
     const a=make('button','managed-journal','Открыть журнал сделок →');a.type='button';a.addEventListener('click',()=>{document.dispatchEvent(new CustomEvent('lab-navigate',{detail:'journals'}));document.getElementById(id==='C'||id==='D'?'research-journals':'model-journals')?.scrollIntoView({block:'start',behavior:'smooth'});});box.append(a);
    }
-   const value={box,badge,metrics,position,reason,buttons,response,runBody,readiness,selector,prepareCode,prepareNote,item:{id,kind,actions:{}}};cards.set(id,value);(kind==='engine'?engineGrid:modelGrid).append(box);
+   const value={box,badge,metrics,position,reason,buttons,response,runBody,readiness,selector,prepareCode,prepareNote,paperSettings,paperFields,paperNote,newRunButton,paperDirty,item:{id,kind,actions:{}}};cards.set(id,value);(kind==='engine'?engineGrid:modelGrid).append(box);
   }
   for(const id of ['A','B','C','D'])card(id,'model');for(const id of ['freqtrade','hummingbot','jesse'])card(id,'engine');
   const metric=(parent,label,value,cls='')=>{const n=make('div','managed-metric');n.append(make('span','muted',label),make('strong',cls,value));parent.append(n);};
@@ -107,17 +122,26 @@
     if(current&&item&&c.pendingCommand){
      const q=c.pendingCommand,failed=state.audit.find(e=>e.id===q.id&&e.outcome==='error');
      const delivered=state.audit.some(e=>e.id===q.id&&['delivered','applied'].includes(e.outcome));
-     const confirmed=item.kind==='model'?item.generation===q.generation&&!item.pending&&item.fresh:
+     const confirmed=q.action==='new_run'?
+       delivered&&item.generation===q.generation&&item.experiment?.id&&item.experiment.id!==q.previousExperiment:
+       item.kind==='model'?item.generation===q.generation&&!item.pending&&item.fresh:
        delivered&&(q.action==='stop'?['completed','cancelled','failed','interrupted'].includes(item.phase):['running','completed','failed'].includes(item.phase));
      if(failed){c.response.textContent=failed.message||'Команда не выполнена';c.response.className='control-response negative';c.pendingCommand=null;}
-     else if(confirmed){c.response.textContent=['failed','halted'].includes(item.phase)?item.reason||'Движок остановлен по ошибке':item.kind==='model'?({start:'Включение подтверждено.',stop:'Отключение подтверждено.',restart:'Перезапуск подтверждён.'}[q.action]):({start:'Запуск теста подтверждён.',stop:'Остановка теста подтверждена.',restart:'Повтор теста подтверждён.'}[q.action]);c.response.className='control-response '+(['failed','halted'].includes(item.phase)?'negative':'positive');c.pendingCommand=null;}
+     else if(confirmed){c.response.textContent=q.action==='new_run'?'Новый PAPER-тест запущен. Предыдущий журнал сохранён в архиве.':['failed','halted'].includes(item.phase)?item.reason||'Движок остановлен по ошибке':item.kind==='model'?({start:'Включение подтверждено.',stop:'Отключение подтверждено.',restart:'Перезапуск подтверждён.'}[q.action]):({start:'Запуск теста подтверждён.',stop:'Остановка теста подтверждена.',restart:'Повтор теста подтверждён.'}[q.action]);c.response.className='control-response '+(['failed','halted'].includes(item.phase)?'negative':'positive');if(q.action==='new_run')c.paperDirty=false;c.pendingCommand=null;}
     }
     const phase=current&&item?item.phase:'unknown',active=current&&['running','completed'].includes(phase);
     c.badge.textContent=current&&item?(names[phase]||phase):'Нет управления';c.badge.className='managed-badge '+(active?'is-on':['failed','halted','interrupted','lost'].includes(phase)?'is-error':['draining','pending','warming','cancelling'].includes(phase)?'is-pending':'');
     c.box.classList.toggle('is-working',phase==='running'&&current);c.metrics.replaceChildren();
     if(c.item.kind==='model'){
-     metric(c.metrics,'Капитал, USDT',fmt(item?.equity));metric(c.metrics,'Закрыто сделок',fmt(item?.closed,0));
+     const settings=item?.experiment?.settings||{};
+     metric(c.metrics,'Бюджет, USDT',fmt(settings.capital));metric(c.metrics,'Оценка, USDT',fmt(item?.equity));metric(c.metrics,'Закрыто сделок',fmt(item?.closed,0));
      c.position.textContent=item?.position?'Позиция '+item.position.symbol+' · '+(item.position.side===1?'LONG':'SHORT')+(item.fresh?'':' · оценка устарела'):item?.fresh?'Открытой позиции нет':'Состояние позиции не подтверждено';
+     if(c.paperFields){
+      const defaults={capital:settings.capital??item?.equity??600,notional:settings.notional??100,max_loss:settings.max_loss??18};
+      if(!c.paperDirty)for(const [key,value]of Object.entries(defaults))c.paperFields[key].value=Number.isFinite(value)?String(value):'';
+      c.paperNote.textContent=c.paperDirty?c.paperNote.textContent||'Параметры изменены. Они не затронут текущий прогон.':item?.new_run_note||'Сначала отключи модель, затем создай новый тест.';
+      c.paperSettings.classList.toggle('is-ready',!!item?.actions?.new_run);
+     }
     }else{
      const onPC=item?.execution==='pc';
      c.prepareCode.textContent=onPC?'python3 ~/trading-lab-pc/tools/worker_setup.py prepare --engine '+id+(id==='hummingbot'?' --python /home/USER/hummingbot-env/bin/python':' --install'):setupCommands[id];
@@ -140,17 +164,31 @@
     c.reason.textContent=slot.occupiedBy&&current?'Заверши тест '+(engineNames[slot.occupiedBy]||slot.occupiedBy)+' перед запуском другого движка.':item?.reason||(!current?'Для кнопок нужна доступная служба управления.':'');
     if(item?.kind==='engine'&&item?.installed&&!item.memory_ok)c.reason.className='managed-reason negative';else c.reason.className='managed-reason muted';
     const enabled=buttons(c.item,current&&!inflight.has(id));for(const [action,b]of Object.entries(c.buttons))b.disabled=!enabled[action];
+    if(c.newRunButton){c.newRunButton.disabled=!enabled.new_run;for(const input of Object.values(c.paperFields))input.disabled=!current||inflight.has(id);}
    }
-   log.replaceChildren();for(const e of state?.audit||[]){const r=make('div','control-event');r.append(make('time','muted',date(e.time)),make('span','',e.target+' · '+({start:'Включение',stop:'Отключение',restart:'Перезапуск'}[e.action]||e.action)+' · '+({accepted:'принято',delivered:'передано движку',applied:'подтверждено движком',error:'ошибка'}[e.outcome]||e.outcome)),make('small','muted',e.message||''));log.append(r);}if(!log.childElementCount)log.append(make('p','muted','Команд пока нет.'));
+   log.replaceChildren();for(const e of state?.audit||[]){const r=make('div','control-event');r.append(make('time','muted',date(e.time)),make('span','',e.target+' · '+({start:'Включение',stop:'Отключение',restart:'Перезапуск',new_run:'Новый прогон'}[e.action]||e.action)+' · '+({accepted:'принято',delivered:'передано движку',applied:'подтверждено движком',error:'ошибка'}[e.outcome]||e.outcome)),make('small','muted',e.message||''));log.append(r);}if(!log.childElementCount)log.append(make('p','muted','Команд пока нет.'));
+  }
+  function paperExperiment(c){
+   const values={};for(const key of ['capital','notional','max_loss'])values[key]=Number(c.paperFields?.[key]?.value);
+   if(!Number.isFinite(values.capital)||values.capital<10||values.capital>1000000)throw Error('Бюджет: от 10 до 1 000 000 USDT.');
+   if(!Number.isFinite(values.notional)||values.notional<1||values.notional>values.capital)throw Error('Размер входа: от 1 USDT до бюджета.');
+   if(!Number.isFinite(values.max_loss)||values.max_loss<=0||values.max_loss>=values.capital)throw Error('Лимит потерь должен быть больше нуля и меньше бюджета.');
+   return values;
   }
   async function command(id,action){
-   const c=cards.get(id),slot=testSlot(c.item,enginesNow());if(inflight.has(id)||!buttons(slot.item,!!state&&Date.now()/1000-state.updated<=8)[action])return;
+   const c=cards.get(id),slot=testSlot(c.item,enginesNow()),available=buttons(slot.item,!!state&&Date.now()/1000-state.updated<=8);if(inflight.has(id)||!available[action])return;
+   let experiment;
+   if(action==='new_run'){
+    try{experiment=paperExperiment(c);}catch(e){c.response.textContent=e.message;c.response.className='control-response negative';return;}
+    const shared=id==='C'||id==='D'?' Модели C и D начнут новый общий прогон.':'';
+    if(!window.confirm('Начать новый PAPER-тест для модели '+id+'? Предыдущий баланс, позиции и журнал будут сохранены в архиве и не изменятся.'+shared))return;
+   }
    inflight.add(id);c.pendingCommand=null;const expected=c.item.generation+1;c.response.textContent='Отправляем команду…';c.response.className='control-response muted';render();
    try{
-    const payload={target:id,action,generation:c.item.generation};if(c.item.kind==='engine'&&c.item.execution==='pc')payload.execution='pc';
+    const payload={target:id,action,generation:c.item.generation};if(action==='new_run')payload.experiment=experiment;else if(c.item.kind==='engine'&&c.item.execution==='pc')payload.execution='pc';
     const r=await fetch('/api/models-control',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Control':state.token},credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(8000),body:JSON.stringify(payload)});
     const result=await controlJson(r);if(result.status!=='accepted')throw Error(result.error||'Управление не приняло команду.');
-    c.pendingCommand={id:result.id,action,generation:expected};c.response.textContent='Команда принята. Ждём фактического состояния движка.';c.response.className='control-response muted';await poll(false);
+    c.pendingCommand={id:result.id,action,generation:expected,previousExperiment:c.item.experiment?.id||''};c.response.textContent=action==='new_run'?'Новый прогон принят. Сохраняем журнал и ждём запуска модели.':'Команда принята. Ждём фактического состояния движка.';c.response.className='control-response muted';await poll(false);
    }catch(e){c.response.textContent=e.message;c.response.className='control-response negative';}finally{inflight.delete(id);render();}
   }
   async function poll(repeat=true){
