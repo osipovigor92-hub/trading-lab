@@ -24,8 +24,7 @@ async function navigate(page,key,width){
    assert.equal(await page.locator('#screener-table tbody tr').count(),6);
    assert.equal(await page.locator('#dashboard-tabs .nav-item').count(),11);
    assert.equal(await page.locator('.mobile-nav button').count(),5);
-   await page.waitForSelector('#screener-alerts .compact-alert.long');
-   assert.equal(await page.locator('#screener-alerts .compact-alert.watch').count(),1);
+   await page.waitForSelector('.fresh-alert-health[data-status="ok"]',{state:'attached'});
    assert.equal(await page.locator('#screener-bots article').count(),4);
    await page.getByLabel('Поиск монеты').fill('ondo');assert.equal(await page.locator('#screener-table tbody tr').count(),1);
    await page.getByRole('button',{name:'ONDOUSDT',exact:true}).click();await page.waitForSelector('#screener-candles svg');
@@ -143,18 +142,18 @@ async function navigate(page,key,width){
    await navigate(page,'journals',width);await page.waitForSelector('#model-journals a');assert.equal(await page.locator('#model-journals a').count(),2);assert.equal(await page.locator('#research-journals a').count(),2);
    assert.equal(await page.locator('#page-journals #lab-report').count(),1);await page.screenshot({path:path.join(root,'artifacts',`journals-${width}.png`),fullPage:true});
    await navigate(page,'live',width);await page.screenshot({path:path.join(root,'artifacts',`liquidity-${width}.png`),fullPage:true});
-   await navigate(page,'alerts',width);await page.waitForSelector('#page-alerts .alert-long');assert.equal(await page.locator('.alert-card').count(),9);assert.ok(await page.locator('.alert-watch').count()>=1);assert.ok(await page.locator('#page-alerts details[data-key="C:BTCUSDT"]').count(),1,'C/D candidates stay live when the alert panel opens');
+   await navigate(page,'alerts',width);await page.locator('.model-alert-diagnostics>summary').click();await page.waitForSelector('#page-alerts .alert-long');assert.equal(await page.locator('.alert-card').count(),9);assert.ok(await page.locator('.alert-watch').count()>=1);assert.ok(await page.locator('#page-alerts details[data-key="C:BTCUSDT"]').count(),1,'C/D candidates stay live when the alert panel opens');
    // Alerts are sorted by their current status. Keep checking the same coin
    // when a newer snapshot changes the order, as a user would do.
    const alertDetails=page.locator('#page-alerts details[data-key="B:BTCUSDT"]');
-   await alertDetails.locator('summary').click();const historyCount=await page.locator('#page-alerts .alert-event').count();
-   assert.ok(historyCount>=3,'model stop/restart may add genuine cancellations and resumed conditions');
+   await alertDetails.locator('summary').click();const historyIds=await page.locator('#fresh-alert-history .fresh-event').evaluateAll(rows=>rows.map(r=>r.dataset.id));
+   assert.equal(new Set(historyIds).size,historyIds.length,'history identities are unique');
    await page.waitForTimeout(2300);assert.equal(await alertDetails.getAttribute('open'),'');
-   assert.equal(await page.locator('#page-alerts .alert-event').count(),historyCount,'unchanged conditions created duplicate events');await page.screenshot({path:path.join(root,'artifacts',`alerts-${width}.png`),fullPage:true});
-   await page.getByLabel('Фильтр алертов').selectOption('entry');assert.equal(await page.locator('.alert-card').count(),2);await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.waitForSelector('#page-alerts .alert-long');
-   assert.equal(await page.locator('#page-alerts .alert-event').count(),historyCount,'history must survive reload without duplicates');
+   await page.screenshot({path:path.join(root,'artifacts',`alerts-${width}.png`),fullPage:true});
+   await page.getByLabel('Фильтр условий моделей').selectOption('entry');assert.equal(await page.locator('.alert-card').count(),2);await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.locator('.model-alert-diagnostics>summary').click();await page.waitForSelector('#page-alerts .alert-long');
+   const restoredIds=await page.locator('#fresh-alert-history .fresh-event').evaluateAll(rows=>rows.map(r=>r.dataset.id));for(const id of historyIds)assert.ok(restoredIds.includes(id),'history survives reload');
    const frozen=await page.evaluate(()=>Date.now());await page.evaluate(t=>{Date.now=()=>t+20000},frozen);await page.waitForTimeout(1300);
-   assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');assert.ok(await page.locator('.event-neutral').count()>=2,'entry cancellations visible');
+   assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');assert.equal(await page.locator('#fresh-alert-events .fresh-event').count(),0,'expired source never remains a current event');
    await navigate(page,'chart',width);await page.waitForTimeout(1100);assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');assert.match(await page.locator('.decision-box').textContent(),/сигнал скрыт до свежего снимка/);
    await navigate(page,'research',width);await page.locator('.models-analysis>summary').click();assert.equal(await page.locator('.research-match').count(),0);assert.match(await page.locator('#page-research').textContent(),/ОТЧЁТ УСТАРЕЛ/);
    assert.equal(await page.locator('#model-controls button[data-action]:enabled').count(),0,'stale control reply must disable commands');

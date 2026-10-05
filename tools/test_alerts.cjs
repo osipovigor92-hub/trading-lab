@@ -32,8 +32,9 @@ test('entry direction change emits a new alert, repeats do not',()=>{
  assert.equal(transition('entry:LONG','entry','LONG').event,null);
  assert.equal(transition('entry:LONG','entry','SHORT').event,'entry');
 });
-test('entry cancellation reported once and waiting does not invent entries',()=>{
- assert.equal(transition('entry:LONG','stale','LONG').event,'cancel');
+test('missing data does not invent cancellation; fresh waiting cancels once',()=>{
+ assert.equal(transition('entry:LONG','stale','LONG').event,null);
+ assert.equal(transition('entry:LONG','wait','LONG').event,'cancel');
  assert.equal(transition('stale:LONG','stale','LONG').event,null);
  assert.equal(transition(undefined,'wait','LONG').event,null);
 });

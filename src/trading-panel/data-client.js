@@ -1,4 +1,4 @@
-/* Shared read-only requests: coalesce duplicate calls and pause in hidden tabs. */
+/* Shared reads: coalesce duplicates; only the alert monitor can opt into background polling. */
 (() => {
   const pending = new Map(), cache = new Map();
   let visibleWait;
@@ -39,12 +39,13 @@
   }
 
   window.labFetch = async (url, options = {}) => {
-    await visible();
     const method = String(options.method || 'GET').toUpperCase();
+    const {background, ...requestOptions} = options;
+    if (!(background === true && method === 'GET' && /^\/api\/market-alerts(?:\?|$)/.test(String(url)))) await visible();
     // Only safe, body-less reads can share a response. Commands must never
     // accidentally reuse a pending GET or another command to the same URL.
     const key = method === 'GET' && !options.body ? method + ' ' + String(url) : '';
-    const request = () => fetch(url, {...options, cache:'no-store', signal:timeoutFor(options)});
+    const request = () => fetch(url, {...requestOptions, cache:'no-store', signal:timeoutFor(requestOptions)});
     if (!key) return request();
     const now = performance.now();
     const prior = cache.get(key);

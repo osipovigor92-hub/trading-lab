@@ -157,6 +157,21 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(states['trading-control.service']['load'],'not-found')
             self.assertEqual(run.call_args.args[0][:2],['/usr/bin/systemctl','show'])
 
+    def test_alert_diagnostic_distinguishes_monitor_response_from_source_readiness(self):
+        packet=dict(status='ok',updated=100,token='PRIVATE',analyzing=['BTCUSDT'],
+                    rows=[dict(state='ready',sources=dict(quote=100,chart=100,candle=80,book=100,fetched=100))],
+                    events=[dict(expires=108,detail='PRIVATE')])
+        report=diagnose_models.sanitized_alerts(packet,101)
+        self.assertEqual(report['sources_ready'],1)
+        self.assertEqual(report['confirmed_candidates'],1)
+        self.assertEqual(report['current_events'],1)
+        self.assertNotIn('PRIVATE',json.dumps(report))
+        packet['updated']=110
+        report=diagnose_models.sanitized_alerts(packet,110)
+        self.assertTrue(report['fresh'])
+        self.assertEqual(report['sources_ready'],0)
+        self.assertEqual(report['current_events'],0)
+
     def test_failed_first_install_removes_dropins_and_restores_previous_startup(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'state.json'; state.write_text(json.dumps(dict(updated=100,position=None)))

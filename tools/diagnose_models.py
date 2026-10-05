@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -113,9 +114,35 @@ def diagnose():
                       incomplete=value.get('incomplete'))
     except (OSError, ValueError, TypeError):
         pass
+    alerts = dict(available=False, fresh=False)
+    try:
+        with urlopen('http://127.0.0.1:8787/api/market-alerts', timeout=3) as response:
+            alerts = sanitized_alerts(json.load(response), time.time())
+    except (OSError, ValueError, TypeError):
+        pass
     return dict(checked=time.time(), panel_revision=revision(read(TRACK)),
                 control_revision=revision(manifest), control_files_match=integrity(manifest),
-                units=unit_states(), controller=sanitized_status(raw, time.time()), manual_paper=manual)
+                units=unit_states(), controller=sanitized_status(raw, time.time()), manual_paper=manual,
+                market_alerts=alerts)
+
+
+def sanitized_alerts(raw, now):
+    """Monitor health only; no event bodies, positions or browser notification settings."""
+    finite = lambda v: type(v) in (int, float) and math.isfinite(v)
+    if not isinstance(raw, dict) or raw.get('status') != 'ok':
+        return dict(available=False, fresh=False)
+    stamp = raw.get('updated')
+    fresh = finite(stamp) and 0 <= now-stamp <= 8
+    items = lambda name: raw[name] if isinstance(raw.get(name), list) else []
+    limits = dict(quote=45, chart=75, candle=120, book=8, fetched=8)
+    rows = [r for r in items('rows')[:100] if isinstance(r, dict) and
+            r.get('state') in ('ready', 'almost', 'waiting') and isinstance(r.get('sources'), dict) and
+            all(finite(r['sources'].get(k)) and -2 <= now-r['sources'][k] <= limit for k, limit in limits.items())]
+    return dict(available=True, fresh=fresh, monitored=min(8,len(items('analyzing'))),
+                sources_ready=len(rows) if fresh else 0,
+                confirmed_candidates=sum(r['state']=='ready' for r in rows) if fresh else 0,
+                current_events=sum(isinstance(e, dict) and finite(e.get('expires')) and e['expires']>=now
+                                   for e in items('events')[:50]) if fresh else 0)
 
 
 def text_report(report):
@@ -125,6 +152,9 @@ def text_report(report):
              'Версия управления: ' + (report['control_revision'] or 'не установлено'),
              'Файлы управления: ' + {True: 'совпадают с установленной версией', False: 'отличаются', None: 'нет записи установки'}[report['control_files_match']],
              'Контроллер: ' + ('отвечает' if c['available'] and c['fresh'] else 'нет свежего ответа')]
+    alerts=report.get('market_alerts',{})
+    lines.append('Монитор алертов: '+('отвечает' if alerts.get('available') and alerts.get('fresh') else 'нет свежего ответа')+
+                 ' · свежих полных подтверждений: '+str(alerts.get('sources_ready',0)))
     for unit, s in report['units'].items():
         lines.append(unit + ': ' + s['load'] + ' / ' + s['active'])
     if c['memory']:
