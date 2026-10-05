@@ -1,4 +1,4 @@
-"""Read-only Bybit screener. Bounded background cache; no trading or disk writes."""
+"""Read-only Bybit screener and bounded cache; optional journal stores evidence only."""
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -214,7 +214,7 @@ class MarketData:
     """Two workers, bounded cache and an optional public screener prefetcher."""
     TTL = {"screener": 5, "chart": 25, "book": 2}
 
-    def __init__(self, api=public_api, clock=time.monotonic, background=False):
+    def __init__(self, api=public_api, clock=time.monotonic, background=False, journal=None):
         self.api, self.clock = api, clock
         self.lock = threading.Lock()
         self.entries = OrderedDict()
@@ -224,7 +224,10 @@ class MarketData:
         self.selection_until = 0
         self.selection_cursor = 0
         self.book_history = OrderedDict()
-        self.alerts = MarketAlerts()
+        self.journal = journal
+        self.journal_at = 0
+        self.alerts = MarketAlerts(event_sink=journal.event if journal else None)
+        self.archive_alerts = MarketAlerts(event_sink=journal.event) if journal else None
         self.stop_event = None
         self.prefetcher = None
         if background:
@@ -242,6 +245,7 @@ class MarketData:
                     self.get("screener")
                     self._selection_tick()
                     self._alerts_tick()
+                    self._journal_tick()
                 except Exception:
                     pass
                 self.stop_event.wait(1)
@@ -286,6 +290,28 @@ class MarketData:
         key = self.alerts.register(filters, search, now)
         self._alerts_tick(now)
         return self.alerts.snapshot(key, now)
+
+    def _journal_tick(self, now=None):
+        """Sample existing caches; default collection continues without a browser."""
+        now = time.time() if now is None else now
+        if not self.journal or 0 <= now-self.journal_at < 10:
+            return
+        self.journal_at = now
+        packets = self._alert_cache()
+        with self.selection_lock:
+            histories = {symbol: list(values) for symbol, values in self.book_history.items()}
+        scopes = [(dict(selection.DEFAULT_FILTERS), '')]
+        for _, filters, search in self.alerts.active(now):
+            if (filters, search) not in scopes:
+                scopes.append((filters, search))
+        tickers = packets.get(('screener', '', ''), {})
+        charts = {k[1]:v for k,v in packets.items() if k[0]=='chart' and k[2]=='1'}
+        books = {k[1]:v for k,v in packets.items() if k[0]=='book'}
+        self.journal.cycle(tickers, charts, books, histories, scopes, now)
+        # An isolated default monitor archives transitions even with no open tab.
+        # It reads the same caches and does not evict any browser filter scope.
+        key = self.archive_alerts.register(selection.DEFAULT_FILTERS, '', now)
+        self.archive_alerts.update(key, tickers, charts, books, histories, now)
 
     def selection_snapshot(self, filters=None, search='', now=None):
         filters = selection.parse_filters(filters)

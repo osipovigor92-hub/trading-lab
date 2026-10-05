@@ -58,6 +58,7 @@ jobs:
       - run: node tools/test_paper_plan_ui.cjs
       - run: node tools/test_positions_ui.cjs
       - run: node tools/test_fresh_alerts_ui.cjs
+      - run: node tools/test_candidate_journal_ui.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

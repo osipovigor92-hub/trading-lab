@@ -8,14 +8,18 @@ from market_data import MarketData
 import control_client
 import selection
 from manual_paper import ManualPaper
+from candidate_journal import CandidateJournal, parse_query, csv_page
 
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
 # The public ticker cache is warmed on the server, so opening a dashboard section
 # never has to wait for another browser tab to have visited the screener first.
-MARKET = MarketData(background=True)
+JOURNAL = CandidateJournal()
+MARKET = MarketData(background=True, journal=JOURNAL)
 MANUAL = ManualPaper(MARKET, background=True)
 FILES = {
+    "/candidate-journal.js": ("candidate-journal.js", "text/javascript; charset=utf-8"),
+    "/candidate-journal.css": ("candidate-journal.css", "text/css; charset=utf-8"),
     "/fresh-alerts.js": ("fresh-alerts.js", "text/javascript; charset=utf-8"),
     "/alerts.css": ("alerts.css", "text/css; charset=utf-8"),
     "/positions.js": ("positions.js", "text/javascript; charset=utf-8"),
@@ -103,7 +107,26 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path == "/api/manual-paper":
+            if path in ('/api/candidate-journal', '/candidate-journal.csv', '/api/manual-journal', '/manual-journal.csv'):
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                manual = path in ('/api/manual-journal', '/manual-journal.csv')
+                if manual and set(query)-{'before', 'limit'}:
+                    self.api_error(400, 'Некорректные параметры ручного журнала')
+                    return
+                try:
+                    params = parse_query(query, time.time())
+                    data = MANUAL.journal(params['before'], params['limit']) if manual else JOURNAL.page(params)
+                except ValueError as exc:
+                    self.api_error(400, str(exc))
+                    return
+                if path.endswith('.csv'):
+                    if data['status'] == 'unavailable':
+                        self.send(503, 'Журнал недоступен'.encode(), 'text/plain; charset=utf-8')
+                    else:
+                        self.send(200, csv_page(data, manual), 'text/csv; charset=utf-8')
+                else:
+                    self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            elif path == "/api/manual-paper":
                 data = MANUAL.snapshot()
                 data['token'] = control_client.TOKEN
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
