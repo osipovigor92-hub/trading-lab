@@ -25,6 +25,7 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
    await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
    assert.equal(await page.locator('.selection-row[data-state=rejected]').count(),2);
    assert.equal(await page.locator('.selection-row[data-rating=pending]').count(),0);
+   await page.getByRole('button',{name:'Пересортировать',exact:true}).click();
    assert.deepEqual(await page.locator('#screener-table .coin-button').allTextContents(),['BTCUSDT','ETHUSDT','SOLUSDT','LINKUSDT','ONDOUSDT','AVAXUSDT'],'rating sort keeps passed candidates first');
    const btc=page.locator('#screener-table tbody tr',{has:page.getByRole('button',{name:'BTCUSDT',exact:true})});
    assert.equal(await btc.locator('.selection-row').getAttribute('data-rating'),'83');
@@ -70,7 +71,9 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
    mode='pending';await until(async()=>await page.locator('.selection-reasons').filter({hasText:'Снимки стакана: 3 / 5'}).count()>0);
    assert.match(await btc.locator('.selection-reasons').textContent(),/Снимки стакана: 3 \/ 5/);
    assert.equal(await btc.locator('.selection-row').getAttribute('data-rating'),'pending');
-   assert.equal(await btc.locator('.rating-button').textContent(),'—');
+   assert.equal(await btc.locator('.rating-button').textContent(),'Было 83');
+   assert.match(await btc.locator('.rating-button').getAttribute('title'),/Последний подтверждённый рейтинг.*сейчас проверяется/);
+   assert.match(await btc.locator('.rating-compact').textContent(),/Было 83 · проверяется/);
    assert.deepEqual(await btc.locator('.rating-part b').allTextContents(),['25 / 25','— / 25','13 / 25','— / 25'],'known parts remain visible without inventing or rescaling the total');
    mode='stale';await until(async()=>await page.locator('.selection-reasons').filter({hasText:'Данные проверки устарели'}).count()>0);
    assert.equal(await page.locator('.selection-row[data-state=passed]').count(),0);
