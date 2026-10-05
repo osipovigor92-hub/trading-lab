@@ -55,6 +55,7 @@ jobs:
       - run: node tools/test_chart_interactions.cjs
       - run: node tools/test_selection_ui.cjs
       - run: node tools/test_coin_card_ui.cjs
+      - run: node tools/test_paper_plan_ui.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
