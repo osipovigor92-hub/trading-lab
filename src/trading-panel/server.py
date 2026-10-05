@@ -123,13 +123,13 @@ class Handler(BaseHTTPRequestHandler):
                     self.send(503, b'{"status":"unavailable","error":"Model controller unavailable"}', "application/json")
             elif path in ('/api/market-selection', '/api/market-alerts'):
                 query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
-                if any(len(v) != 1 for v in query.values()) or set(query) - (set(selection.DEFAULT_FILTERS) | {'search'}):
+                if any(len(v) != 1 for v in query.values()) or set(query) - (set(selection.DEFAULT_FILTERS) | {'search', 'watch'}):
                     self.api_error(400, 'Некорректные параметры отбора')
                     return
                 try:
-                    filters = selection.parse_filters({k: v[0] for k, v in query.items() if k != 'search'})
+                    filters = selection.parse_filters({k: v[0] for k, v in query.items() if k not in ('search', 'watch')})
                     method = MARKET.alerts_snapshot if path == '/api/market-alerts' else MARKET.selection_snapshot
-                    data = method(filters, query.get('search', [''])[0])
+                    data = method(filters, query.get('search', [''])[0], watch=query.get('watch', [''])[0])
                 except ValueError as exc:
                     self.api_error(400, str(exc))
                     return

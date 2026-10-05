@@ -1,5 +1,6 @@
 """Eligibility filters and their measured inputs; no direction or order execution."""
 import math
+import re
 import ranking
 
 DEFAULT_FILTERS = dict(turnover_min=20_000_000.0, spread_max=.03,
@@ -11,6 +12,24 @@ LIMITS = dict(turnover_min=1e13, spread_max=10, range_min=1000, range_max=1000,
               funding_max=100, depth_min=1e12, impact_max=100)
 BOOK_SAMPLES = 5
 ANALYSIS_LIMIT = 8
+
+
+def parse_watch(value=''):
+    if not isinstance(value, str):
+        raise ValueError('Некорректный список наблюдения')
+    symbols = value.split(',') if value else []
+    if (len(symbols) > ANALYSIS_LIMIT or len(set(symbols)) != len(symbols) or
+            any(not re.fullmatch(r'[A-Z0-9]{2,24}USDT', s) for s in symbols)):
+        raise ValueError('Наблюдение: до 8 разных USDT-пар')
+    return symbols
+
+
+def shortlist(rows, stamp, filters, search, watch, now):
+    available = {r['symbol'] for r in rows}
+    pinned = [s for s in watch if s in available]
+    eligible = [r['symbol'] for r in rows if search in r['symbol'] and
+                all(c['state'] == 'pass' for c in ticker_checks(r, stamp, filters, now))]
+    return list(dict.fromkeys(pinned + eligible))[:ANALYSIS_LIMIT]
 
 
 def finite(value):

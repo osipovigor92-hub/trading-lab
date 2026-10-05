@@ -1,6 +1,13 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {filterRows,ratingScore,ratingView,coinCardView,positionView,fresh,domain,botModels,chartBars,selectionView,selectionDefaults,validateSelection}=require('../src/trading-panel/screener.js');
 const rows=[{symbol:'BTCUSDT',turnover:1e8,spread:.01,range24:2,change:4,selection:{status:'passed'},rating:{status:'ok',score:83}},{symbol:'ONDOUSDT',turnover:3e7,spread:.02,range24:8,change:-5,selection:{status:'passed'},rating:{status:'ok',score:55}},{symbol:'THINUSDT',turnover:1e6,spread:.15,range24:20,change:10,selection:{status:'rejected'},rating:{status:'ok',score:10}}];
+test('pinned order survives rating loss and changed scores while values stay live',()=>{
+ const {stableRows}=require('../src/trading-panel/screener.js');
+ const order=rows.map(r=>r.symbol),changed=[{...rows[1],price:123,rating:{status:'ok',score:99}},{...rows[0],rating:{status:'pending'}},rows[2]];
+ const ranked=filterRows(changed,{sort:'quality'}),stable=stableRows(ranked,order);
+ assert.equal(ranked[0].symbol,'ONDOUSDT');assert.deepEqual(stable.map(r=>r.symbol),order);assert.equal(stable[1].price,123);
+ assert.deepEqual(stableRows([rows[2],{...rows[0],symbol:'NEWUSDT'}],order).map(r=>r.symbol),['THINUSDT','NEWUSDT']);
+});
 test('screeners distinguish activity, tight spread, movers and bot universe',()=>{
  assert.deepEqual(filterRows(rows,{preset:'active'}).map(r=>r.symbol),['ONDOUSDT']);
  assert.deepEqual(filterRows(rows,{preset:'liquid'}).map(r=>r.symbol),['BTCUSDT']);

@@ -278,17 +278,18 @@ class MarketData:
         for key, _, _ in active:
             self.alerts.update(key, tickers, charts, books, histories, now)
 
-    def alerts_snapshot(self, filters=None, search='', now=None):
+    def alerts_snapshot(self, filters=None, search='', now=None, watch=''):
         filters = selection.parse_filters(filters)
         # Reuse the same bounded shortlist and workers as smart selection.
-        self.selection_snapshot(filters, search, now)
+        self.selection_snapshot(filters, search, now, watch)
         now = time.time() if now is None else now
-        key = self.alerts.register(filters, search, now)
+        key = self.alerts.register(filters, search, now, watch)
         self._alerts_tick(now)
         return self.alerts.snapshot(key, now)
 
-    def selection_snapshot(self, filters=None, search='', now=None):
+    def selection_snapshot(self, filters=None, search='', now=None, watch=''):
         filters = selection.parse_filters(filters)
+        watched = selection.parse_watch(watch)
         if not isinstance(search, str) or not re.fullmatch(r'[A-Z0-9]{0,24}', search):
             raise ValueError('Некорректный поиск монеты')
         now = time.time() if now is None else now
@@ -297,8 +298,7 @@ class MarketData:
         if tickers.get('status') != 'ok' or not selection.fresh(stamp, now, 45):
             return dict(status='pending', source_time=stamp, rows=[], filters=filters,
                         error='Нет свежих котировок Bybit', analysis_limit=selection.ANALYSIS_LIMIT)
-        eligible = [r['symbol'] for r in tickers['rows'] if search in r['symbol'] and
-                    all(c['state'] == 'pass' for c in selection.ticker_checks(r, stamp, filters, now))]
+        eligible = selection.shortlist(tickers['rows'], stamp, filters, search, watched, now)
         with self.selection_lock:
             self.selection_watch = eligible[:selection.ANALYSIS_LIMIT]
             self.selection_until = self.clock() + 30

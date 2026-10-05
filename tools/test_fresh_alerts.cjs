@@ -2,6 +2,14 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const {currentEvents,consume,archive}=require('../src/trading-panel/fresh-alerts.js');
 const event=(sequence=1)=>({id:'epoch:'+sequence,sequence,symbol:'BTCUSDT',kind:'ready',label:'Кандидат готов',detail:'Все проверки',time:1000,expires:1008,sources:{quote:1000,chart:1000,candle:980,book:1000,fetched:1000}});
 const packet=(events=[event()],cursor=1)=>({status:'ok',epoch:'epoch',scope:'filters',updated:1000,cursor,events});
+test('visible observations survive expiry and connection loss without claiming freshness',()=>{
+ const {observationFeed}=require('../src/trading-panel/fresh-alerts.js'),history=archive([], [event()],1000);
+ assert.equal(observationFeed(history,packet(),1000)[0].live,true);
+ for(const [p,now]of [[packet(),1009],[null,1001],[{...packet(),events:[]},1001]]){
+  const result=observationFeed(history,p,now);assert.equal(result.length,1);assert.equal(result[0].id,event().id);assert.equal(result[0].time,1000);assert.equal(result[0].live,false);
+ }
+ assert.deepEqual(observationFeed(history,null,90000),[]);
+});
 test('current events require fresh packet and every original source',()=>{
  assert.equal(currentEvents(packet(),1000).length,1);
  for(const source of ['quote','chart','candle','book','fetched'])assert.deepEqual(currentEvents(packet([{...event(),sources:{...event().sources,[source]:800}}]),1000),[]);

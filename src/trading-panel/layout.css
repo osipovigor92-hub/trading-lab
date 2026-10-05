@@ -46,3 +46,4 @@ body[data-density=compact] .screener-table td{padding-block:5px}body[data-densit
  .screener-detail-toolbar{flex-wrap:wrap}.screener-detail-toolbar .time-chips{order:3;flex-basis:100%}.chart-scale-controls{margin-left:auto}
 }
 @media(max-width:380px){.lab-shell>main{padding-inline:10px}.screener-market,.screener-detail,.screener-alerts,.screener-orderbook,.screener-bots{padding:9px!important}.coin-name-row{gap:3px}.screener-table .coin-trend{display:none}.screener-summary{gap:7px}.screener-detail-toolbar{gap:6px}.screener-detail-toolbar h2{font-size:13px!important}.time-chip{padding-inline:4px}.bot-position .position-facts{gap:7px}}
+@media(max-width:850px){.screener-extra-filters .mobile-sort{display:grid!important}}

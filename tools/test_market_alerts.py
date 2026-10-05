@@ -25,6 +25,28 @@ def evidence(now=1000, price=100, rvol=1.2, depth=8000, spread=.01, covered=True
 
 
 class AlertTests(unittest.TestCase):
+    def test_watchlist_prioritizes_low_turnover_and_survives_unrelated_search(self):
+        filters=selection.parse_filters()
+        pinned=evidence(symbol='PINUSDT')
+        pinned['tickers']['rows'][0]['turnover']=1000
+        rows=[dict(pinned['tickers']['rows'][0],symbol=f'COIN{i}USDT',turnover=1e8) for i in range(12)]
+        rows += pinned['tickers']['rows']
+        self.assertEqual(selection.shortlist(rows,1000,filters,'COIN',['PINUSDT'],1000)[0],'PINUSDT')
+        self.assertEqual(len(selection.shortlist(rows,1000,filters,'COIN',['PINUSDT'],1000)),8)
+        key=self.monitor.register(filters,'COIN',1000,'PINUSDT')
+        self.monitor.update(key,**pinned,now=1000)
+        snapshot=self.monitor.snapshot(key,1000)
+        self.assertEqual(snapshot['analyzing'],['PINUSDT'])
+        self.assertEqual(snapshot['rows'][0]['symbol'],'PINUSDT')
+        self.assertNotEqual(snapshot['rows'][0]['state'],'ready')
+        self.assertNotEqual(key,self.monitor.register(filters,'COIN',1000))
+
+    def test_watchlist_validation_and_absent_symbols_are_bounded(self):
+        self.assertEqual(selection.parse_watch('BTCUSDT,ETHUSDT'),['BTCUSDT','ETHUSDT'])
+        for value in [None,[], 'BTCUSDT,BTCUSDT','BTCUSDT,','../USDT','btcusdt',','.join(f'COIN{i}USDT' for i in range(9))]:
+            with self.assertRaises(ValueError):selection.parse_watch(value)
+        self.assertEqual(selection.shortlist([],1000,selection.parse_filters(),'', ['BTCUSDT'],1000),[])
+
     def setUp(self):
         self.monitor=MarketAlerts()
         self.key=self.monitor.register(selection.parse_filters(),'',1000)

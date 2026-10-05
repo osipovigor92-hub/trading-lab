@@ -81,11 +81,12 @@ class MarketAlerts:
         self.sequence = 0
         self.scopes = OrderedDict()
 
-    def register(self, filters, search, now):
-        key = hashlib.sha256(json.dumps([filters, search], sort_keys=True).encode()).hexdigest()[:20]
+    def register(self, filters, search, now, watch=''):
+        watched = selection.parse_watch(watch)
+        key = hashlib.sha256(json.dumps([filters, search, watched], sort_keys=True).encode()).hexdigest()[:20]
         with self.lock:
             if key not in self.scopes:
-                self.scopes[key] = dict(filters=dict(filters), search=search, touched=now,
+                self.scopes[key] = dict(filters=dict(filters), search=search, watch=watched, touched=now,
                                         states={}, events=[], rows=[], analyzing=[])
             self.scopes[key]['touched'] = now
             self.scopes.move_to_end(key)
@@ -105,9 +106,10 @@ class MarketAlerts:
                 return
             filters, search = scope['filters'], scope['search']
             quotes = {r['symbol']: r for r in tickers.get('rows', [])[:100]
-                      if isinstance(r, dict) and isinstance(r.get('symbol'), str) and search in r['symbol']}
-            analyzing = [symbol for symbol, r in quotes.items() if usable(tickers, now, 45) and
-                         all(c['state'] == 'pass' for c in selection.ticker_checks(r, tickers.get('updated'), filters, now))][:8]
+                      if isinstance(r, dict) and isinstance(r.get('symbol'), str) and
+                      (search in r['symbol'] or r['symbol'] in scope['watch'])}
+            analyzing = selection.shortlist(list(quotes.values()), tickers.get('updated'), filters,
+                                            search, scope['watch'], now) if usable(tickers, now, 45) else []
             symbols = list(dict.fromkeys(analyzing + list(scope['states'])))[:100]
             current = []
             for symbol in symbols:
@@ -198,4 +200,4 @@ class MarketAlerts:
             return dict(status='ok', epoch=self.epoch, scope=key, updated=now, cursor=self.sequence,
                         analyzing=list(scope['analyzing']), analysis_limit=8,
                         rows=[{k: v for k, v in row.items() if k not in ('expires', 'checks')} for row in scope['rows']],
-                        events=events, filters=dict(scope['filters']), search=scope['search'])
+                        events=events, filters=dict(scope['filters']), search=scope['search'], watch=list(scope['watch']))
