@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+from urllib.request import urlopen
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'src/trading-panel'))
@@ -102,9 +103,19 @@ def diagnose():
     except (OSError, ValueError):
         raw = None
     manifest = read(MANIFEST)
+    manual = dict(available=False, fresh=False)
+    try:
+        with urlopen('http://127.0.0.1:8787/api/manual-paper', timeout=3) as response:
+            value = json.load(response)
+        manual = dict(available=value.get('status')=='ok',
+                      fresh=value.get('status')=='ok' and isinstance(value.get('updated'), (int, float)) and 0 <= time.time()-value['updated'] <= 8,
+                      paused=value.get('paused'), has_position=bool(value.get('position')),
+                      incomplete=value.get('incomplete'))
+    except (OSError, ValueError, TypeError):
+        pass
     return dict(checked=time.time(), panel_revision=revision(read(TRACK)),
                 control_revision=revision(manifest), control_files_match=integrity(manifest),
-                units=unit_states(), controller=sanitized_status(raw, time.time()))
+                units=unit_states(), controller=sanitized_status(raw, time.time()), manual_paper=manual)
 
 
 def text_report(report):

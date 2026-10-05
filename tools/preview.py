@@ -6,6 +6,7 @@ import math
 import sys
 from pathlib import Path
 import threading
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PANEL = ROOT/'src/trading-panel'
 sys.path.insert(0, str(PANEL))
 import selection
+from manual_paper import ManualPaper
 spec = importlib.util.spec_from_file_location('lab_report', ROOT/'src/trading-report/report.py')
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
@@ -122,14 +124,18 @@ class DemoControl:
             return dict(status='accepted',id=uid)
 
 CONTROL = DemoControl()
+PAPER_TEST = False
 
 def market_fixture(path, query):
     now=time.time()
     prices={'BTCUSDT':60000,'ETHUSDT':2300,'SOLUSDT':145,'ONDOUSDT':.5,'LINKUSDT':14.2,'AVAXUSDT':11.1}
+    if PAPER_TEST:
+        prices['BTCUSDT'] = 99.5
+        prices['ETHUSDT'] = 99.5
     if path=='/api/screener':
         rows=[dict(symbol=s,price=p,turnover=(4-i)*80e6 if i<4 else (6-i)*12e6,
                    change=(4-i*2.5),range24=5+i,spread=.008+i*.008 if i<4 else .03,
-                   open_interest=20e6,funding=.0001,volume24=1e6,funding_interval_hours=8) for i,(s,p) in enumerate(prices.items())]
+                   open_interest=20e6,funding=.0001,next_funding=now+3600,volume24=1e6,funding_interval_hours=8) for i,(s,p) in enumerate(prices.items())]
         return dict(status='ok',updated=now//5*5,rows=rows,eligible=len(prices),rejected=0,limit=100)
     if path=='/api/market-selection':
         filters=selection.parse_filters({k:v[0] for k,v in query.items() if k!='search'})
@@ -205,11 +211,23 @@ def fixtures():
     data['/api/models-control']=CONTROL.status(data, now)
     return data
 
+
+class DemoMarket:
+    def get(self, kind, symbol='', interval='5'):
+        return market_fixture({'screener':'/api/screener', 'book':'/api/market-book', 'chart':'/api/market-chart'}[kind], dict(symbol=[symbol], interval=[interval]))
+
+
+# Temporary ledger is isolated from every production account; wiped with preview.
+MANUAL_ROOT = tempfile.TemporaryDirectory(prefix='lab-preview-paper-')
+MANUAL = ManualPaper(DemoMarket(), MANUAL_ROOT.name, background=True)
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         data=fixtures()
-        if path in ('/api/screener','/api/market-chart','/api/market-book','/api/market-selection'):
+        if path == '/api/manual-paper':
+            body=json.dumps(dict(MANUAL.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
+        elif path in ('/api/screener','/api/market-chart','/api/market-book','/api/market-selection'):
             body=json.dumps(market_fixture(path,parse_qs(urlsplit(self.path).query)),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in data:
             body=json.dumps(data[path],ensure_ascii=False).encode();kind='application/json; charset=utf-8'
@@ -242,14 +260,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers();self.wfile.write(body)
 
     def do_POST(self):
-        if self.path != '/api/models-control':
+        if self.path not in ('/api/models-control','/api/manual-paper'):
             self.send_error(404);return
         if self.headers.get('X-Lab-Control') != CONTROL.token or self.headers.get('Content-Type')!='application/json':
             self.send_error(403);return
         try:
             length=int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= 4096: raise ValueError('Invalid length')
-            value=CONTROL.command(json.loads(self.rfile.read(length)))
+            command=json.loads(self.rfile.read(length))
+            value=(MANUAL.command(command) if self.path=='/api/manual-paper' else CONTROL.command(command))
             status=202
         except (ValueError, KeyError, TypeError) as exc:
             value=dict(status='error', error=str(exc));status=409
@@ -260,6 +279,8 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,default=8788)
+    parser.add_argument('--paper-test',action='store_true',help='Fixed synthetic coin price for isolated PAPER UI tests')
     args=parser.parse_args()
+    PAPER_TEST=args.paper_test
     print(f'DEMO: http://127.0.0.1:{args.port}',flush=True)
     ThreadingHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()

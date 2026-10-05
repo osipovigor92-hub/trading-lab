@@ -2,7 +2,7 @@
 const {chromium}=require('playwright');
 const {spawn}=require('node:child_process'),path=require('node:path'),fs=require('node:fs'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18788;
-const sections={overview:'Обзор',market:'Скринер',alerts:'Алерты',chart:'График',live:'LIVE',research:'Модели',journals:'Журнал',grid:'Grid',tests:'Тесты',settings:'Настройки'};
+const sections={overview:'Обзор',market:'Скринер',positions:'Позиции',alerts:'Алерты',chart:'График',live:'LIVE',research:'Модели',journals:'Журнал',grid:'Grid',tests:'Тесты',settings:'Настройки'};
 async function navigate(page,key,width){
  if(width<=850&&!['overview','market','alerts','research'].includes(key)){
   await page.getByRole('button',{name:'Ещё',exact:true}).click();
@@ -22,7 +22,7 @@ async function navigate(page,key,width){
    await page.goto(`http://127.0.0.1:${port}/`);await page.waitForSelector('#screener-table .coin-button');
    assert.equal(await page.evaluate(()=>LabNavigation.current()),'market','first visit starts at the approved screener');
    assert.equal(await page.locator('#screener-table tbody tr').count(),6);
-   assert.equal(await page.locator('#dashboard-tabs .nav-item').count(),10);
+   assert.equal(await page.locator('#dashboard-tabs .nav-item').count(),11);
    assert.equal(await page.locator('.mobile-nav button').count(),5);
    await page.waitForSelector('#screener-alerts .compact-alert.long');
    assert.equal(await page.locator('#screener-alerts .compact-alert.watch').count(),1);
@@ -169,6 +169,6 @@ async function navigate(page,key,width){
   await remote.goto(`http://127.0.0.1:${port}/`);await navigate(remote,'chart',1280);await remote.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();await remote.waitForTimeout(15000);
   const provider={frames:remote.frames().map(f=>f.url()),errors:providerErrors,canvases:0};for(const frame of remote.frames())if(/tradingview/.test(frame.url()))provider.canvases+=await frame.locator('canvas').count().catch(()=>0);
   fs.writeFileSync(path.join(root,'artifacts','tradingview-smoke.json'),JSON.stringify(provider,null,2));await remote.locator('.chart-box').screenshot({path:path.join(root,'artifacts','tradingview-provider.png')});console.log('TradingView provider smoke:',JSON.stringify(provider));await remote.close();
-  console.log('VISUAL OK: 320/390/1280 px, ten sections, model controls, rejection/stop/restart/warmup, native test cards and journals, chart/book, preferences, stale data');
+  console.log('VISUAL OK: 320/390/1280 px, eleven sections, model controls, rejection/stop/restart/warmup, native test cards and journals, chart/book, preferences, stale data');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

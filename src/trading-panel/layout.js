@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded',()=>{
  const more=make('dialog','more-menu');more.setAttribute('aria-label','Другие разделы');
  const moreHead=make('div','more-heading');moreHead.append(make('h2','','Другие разделы'));
  const close=make('button','icon-button');close.type='button';close.setAttribute('aria-label','Закрыть меню');close.append(LabUI.icon('close'));close.addEventListener('click',()=>more.close());moreHead.append(close);more.append(moreHead);
- for(const key of ['chart','live','journals','grid','tests','settings']){const b=make('button','more-link');b.type='button';b.append(LabUI.icon(key),make('span','',key==='live'?'Стакан LIVE':api.names[key]));b.addEventListener('click',()=>{more.close();go(key);});more.append(b);}
+ for(const key of ['positions','chart','live','journals','grid','tests','settings']){const b=make('button','more-link');b.type='button';b.append(LabUI.icon(key),make('span','',key==='live'?'Стакан LIVE':api.names[key]));b.addEventListener('click',()=>{more.close();go(key);});more.append(b);}
  more.addEventListener('click',e=>{if(e.target===more){const r=more.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)more.close();}});document.body.append(more);
  for(const [key,b]of Object.entries(mobileButtons))b.addEventListener('click',()=>key==='more'?more.showModal():go(key));
  const reflect=()=>{const key=api.current();for(const [k,b]of Object.entries(mobileButtons)){const on=k===key||(k==='more'&&!['overview','market','alerts','research'].includes(key));b.classList.toggle('selected',on);b.setAttribute('aria-pressed',String(on));}main.dataset.page=key;};
@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded',()=>{
  const density=make('select');density.setAttribute('aria-label','Плотность интерфейса');
  for(const [value,text]of [['comfortable','Комфортная'],['compact','Компактная']]){const o=make('option','',text);o.value=value;density.append(o);}
  const start=make('select');start.setAttribute('aria-label','Стартовый раздел');
- for(const key of ['market','overview','alerts','chart','research','journals']){const o=make('option','',api.names[key]);o.value=key;start.append(o);}
+ for(const key of ['market','overview','positions','alerts','chart','research','journals']){const o=make('option','',api.names[key]);o.value=key;start.append(o);}
  for(const [text,control]of [['Плотность интерфейса',density],['Стартовый раздел',start]]){const label=make('label','settings-field',text);label.append(control);settingsBox.append(label);}
  const storage=make('p','muted'),reset=make('button','secondary-button','Сбросить оформление');reset.type='button';settingsBox.append(reset,storage);settings.append(settingsBox);
  const readPrefs=()=>{try{density.value=localStorage.getItem('lab-ui-density')==='compact'?'compact':'comfortable';const key=localStorage.getItem('lab-start-page')||'market';start.value=[...start.options].some(o=>o.value===key)?key:'market';}catch{density.value='comfortable';start.value='market';storage.textContent='Сохранение настроек недоступно.';}document.body.dataset.density=density.value;};

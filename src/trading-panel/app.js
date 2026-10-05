@@ -104,7 +104,7 @@ refresh();
     const old = [...main.children];
     const footer = main.querySelector('footer');
     const pages = {};
-    const names = {overview:'Обзор',market:'Скринер',alerts:'Алерты',chart:'График',live:'LIVE',research:'Модели',journals:'Журнал',grid:'Grid',tests:'Тесты',settings:'Настройки'};
+    const names = {overview:'Обзор',market:'Скринер',positions:'Позиции',alerts:'Алерты',chart:'График',live:'LIVE',research:'Модели',journals:'Журнал',grid:'Grid',tests:'Тесты',settings:'Настройки'};
     const nav = make('nav','dashboard-tabs');
     nav.id = 'dashboard-tabs';
     nav.setAttribute('aria-label','Разделы панели');

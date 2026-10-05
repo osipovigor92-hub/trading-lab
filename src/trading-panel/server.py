@@ -1,18 +1,23 @@
 import json
 import time
+import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from market_data import MarketData
 import control_client
 import selection
+from manual_paper import ManualPaper
 
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
 # The public ticker cache is warmed on the server, so opening a dashboard section
 # never has to wait for another browser tab to have visited the screener first.
 MARKET = MarketData(background=True)
+MANUAL = ManualPaper(MARKET, background=True)
 FILES = {
+    "/positions.js": ("positions.js", "text/javascript; charset=utf-8"),
+    "/positions.css": ("positions.css", "text/css; charset=utf-8"),
     "/models.js": ("models.js", "text/javascript; charset=utf-8"),
     "/models.css": ("models.css", "text/css; charset=utf-8"),
     "/ui.js": ("ui.js", "text/javascript; charset=utf-8"),
@@ -96,7 +101,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path == "/api/engine-journal":
+            if path == "/api/manual-paper":
+                data = MANUAL.snapshot()
+                data['token'] = control_client.TOKEN
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            elif path == "/api/engine-journal":
                 query = parse_qs(urlsplit(self.path).query)
                 if set(query) != {"engine"} or len(query["engine"]) != 1 or query["engine"][0] not in ("freqtrade", "hummingbot", "jesse"):
                     self.api_error(400, 'Invalid engine')
@@ -181,7 +190,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self.send(503, b'{"error":"Controller unavailable"}', 'application/json')
             return
-        if self.path != "/api/models-control":
+        if self.path not in ("/api/models-control", "/api/manual-paper"):
             self.send(404, b'{"error":"Not found"}', "application/json")
             return
         if not control_client.authorized(self.headers):
@@ -192,13 +201,17 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= 4096 or self.headers.get("Transfer-Encoding"):
                 raise ValueError("Invalid request size")
             command = json.loads(self.rfile.read(length))
-            result = control_client.call(dict(op="command", command=command))
+            result = (MANUAL.command(command) if self.path == '/api/manual-paper' else
+                      control_client.call(dict(op="command", command=command)))
             self.send(202 if result.get("status") == "accepted" else 409,
                       json.dumps(result, ensure_ascii=False, allow_nan=False).encode(), "application/json")
-        except (ValueError, TypeError):
-            self.send(400, b'{"error":"Invalid command"}', "application/json")
-        except OSError:
-            self.send(503, b'{"error":"Controller unavailable"}', "application/json")
+        except (ValueError, TypeError, OverflowError) as exc:
+            if self.path == '/api/manual-paper':
+                self.api_error(409, str(exc))
+            else:
+                self.send(400, b'{"error":"Invalid command"}', "application/json")
+        except (OSError, sqlite3.Error):
+            self.api_error(503, 'Хранилище или контроллер недоступны; повторите после обновления')
 
 
 if __name__ == "__main__":

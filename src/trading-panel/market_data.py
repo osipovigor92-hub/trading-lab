@@ -75,6 +75,8 @@ def ticker_rows(result, stamp):
                              volume24=optional(row.get("volume24h")),
                              open_interest=optional(row.get("openInterestValue")),
                              funding=optional(row.get("fundingRate")),
+                             next_funding=(optional(row.get("nextFundingTime"))/1000
+                                           if optional(row.get("nextFundingTime")) is not None else None),
                              funding_interval_hours=optional(row.get("fundingIntervalHour"))))
         except (ValueError, KeyError, TypeError):
             rejected += 1
