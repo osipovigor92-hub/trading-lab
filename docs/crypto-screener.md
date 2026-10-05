@@ -11,6 +11,9 @@ The **Скринер** tab lists the top 100 valid Bybit linear USDT perpetual t
 - The chart supports time zoom around the pointer, price zoom over the right axis, drag panning, pinch zoom and double-click reset. Views are stored per symbol and timeframe; previously saved per-timeframe scale is used as a starting point. Desktop column headings sort 24-hour change, turnover, spread or rating in either direction; a changed price briefly highlights up/down with reduced-motion support.
 - Support/resistance: strict 2-left/2-right confirmed swing lows/highs, clustered within max(0.05% close, 0.25 ATR14) total width; up to three nearest zones below/above the last closed price. Zones crossing the price are omitted. Pivot counts describe history, not independent tests or probabilities. Lines beyond the visible candle price scale are shown in the level list only. This is a descriptive heuristic, not a validated trading strategy.
 - Book volume: price × base quantity in USDT, separated by ±0.02/0.05/0.10% nested bands. Three largest visible price levels per side within ±0.10%. Partial depth is marked as a lower bound. Changes between distinct snapshots no more than 12 seconds apart also include cancellations and changing band membership. They are not a reconstruction of all book events or proof of execution. Snapshot age is shown.
+- The selected coin card exposes price, OI, contract funding, VWAP, ATR and
+  base-quantity volume without expanding details. Quotes, candles and the book
+  have independent age/status indicators; see Stage 3 below.
 - Bot activity: actual saved A/B/C/D phases and positions, entry notional and last close. Stale or halted positions are explicitly historical. Grid stays in its existing tab. C/D still require their separate `install_research.py` installation.
 - Alerts combine the existing B conditions, book-only watch state, and fresh C/D
   research checks. Green/red means a fresh model condition; yellow means only
@@ -118,6 +121,59 @@ requests, caches, workers or services. It does not change model entry rules,
 positions or journals. Tests cover exact sums, rounding and anchors, monotonic
 responses, worst-book measurements, invalid/missing/stale inputs, threshold
 independence, sort grouping and desktop/mobile expansion with live refresh.
+
+### Stage 3: selected coin card
+
+Selecting a coin updates the **«Карточка выбранной монеты»** section and its
+adjacent book. Existing 1m/5m/15m/1h charts, confirmed levels, zoom/pan, overlays
+and turnover bars are retained. The four timeframe controls remain visible on
+small screens and use 44px touch targets. Views remain saved per symbol/timeframe.
+
+Six always-visible measurements use the selected symbol and timeframe:
+
+| Measurement | Unit and meaning |
+| --- | --- |
+| Price | Latest ticker price in USDT; 24h change and turnover below it |
+| OI | `openInterestValue` in USDT from the shared ticker snapshot; unknown OI stays unavailable |
+| Funding | `fundingRate × 100`, signed %, per contract interval; e.g. −0.0002 becomes −0.02%. Interval is shown only when supplied; it is never assumed to be eight hours |
+| VWAP | Sum of turnover in USDT / sum of base quantity over the latest 60 closed candles, in USDT; unavailable for zero total quantity |
+| ATR(14) | Mean of the last 14 true ranges, in USDT and % of the last closed price, for the selected timeframe |
+| Volume | Sum of base quantity over the latest 60 closed candles, labelled with the selected base asset; turnover in USDT is shown separately |
+
+The detailed levels section retains the last closed price and **RVOL by
+turnover over 5 / previous 20 candles**. This chart measure is explicitly
+labelled and is distinct from the base-quantity minute RVOL used by selection
+and ranking. Both volume and turnover can be valid measured zeros. Missing OI,
+funding or VWAP is shown as **«—»**, without substituting zero. Main price
+measurements use compact precision; exceptionally small nonzero prices use
+scientific notation rather than becoming a displayed zero.
+
+The card shows each source's original timestamp and age:
+
+- Quotes expire after 45 seconds. OI/funding use this same observed snapshot
+  time; no separate exchange update time for those fields is claimed.
+- Candles expire after 75 seconds since their fetch and when the latest closed
+  candle end exceeds one selected period plus 75 seconds. Stale candles hide
+  the chart, zones and candle-based measurements, while fresh quote values remain.
+- The book expires after 8 seconds. Expired book depth is hidden while fresh
+  chart and quote values remain. Incomplete ±0.1% coverage is marked as a lower
+  estimate, independently of timestamp freshness.
+
+Loading, unavailable, stale and missing-symbol states are explicit. A failed
+refresh can retain a previously verified response only within its original
+freshness window and displays **«повторяем обновление»**. An old response is
+never stamped with the browser's current time. Responses for another symbol
+or timeframe cannot populate the card; request generation prevents a slow
+previous selection from overwriting the currently selected coin. Native open
+details and metric DOM nodes survive updates.
+
+The backend exposes existing calculated ATR and base-quantity volume as
+`atr` and `volume_window` in `/api/market-chart`. No additional upstream API
+calls, services, workers, cache entries, dependencies or model changes are
+introduced. Offline tests cover the units, zeros, funding conversion and
+independent expiry. `node tools/test_coin_card_ui.cjs` checks all four
+timeframes at 1280/390/320, missing/negative/zero/partial/wrong/stale/error
+responses, delayed coin switching, persistence and recovery; it also runs in CI.
 
 This update changes the panel only. Existing `tools/update.sh <full SHA>` installs it; no service, VPN, firewall, account or model configuration changes. New endpoints are read-only `/api/screener`, `/api/market-chart?symbol=BTCUSDT&interval=5`, and `/api/market-book?symbol=BTCUSDT`. A fixed hostname and allowlisted public endpoints prevent arbitrary URL requests. Query symbols/timeframes are validated. No credentials are used.
 

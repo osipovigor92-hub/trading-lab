@@ -52,7 +52,25 @@
   const complete=ticker&&chart&&book&&known&&rating.status==='ok'&&Number.isInteger(rating.score)&&rating.score>=0&&rating.score<=100&&parts.every(c=>c.points!==null)&&parts.reduce((total,c)=>total+c.points,0)===rating.score;
   return {...rating,components:parts,status:complete?'ok':'pending',score:complete?rating.score:null,note:complete?rating.note:rating.status==='ok'?'Рейтинг не подтверждён · повторяем проверку':rating.note};
  }
- const api={fresh,ratingScore,ratingView,filterRows,botModels,positionView,domain,chartBars,barCount,selectionDefaults,validateSelection,selectionView};
+ function coinCardView({snapshot,chart,book,symbol,interval,now,tickerError='',chartError='',bookError=''}){
+  const state=(data,identity,timely,error)=>{
+   const stamp=identity&&finite(data?.updated)?data.updated:null,age=stamp===null?null:Math.max(0,now-stamp);
+   const status=!data||data.status==='pending'?(error?'error':'pending'):data.status!=='ok'||!identity?'error':!timely?'stale':error||data.refresh_error?'cached':'fresh';
+   return {status,stamp,age,available:['fresh','cached'].includes(status),note:String(error||data?.refresh_error||data?.error||(!identity&&data?.status==='ok'?'Ответ источника не соответствует выбранной монете или неполный':'')).slice(0,120)};
+  };
+  const quote=Array.isArray(snapshot?.rows)?snapshot.rows.find(r=>r.symbol===symbol):null;
+  const ticker=state(snapshot,true,fresh(snapshot?.updated,now,45),tickerError);
+  if(ticker.available&&!quote)Object.assign(ticker,{status:'missing',available:false,note:'Монета отсутствует в текущей подборке котировок'});
+  const candle=state(chart,chart?.symbol===symbol&&chart.interval===interval&&Array.isArray(chart.candles)&&chart.candles.length>=25,
+   fresh(chart?.updated,now,75)&&['1','5','15','60'].includes(interval)&&fresh(chart?.candle_end,now,Number(interval)*60+75),chartError);
+  const near=book?.bands?.['0.001'],depth=state(book,book?.symbol===symbol&&finite(book.mid)&&book.mid>0&&finite(book.spread)&&near&&finite(near.bid)&&finite(near.ask),fresh(book?.updated,now,8),bookError);
+  if(depth.available&&!near.covered)depth.note='Зона ±0,1% покрыта частично · объёмы являются нижней оценкой';
+  const nonnegative=v=>finite(v)&&v>=0?v:null;
+  return {sources:{ticker,chart:candle,book:depth},
+   quote:ticker.available?{price:finite(quote.price)&&quote.price>0?quote.price:null,change:finite(quote.change)?quote.change:null,turnover:nonnegative(quote.turnover),oi:nonnegative(quote.open_interest),funding_pct:finite(quote.funding)&&finite(quote.funding*100)?quote.funding*100:null,funding_hours:finite(quote.funding_interval_hours)&&quote.funding_interval_hours>0?quote.funding_interval_hours:null}:null,
+   chart:candle.available?{price:chart.price,atr:nonnegative(chart.atr),atr_pct:nonnegative(chart.atr_pct),vwap:finite(chart.vwap)&&chart.vwap>0?chart.vwap:null,volume:nonnegative(chart.volume_window),turnover:nonnegative(chart.turnover_window),rvol:nonnegative(chart.rvol)}:null};
+ }
+ const api={fresh,ratingScore,ratingView,coinCardView,filterRows,botModels,positionView,domain,chartBars,barCount,selectionDefaults,validateSelection,selectionView};
  if(typeof module!=='undefined')module.exports=api;
  if(typeof document==='undefined')return;
  scope.LabScreener=api;
@@ -101,6 +119,7 @@
   const counter=el('p','screener-counter'),status=el('p','screener-status','Получаем публичные данные Bybit…');status.id='screener-status';status.setAttribute('role','status');marketBox.append(counter,status);
   const alertsBox=el('section','box screener-alerts');alertsBox.id='screener-alerts';const alertHead=el('div','panel-heading'),alertList=el('div');alertHead.append(el('h2','','Алерты'),action('Все алерты','alerts'));alertsBox.append(alertHead,alertList);root.append(alertsBox);
   const panel=el('section','box screener-detail');panel.id='screener-detail';root.append(panel);
+  panel.setAttribute('aria-label','Карточка выбранной монеты');
   const toolbar=el('div','screener-detail-toolbar'),title=el('h2','','BTCUSDT · 5 мин'),timeChips=el('div','time-chips'),timeframe={value:'5'},timeButtons={};timeChips.setAttribute('role','group');timeChips.setAttribute('aria-label','Таймфрейм уровней');
   for(const [value,text,label]of [['1','1м','1 минута'],['5','5м','5 минут'],['15','15м','15 минут'],['60','1ч','1 час']]){const b=el('button','time-chip',text);b.type='button';b.setAttribute('aria-label',label);b.setAttribute('aria-pressed',String(value==='5'));b.addEventListener('click',()=>{timeframe.value=value;updateScaleControls();for(const [v,n]of Object.entries(timeButtons))n.setAttribute('aria-pressed',String(v===value));choose(selected);});timeButtons[value]=b;timeChips.append(b);}
   const scaleControls=el('div','chart-scale-controls');scaleControls.setAttribute('role','group');scaleControls.setAttribute('aria-label','Масштаб графика');
@@ -110,6 +129,9 @@
   scaleControls.append(scaleOut,scaleValue,scaleIn);
   const external=el('a','icon-button external-chart');external.target='_blank';external.rel='noopener noreferrer';external.setAttribute('aria-label','Открыть TradingView');external.append(icon('arrow'));
   const expand=el('button','icon-button');expand.type='button';expand.setAttribute('aria-label','Открыть график');expand.append(icon('expand'));toolbar.append(title,timeChips,scaleControls,external,expand);panel.append(toolbar);
+  const cardFacts=el('dl','coin-card-facts'),cardFields={},cardSources=el('ul','coin-card-sources'),cardSourceNodes={};
+  for(const [key,name]of [['price','Цена, USDT'],['oi','OI, USDT'],['funding','Funding'],['vwap','VWAP · 60 свечей'],['atr','ATR(14)'],['volume','Объём · 60 свечей']]){const item=el('div'),label=el('dt','',name),value=el('dd','','—'),hint=el('small','');item.dataset.metric=key;item.append(label,value,hint);cardFacts.append(item);cardFields[key]={item,label,value,hint};}
+  for(const [key,name]of [['ticker','Котировки'],['chart','Свечи'],['book','Стакан']]){const item=el('li'),text=el('span'),stamp=el('time'),note=el('small');item.dataset.source=key;item.append(text,stamp,note);cardSources.append(item);cardSourceNodes[key]={item,text,stamp,note,name};}panel.append(cardFacts,cardSources);
   const chartHost=el('div','screener-chart');chartHost.id='screener-candles';const quickLevels=el('div','chart-quick-levels'),chartStatus=el('small','chart-stamp');panel.append(chartHost,quickLevels,chartStatus);
   const analysis=el('details','chart-analysis'),metrics=el('div','terminal-metrics'),levelsBox=el('div','screener-levels');levelsBox.id='screener-levels';analysis.append(el('summary','','Уровни и показатели'),metrics,levelsBox);panel.append(analysis);
   const explanation=el('details','screener-method');explanation.append(el('summary','','Как рассчитываются уровни'));
@@ -152,7 +174,8 @@
   const endPointer=e=>{pointers.delete(e.pointerId);if(pointers.size<2)pinch=null;if(!pointers.size)drag=null;};chartHost.addEventListener('pointerup',endPointer);chartHost.addEventListener('pointercancel',endPointer);
   chartHost.addEventListener('dblclick',resetView);
   const visible=()=>!document.hidden&&!page.hidden;
-  const chartFresh=now=>chart?.symbol===selected&&chart.interval===timeframe.value&&chart.status==='ok'&&fresh(chart.updated,now,75)&&fresh(chart.candle_end,now,Number(timeframe.value)*60+75);
+  const cardView=now=>coinCardView({snapshot,chart,book,symbol:selected,interval:timeframe.value,now,tickerError,chartError,bookError});
+  const chartFresh=now=>cardView(now).sources.chart.available;
   const activeAlerts=now=>scope.LabAlerts.collectAlerts(bState,wState,now,researchState);
   const turnover=v=>finite(v)?v>=1e9?fmt(v/1e9,2)+' млрд':fmt(v/1e6,1)+' млн':'—';
   const svgNode=(tag,attrs={})=>{const n=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v]of Object.entries(attrs))n.setAttribute(k,String(v));return n;};
@@ -214,12 +237,28 @@
    counter.textContent=rows.length+' из '+snapshot.rows.length+' · до 100 пар по обороту · рейтинг: ликвидность + спред + объём + стакан';patchTableRows(rows,now);scroll.scrollTop=savedScroll;
    if(focusSelected){const row=tbody.querySelector('.selected-coin');if(row){const bounds=scroll.getBoundingClientRect(),r=row.getBoundingClientRect();if(r.bottom>bounds.bottom)scroll.scrollTop+=r.bottom-bounds.bottom;else if(r.top<bounds.top)scroll.scrollTop+=r.top-bounds.top;}focusSelected=false;}
   }
+  function renderCard(now){
+   const view=cardView(now),q=view.quote,c=view.chart,base=selected.slice(0,-4),tf=timeframe.value==='60'?'1ч':timeframe.value+'м';
+   const priceText=value=>!finite(value)?'—':value>0&&value<1e-8?value.toExponential(3).replace('.',','):fmt(value,value>=1000?2:value>=1?4:value>=.01?6:8);
+   panel.dataset.symbol=selected;panel.dataset.interval=timeframe.value;
+   const fields={
+    price:['Цена, USDT',priceText(q?.price),q&&finite(q.change)?'24ч '+(q.change>=0?'+':'')+fmt(q.change,2)+'% · оборот '+turnover(q.turnover)+' USDT':'Ожидаем свежую котировку'],
+    oi:['OI, USDT',fmt(q?.oi,0),q&&q.oi!==null?'Открытый интерес · по котировке':'OI недоступен'],
+    funding:['Funding',finite(q?.funding_pct)?(q.funding_pct>0?'+':'')+fmt(q.funding_pct,4)+'%':'—',q&&q.funding_pct!==null?(q.funding_hours!==null?'За интервал '+fmt(q.funding_hours,1)+' ч':'Интервал не указан биржей'):'Funding недоступен'],
+    vwap:['VWAP · 60 свечей',finite(c?.vwap)?priceText(c.vwap)+' USDT':'—',c&&c.vwap!==null?'Закрытые свечи · '+tf:'VWAP недоступен'],
+    atr:['ATR(14) · '+tf,finite(c?.atr)?priceText(c.atr)+' USDT':'—',finite(c?.atr_pct)?fmt(c.atr_pct,3)+'% цены · 14 свечей':'Ожидаем свежие свечи'],
+    volume:['Объём · 60 свечей',finite(c?.volume)?fmt(c.volume,2)+' '+base:'—',finite(c?.turnover)?'Оборот '+turnover(c.turnover)+' USDT · '+tf:'Объём недоступен']
+   };
+   for(const [key,[name,value,hint]]of Object.entries(fields)){const node=cardFields[key];node.label.textContent=name;node.value.textContent=value;node.hint.textContent=hint;node.item.dataset.available=String(value!=='—');}
+   const names={fresh:'свежие',cached:'повторяем обновление',stale:'устарели',pending:'загрузка',error:'недоступны',missing:'нет котировки'};
+   for(const [key,source]of Object.entries(view.sources)){const node=cardSourceNodes[key];node.item.dataset.state=source.status;node.text.textContent=node.name+': '+names[source.status]+(finite(source.age)?' · '+fmt(source.age,0)+' с':'');const date=new Date(source.stamp*1000),valid=source.stamp!==null&&Number.isFinite(date.getTime());node.stamp.textContent=valid?date.toLocaleTimeString('ru-RU'):'';if(valid)node.stamp.dateTime=date.toISOString();else node.stamp.removeAttribute('datetime');node.note.textContent=source.note;}
+  }
   function renderLevels(now){
    title.textContent=selected+' · '+(timeframe.value==='60'?'1 час':timeframe.value+' мин');external.href='https://www.tradingview.com/chart/?symbol='+encodeURIComponent('BYBIT:'+selected+'.P');updateScaleControls();
-   const usable=chartFresh(now);chartStatus.textContent=chartError||(!chart||chart.status==='pending'?'Загрузка закрытых свечей…':chart.status!=='ok'?'Свечи недоступны: '+(chart.error||'ошибка'):!usable?'СВЕЧИ УСТАРЕЛИ · уровни скрыты':chart.candles.length+' закрытых свечей · '+new Date(chart.candle_end*1000).toLocaleString('ru-RU'));chartStatus.className='chart-stamp'+(usable?'':' negative');
+   const source=cardView(now).sources.chart,usable=source.available;chartStatus.textContent=(!usable&&chartError?chartError:!chart||chart.status==='pending'?'Загрузка закрытых свечей…':source.status==='error'?'Свечи недоступны: '+(source.note||'неверный ответ'):!usable?'СВЕЧИ УСТАРЕЛИ · уровни скрыты':(source.status==='cached'?'Последний подтверждённый анализ · ':'')+chart.candles.length+' закрытых свечей · '+new Date(chart.candle_end*1000).toLocaleString('ru-RU'));chartStatus.className='chart-stamp'+(usable?'':' negative');
    if(!usable){const unavailable='unavailable|'+chartStatus.textContent;if(chartInfoSignature!==unavailable){chartInfoSignature=unavailable;metrics.replaceChildren();levelsBox.replaceChildren();quickLevels.replaceChildren();chartHost.replaceChildren(el('p','muted','Ожидание свежего анализа.'));}chartSignature='';return;}
    const last=chart.candles.at(-1)||{},infoSignature=[selected,timeframe.value,chart.candle_end,chart.candles.length,last.time,last.open,last.high,last.low,last.close,chart.price,chart.atr_pct,chart.rvol,chart.turnover_window,JSON.stringify(chart.levels)].join('|');
-   if(infoSignature!==chartInfoSignature){metrics.replaceChildren();levelsBox.replaceChildren();quickLevels.replaceChildren();for(const [key,value]of [['Цена закрытия',fmt(chart.price,8)],['ATR(14)',fmt(chart.atr_pct,3)+'%'],['RVOL · 5 / 20',fmt(chart.rvol)+'×'],['Оборот 60 свечей',turnover(chart.turnover_window)+' USDT']]){const c=el('div');c.append(el('span','muted',key),el('b','',value));metrics.append(c);}for(const [side,label]of [['support','Поддержка'],['resistance','Сопротивление']]){const group=el('div','level-group '+side),levels=chart.levels.filter(l=>l.side===side);group.append(el('h3','',label));if(!levels.length)line(group,'Подтверждённых зон в истории нет.');for(const [i,l]of levels.entries()){const row=el('div','level-item');row.append(el('b','',fmt(l.price,8)+' USDT'),el('span','muted',fmt(l.distance_pct,2)+'% от закрытия · экстремумов '+l.pivots));group.append(row);if(i===0)quickLevels.append(el('span',side,label+' '+fmt(l.price,8)));}levelsBox.append(group);}chartInfoSignature=infoSignature;}
+   if(infoSignature!==chartInfoSignature){metrics.replaceChildren();levelsBox.replaceChildren();quickLevels.replaceChildren();for(const [key,value]of [['Цена закрытия',fmt(chart.price,8)],['RVOL по обороту · 5 / 20 свечей',fmt(chart.rvol)+'×']]){const c=el('div');c.append(el('span','muted',key),el('b','',value));metrics.append(c);}for(const [side,label]of [['support','Поддержка'],['resistance','Сопротивление']]){const group=el('div','level-group '+side),levels=chart.levels.filter(l=>l.side===side);group.append(el('h3','',label));if(!levels.length)line(group,'Подтверждённых зон в истории нет.');for(const [i,l]of levels.entries()){const row=el('div','level-item');row.append(el('b','',fmt(l.price,8)+' USDT'),el('span','muted',fmt(l.distance_pct,2)+'% от закрытия · экстремумов '+l.pivots));group.append(row);if(i===0)quickLevels.append(el('span',side,label+' '+fmt(l.price,8)));}levelsBox.append(group);}chartInfoSignature=infoSignature;}
    const signature=infoSignature+'|'+chartHost.clientWidth+'|'+JSON.stringify(getView())+'|'+displayedPositions(now);if(signature!==chartSignature){drawChart(chart);chartSignature=signature;}
   }
   function createCompactAlert(source,r,v){const card=el('button','compact-alert'),body=el('div','compact-alert-body'),heading=el('div'),stamp=el('small','compact-alert-time'),symbol=el('b'),pill=el('span','signal-pill'),description=el('p');card.type='button';heading.append(symbol,pill);body.append(stamp,heading,description);card.append(coin(r.symbol),body,icon('arrow'));card.addEventListener('click',()=>{if(safeSymbol(r.symbol)){choose(r.symbol);panel.scrollIntoView({block:'center',behavior:'smooth'});}else go('alerts');});return {card,stamp,symbol,pill,description};}
@@ -230,9 +269,9 @@
    if(empty)empty.remove();const wanted=new Set(current.map(({source,r})=>source+':'+r.symbol));for(const [key,item]of compactAlertRows)if(!wanted.has(key)){item.card.remove();compactAlertRows.delete(key);}for(const item of current){const key=item.source+':'+item.r.symbol;let card=compactAlertRows.get(key);if(!card){card=createCompactAlert(item.source,item.r,item.view);compactAlertRows.set(key,card);}updateCompactAlert(card,item.source,item.r,item.view);}for(const [index,item]of current.entries()){const card=compactAlertRows.get(item.source+':'+item.r.symbol).card,currentNode=alertList.children[index];if(currentNode!==card)alertList.insertBefore(card,currentNode||null);}
   }
   function renderBook(now){
-   const usable=book?.symbol===selected&&book.status==='ok'&&fresh(book.updated,now,8),signature=usable?[selected,book.updated,bookChange?.time,bState?.updated].join('|'):'unavailable|'+selected+'|'+bookError+'|'+(book?.status||'');if(signature===bookSignature)return;bookSignature=signature;
+   const source=cardView(now).sources.book,usable=source.available,signature=usable?[selected,book.updated,bookChange?.time,bState?.updated].join('|'):'unavailable|'+selected+'|'+source.status+'|'+source.note;if(signature===bookSignature)return;bookSignature=signature;
    const heading=el('div','panel-heading');heading.append(el('h2','','Стакан · '+selected),el('small','muted','Глубина ±0,1%'));bookBox.replaceChildren(heading);
-   if(!usable){line(bookBox,bookError||(!book||book.status==='pending'?'Ожидание снимка стакана…':book.status!=='ok'?'Стакан недоступен: '+book.error:'СТАКАН УСТАРЕЛ · объёмы скрыты'),'negative');return;}
+   if(!usable){line(bookBox,bookError||(!book||book.status==='pending'?'Ожидание снимка стакана…':source.status==='error'?'Стакан недоступен: '+(source.note||'неверный ответ'):'СТАКАН УСТАРЕЛ · объёмы скрыты'),'negative');return;}
    const near=book.bands['0.001'],totals=el('div','book-summary');for(const [side,label]of [['bid','Покупки · Bid'],['ask','Продажи · Ask']]){const total=el('div','book-total '+side);total.append(el('span','',label),el('b','',(near.covered?'':'≥ ')+fmt(near[side],0)+' USDT'));totals.append(total);}bookBox.append(totals);if(!near.covered)line(bookBox,'Полученные уровни не покрывают всю зону: объёмы — нижняя оценка.','book-summary-note');
    const top=el('div','book-top'),max=Math.max(1,...['bid','ask'].flatMap(s=>(book.top?.[s]||[]).map(l=>l.notional)));
    for(const side of ['bid','ask']){const col=el('div');col.append(el('h3','','Цена / объём '+side));for(const l of book.top?.[side]||[]){const row=el('div','book-level '+side),bar=svgNode('svg',{viewBox:'0 0 100 20',preserveAspectRatio:'none','aria-hidden':'true'});bar.append(svgNode('rect',{width:l.notional/max*100,height:20,class:side==='bid'?'meter-buy':'meter-sell'}));row.append(bar,el('span','book-price',fmt(l.price,8)),el('span','',fmt(l.notional,0)));col.append(row);}if(!book.top?.[side]?.length)line(col,'Нет уровней');top.append(col);}bookBox.append(top);
@@ -251,7 +290,7 @@
     if(s?.reason)line(card,s.reason,'bot-reason');let last=null;for(const t of s?.trades||s?.journal_trades||[])if(finite(t.closed)&&(!last||t.closed>last.closed))last=t;if(last)line(card,'Последняя: '+last.symbol+' · net '+fmt(last.net,4)+' USDT','bot-last-close');grid.append(card);
    }botsBox.append(grid);line(botsBox,'PAPER · состояния и позиции моделей. Оборот рынка и заявки стакана не являются доходностью бота.','muted');
   }
-  function render(){if(!visible())return;const now=Date.now()/1000;renderTable(now);renderLevels(now);renderAlerts(now);renderBook(now);renderBots(now);}
+  function render(){if(!visible())return;const now=Date.now()/1000;renderTable(now);renderCard(now);renderLevels(now);renderAlerts(now);renderBook(now);renderBots(now);}
   async function get(path){const res=await scope.labFetch(path);if(!res.ok)throw Error('HTTP '+res.status);return res.json();}
   const selectionQuery=()=>new URLSearchParams({...selectionFilters,search:search.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,24)}).toString();
   async function refreshSelection(){if(selectionBusy||!visible())return;selectionBusy=true;const query=selectionQuery();try{const next=await get('/api/market-selection?'+query);if(query===selectionQuery()){selectionPacket=next;selectionError=next.status==='error'?'Отбор временно недоступен':'';render();}}catch(e){if(query===selectionQuery()){selectionPacket=null;selectionError='Не удалось обновить отбор · повторяем запрос';render();}}finally{selectionBusy=false;}}
