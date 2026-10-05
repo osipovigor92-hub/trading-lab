@@ -245,6 +245,28 @@ class ManualPaper:
             trades = [json.loads(r[0]) for r in db.execute('SELECT body FROM trades ORDER BY rowid DESC LIMIT 20')]
             return dict(a, status='ok', updated=now, capital=CAPITAL, hold_seconds=HOLD, trades=trades)
 
+    def journal(self, before=0, limit=20):
+        """Read every stored closing through cursor pages, without account writes/valuation."""
+        if type(before) is not int or before < 0 or type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError('Некорректная страница ручного PAPER')
+        if self.error:
+            return dict(status='unavailable', updated=self.clock(), error=self.error, rows=[], total=0, next_before=0)
+        with self.lock:
+            db = sqlite3.connect(self.path.as_uri()+'?mode=ro', uri=True, timeout=.5)
+            try:
+                db.execute('BEGIN')
+                total = db.execute('SELECT COUNT(*) FROM trades').fetchone()[0]
+                sql = 'SELECT rowid,body FROM trades'
+                values = []
+                if before:
+                    sql += ' WHERE rowid<?';values.append(before)
+                rows = db.execute(sql+' ORDER BY rowid DESC LIMIT ?', values+[limit+1]).fetchall()
+                result = [dict(json.loads(body), cursor=cursor) for cursor, body in rows[:limit]]
+                return dict(status='ok', updated=self.clock(), rows=result, total=total,
+                            next_before=result[-1]['cursor'] if len(rows)>limit else 0)
+            finally:
+                db.close()
+
     def command(self, command):
         if self.error:
             raise ValueError(self.error)

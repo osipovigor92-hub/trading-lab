@@ -172,6 +172,17 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(report['sources_ready'],0)
         self.assertEqual(report['current_events'],0)
 
+    def test_candidate_journal_diagnostic_reports_readability_and_collection_separately(self):
+        packet=dict(status='partial',updated=100,total=42,rows=[dict(body='PRIVATE')],
+                    collector=dict(installed=True,collecting=False,last_cycle=90,error='PRIVATE_STORAGE_ERROR'))
+        result=diagnose_models.sanitized_journal(packet,101)
+        self.assertTrue(result['available']);self.assertTrue(result['fresh']);self.assertFalse(result['collecting'])
+        self.assertEqual(result['records'],42);self.assertNotIn('PRIVATE',json.dumps(result))
+        packet['collector']['collecting']=True
+        self.assertTrue(diagnose_models.sanitized_journal(packet,101)['collecting'])
+        self.assertFalse(diagnose_models.sanitized_journal(packet,140)['collecting'])
+        self.assertFalse(diagnose_models.sanitized_journal(dict(status='unavailable'),101)['available'])
+
     def test_failed_first_install_removes_dropins_and_restores_previous_startup(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'state.json'; state.write_text(json.dumps(dict(updated=100,position=None)))

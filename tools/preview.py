@@ -17,6 +17,7 @@ sys.path.insert(0, str(PANEL))
 import selection
 from market_alerts import MarketAlerts
 from manual_paper import ManualPaper
+from candidate_journal import CandidateJournal, parse_query, csv_page
 spec = importlib.util.spec_from_file_location('lab_report', ROOT/'src/trading-report/report.py')
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
@@ -126,7 +127,9 @@ class DemoControl:
 
 CONTROL = DemoControl()
 PAPER_TEST = False
-ALERTS = MarketAlerts()
+JOURNAL_ROOT = tempfile.TemporaryDirectory(prefix='lab-preview-candidates-')
+JOURNAL = CandidateJournal(JOURNAL_ROOT.name)
+ALERTS = MarketAlerts(event_sink=JOURNAL.event)
 
 def market_fixture(path, query):
     now=time.time()
@@ -148,6 +151,7 @@ def market_fixture(path, query):
             books[symbol]=market_fixture('/api/market-book',dict(symbol=[symbol]))
             histories[symbol]=[dict(books[symbol],updated=books[symbol]['updated']-8+i*2,seq=i+1) for i in range(5)]
         ALERTS.update(key,tickers,charts,books,histories,now)
+        JOURNAL.cycle(tickers,charts,books,histories,[(selection.DEFAULT_FILTERS,''),(filters,query.get('search',[''])[0])],now)
         return ALERTS.snapshot(key,now)
     if path=='/api/market-selection':
         filters=selection.parse_filters({k:v[0] for k,v in query.items() if k!='search'})
@@ -239,6 +243,17 @@ class Handler(BaseHTTPRequestHandler):
         data=fixtures()
         if path == '/api/manual-paper':
             body=json.dumps(dict(MANUAL.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
+        elif path in ('/api/candidate-journal','/candidate-journal.csv','/api/manual-journal','/manual-journal.csv'):
+            market_fixture('/api/market-alerts',{})
+            query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
+            try:
+                params=parse_query(query,time.time());is_manual=path in ('/api/manual-journal','/manual-journal.csv')
+                if is_manual and set(query)-{'before','limit'}:raise ValueError('Invalid manual journal query')
+                value=MANUAL.journal(params['before'],params['limit']) if is_manual else JOURNAL.page(params)
+                body=csv_page(value,is_manual) if path.endswith('.csv') else json.dumps(value,ensure_ascii=False).encode()
+                kind='text/csv; charset=utf-8' if path.endswith('.csv') else 'application/json; charset=utf-8'
+            except ValueError:
+                self.send_error(400);return
         elif path in ('/api/screener','/api/market-chart','/api/market-book','/api/market-selection','/api/market-alerts'):
             body=json.dumps(market_fixture(path,parse_qs(urlsplit(self.path).query)),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in data:

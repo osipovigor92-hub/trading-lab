@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded',()=>{
  const graph=document.getElementById('page-chart');
  const graphHead=make('div','page-heading');graphHead.append(make('h2','','График и анализ'),make('p','muted','Выбери контракт и таймфрейм'));graph.append(graphHead);
  for(const selector of ['.terminal-toolbar','.terminal-layout']){const node=document.querySelector(selector);if(node)graph.append(node);}
- const journals=document.getElementById('page-journals'),journalHead=make('div','page-heading');journalHead.append(make('h2','','Журнал моделей'),make('p','muted','Закрытые PAPER-сделки, расходы и результаты'));journals.append(journalHead);
+ const journals=document.getElementById('page-journals'),journalHead=make('div','page-heading');journalHead.append(make('h2','','Журнал и разбор'),make('p','muted','Решения отбора, причины отказа и закрытые PAPER-сделки'));journals.prepend(journalHead);
  for(const id of ['model-journals','lab-report','research-journals']){const node=document.getElementById(id);if(node)journals.append(node);}
  const settings=document.getElementById('page-settings'),settingsBox=make('section','box settings-box');
  settingsBox.append(make('h2','','Настройки интерфейса'),make('p','muted','Оформление сохраняется в этом браузере.'));

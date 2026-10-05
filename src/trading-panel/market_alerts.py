@@ -75,11 +75,12 @@ def measure(row, tickers, chart, book, history, filters, now):
 
 class MarketAlerts:
     """Four filter scopes, 100 tracked coins and 50 recent events per scope."""
-    def __init__(self):
+    def __init__(self, event_sink=None):
         self.lock = threading.RLock()
         self.epoch = uuid.uuid4().hex
         self.sequence = 0
         self.scopes = OrderedDict()
+        self.event_sink = event_sink
 
     def register(self, filters, search, now):
         key = hashlib.sha256(json.dumps([filters, search], sort_keys=True).encode()).hexdigest()[:20]
@@ -171,6 +172,8 @@ class MarketAlerts:
                      detail=detail, score=value['score'], price=value['price'], level=level)
         scope['events'].insert(0, event)
         scope['events'] = scope['events'][:50]
+        if self.event_sink:
+            self.event_sink(event, scope['filters'], scope['search'], value)
 
     def snapshot(self, key, now):
         with self.lock:

@@ -120,10 +120,29 @@ def diagnose():
             alerts = sanitized_alerts(json.load(response), time.time())
     except (OSError, ValueError, TypeError):
         pass
+    journal = dict(available=False, fresh=False, collecting=False)
+    try:
+        with urlopen('http://127.0.0.1:8787/api/candidate-journal?period=all&limit=1', timeout=3) as response:
+            journal = sanitized_journal(json.load(response), time.time())
+    except (OSError, ValueError, TypeError):
+        pass
     return dict(checked=time.time(), panel_revision=revision(read(TRACK)),
                 control_revision=revision(manifest), control_files_match=integrity(manifest),
                 units=unit_states(), controller=sanitized_status(raw, time.time()), manual_paper=manual,
-                market_alerts=alerts)
+                market_alerts=alerts, candidate_journal=journal)
+
+
+def sanitized_journal(raw, now):
+    finite = lambda v: type(v) in (int, float) and math.isfinite(v)
+    if not isinstance(raw, dict) or raw.get('status') not in ('ok','partial'):
+        return dict(available=False, fresh=False, collecting=False)
+    collector = raw.get('collector') if isinstance(raw.get('collector'), dict) else {}
+    return dict(available=collector.get('installed') is True,
+                fresh=finite(raw.get('updated')) and 0 <= now-raw['updated'] <= 8,
+                collecting=collector.get('collecting') is True and finite(collector.get('last_cycle')) and
+                           -2 <= now-collector['last_cycle'] <= 30,
+                last_cycle=collector.get('last_cycle') if finite(collector.get('last_cycle')) else None,
+                records=raw.get('total') if type(raw.get('total')) is int else None)
 
 
 def sanitized_alerts(raw, now):
@@ -155,6 +174,9 @@ def text_report(report):
     alerts=report.get('market_alerts',{})
     lines.append('Монитор алертов: '+('отвечает' if alerts.get('available') and alerts.get('fresh') else 'нет свежего ответа')+
                  ' · свежих полных подтверждений: '+str(alerts.get('sources_ready',0)))
+    journal=report.get('candidate_journal',{})
+    lines.append('Постоянный журнал: '+('доступен' if journal.get('available') and journal.get('fresh') else 'нет свежего ответа')+
+                 ' · сбор '+('работает' if journal.get('collecting') else 'ожидает / приостановлен'))
     for unit, s in report['units'].items():
         lines.append(unit + ': ' + s['load'] + ' / ' + s['active'])
     if c['memory']:

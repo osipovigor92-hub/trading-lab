@@ -1,0 +1,54 @@
+.candidate-journal>h2{margin:0 0 10px}
+.candidate-journal>p,.journal-learning p,.journal-entry p{max-width:72ch}
+.journal-health{color:var(--muted);font-size:13px}
+.journal-health[data-status="ok"]{color:var(--buy)}
+.journal-health[data-status="unavailable"]{color:var(--sell)}
+.journal-controls{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;margin:20px 0 12px}
+.journal-controls label{display:flex;flex-direction:column;gap:7px;color:var(--muted);font-size:12px;flex:1;min-width:150px}
+.journal-controls input,.journal-controls select{width:100%;min-height:44px;min-width:0}
+.journal-controls button,.journal-pager button,.journal-pager a,.journal-entry button{min-height:44px}
+.journal-count{font-size:13px;font-variant-numeric:tabular-nums}
+.journal-learning{margin:16px 0 20px}
+.journal-learning>summary,.manual-journal>summary{min-height:44px;font-weight:650}
+.journal-entry{border-bottom:1px solid var(--line);padding:14px 0;font-variant-numeric:tabular-nums}
+.journal-entry>summary{display:grid;grid-template-columns:140px minmax(160px,1fr) auto;gap:12px;align-items:center;cursor:pointer;min-height:44px;list-style:none}
+.journal-entry>summary::-webkit-details-marker{display:none}
+.journal-entry>summary strong{display:inline-flex;align-items:center;gap:8px}
+.journal-disclosure{width:14px;height:14px;flex-shrink:0;color:var(--muted)}
+.journal-entry[open]>summary .journal-disclosure{transform:rotate(90deg)}
+.journal-entry>summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px;border-radius:4px}
+.journal-decision{color:var(--muted);font-size:13px}
+.journal-decision.status-rejected{color:var(--sell)}
+.journal-decision.status-passed{color:var(--buy)}
+.journal-entry time{font-size:12px}
+.journal-entry p{margin:12px 0}
+.journal-checks{margin:16px 0}
+.journal-check{display:grid;grid-template-columns:2fr 1fr 1fr 100px;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
+.journal-check strong{font-weight:500}
+.journal-context{margin:18px 0}
+.journal-context summary{min-height:44px}
+.journal-filter-values{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;max-width:620px;font-size:13px}
+.journal-filter-values dt{color:var(--muted)}
+.journal-filter-values dd{margin:0;font-variant-numeric:tabular-nums}
+.journal-pager{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:20px 0 12px}
+.journal-pager a{display:inline-flex;align-items:center;text-decoration:none}
+.journal-pager a[aria-disabled="true"]{opacity:.5;pointer-events:none}
+.journal-empty{padding:24px 0;color:var(--muted)}
+.manual-journal{margin-top:24px}
+@media(max-width:720px){
+ .journal-entry>summary{grid-template-columns:1fr auto;gap:8px}
+ .journal-entry>summary .journal-decision{grid-column:1/-1;grid-row:2}
+ .journal-check{grid-template-columns:1fr 1fr;gap:6px 12px}
+ .journal-check strong{grid-column:1/-1}
+ .journal-check>span:last-child{grid-column:1/-1}
+ .journal-pager button,.journal-pager a{flex:1;justify-content:center;text-align:center}
+ .journal-pager a{flex-basis:100%}
+}
+@media(max-width:400px){
+ .journal-controls label{flex-basis:100%}
+ .journal-controls button{width:100%}
+ .journal-entry>summary{grid-template-columns:1fr}
+ .journal-entry>summary .journal-decision{grid-row:auto}
+ .journal-entry>summary time{grid-column:1}
+ .journal-check{grid-template-columns:1fr}
+}
