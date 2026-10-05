@@ -37,5 +37,31 @@
   else if(code==='ONDO'){for(let i=0;i<3;i++)e.append(document.createElement('i'));}
   else e.textContent=code.slice(0,2);return e;
  }
- scope.LabUI={icon,brand,coin};
+ // Reconcile display-only content after a snapshot is ready. Retain existing
+ // nodes (including focused links, selection and expanded details) instead of
+ // clearing the live panel on every timer tick. Interactive forms stay owned
+ // by their screen and are never passed through this function.
+ function syncChildren(target,source){
+  const keys=new Map([...target.children].filter(n=>n.dataset.key).map(n=>[n.dataset.key,n]));
+  let cursor=target.firstChild;
+  for(const next of [...source.childNodes]){
+   const key=next.nodeType===1?next.dataset?.key:null;
+   const node=key?keys.get(key):cursor?.nodeType===1&&cursor.dataset?.key?null:cursor;
+   const same=node&&node.nodeType===next.nodeType&&node.nodeName===next.nodeName&&node.namespaceURI===next.namespaceURI;
+   if(same){
+    if(node!==cursor)target.insertBefore(node,cursor);
+    if(node.nodeType===3){if(node.nodeValue!==next.nodeValue)node.nodeValue=next.nodeValue;}
+    else if(node.nodeType===1){
+     const keepOpen=node.localName==='details';
+     for(const attr of [...node.attributes])if(!(keepOpen&&attr.name==='open')&&!next.hasAttribute(attr.name))node.removeAttribute(attr.name);
+     for(const attr of next.attributes)if(!(keepOpen&&attr.name==='open')&&node.getAttribute(attr.name)!==attr.value)node.setAttribute(attr.name,attr.value);
+     syncChildren(node,next);
+    }
+    cursor=node.nextSibling;
+   }else{target.insertBefore(next,cursor);cursor=next.nextSibling;}
+   if(key)keys.delete(key);
+  }
+  while(cursor){const next=cursor.nextSibling;cursor.remove();cursor=next;}
+ }
+ scope.LabUI={icon,brand,coin,syncChildren};
 })(typeof window==='undefined'?globalThis:window);
