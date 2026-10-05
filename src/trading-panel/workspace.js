@@ -81,10 +81,17 @@
     for(const [x,w,cls] of [[0,share*100,'meter-buy'],[share*100,(1-share)*100,'meter-sell']]){const rect=document.createElementNS(svg.namespaceURI,'rect');rect.setAttribute('x',x);rect.setAttribute('width',w);rect.setAttribute('height',8);rect.setAttribute('class',cls);svg.append(rect);}bar.append(svg);
    }else bar.append(make('span','muted','Нет объёма'));row.append(bar);parent.append(row);
   }
-  function render(){if(document.hidden)return;const now=Date.now()/1000;const rows=b?.observations||[];const symbols=[...new Set([...rows.map(r=>r.symbol),...(extraSymbol?[extraSymbol]:[])])];const signature=symbols.join('|');
+  const displayRoots=[modelSummary,quote,decision,pulse,liquidity,modelCharts];
+  function render(){
+   if(document.hidden)return;
+   const drafts=displayRoots.map(node=>node.cloneNode(false));
+   renderContent(...drafts);
+   displayRoots.forEach((node,index)=>{if(node.className!==drafts[index].className)node.className=drafts[index].className;scope.LabUI.syncChildren(node,drafts[index]);});
+  }
+  function renderContent(modelSummary,quote,decision,pulse,liquidity,modelCharts){const now=Date.now()/1000;const rows=b?.observations||[];const symbols=[...new Set([...rows.map(r=>r.symbol),...(extraSymbol?[extraSymbol]:[])])];const signature=symbols.join('|');
    if(signature!==sequence){sequence=signature;select.replaceChildren();for(const symbol of symbols){const o=make('option','',symbol);o.value=symbol;select.append(o);}if(!symbols.includes(selected))selected=symbols[0]||'LINKUSDT';select.value=selected;chooseChart();}
    const r=rows.find(r=>r.symbol===selected);const current=b?.phase==='running'&&fresh(b.updated,now,8)&&fresh(r?.time,now,3);const view=current&&r&&scope.LabAlerts?scope.LabAlerts.classifyB(b,r,now):null;
-   modelSummary.replaceChildren();for(const [name,s] of [['A',a],['B',b]]){const card=make('article','model-tile');const active=s&&fresh(s.updated,now,10),running=active&&s.phase==='running';const status=running?'PAPER работает':active&&s.phase==='halted'?'Остановлена по защите':active?'Ожидает данные':'Нет свежих данных';
+   for(const [name,s] of [['A',a],['B',b]]){const card=make('article','model-tile');card.dataset.key=name;const active=s&&fresh(s.updated,now,10),running=active&&s.phase==='running';const status=running?'PAPER работает':active&&s.phase==='halted'?'Остановлена по защите':active?'Ожидает данные':'Нет свежих данных';
     card.append(make('small','eyebrow','МОДЕЛЬ '+name),make('h3','',status));const pnl=s&&numeric(s.equity)&&numeric(s.config?.capital)?s.equity-s.config.capital:null;
     if(!active){card.append(make('strong','muted','—'));line(card,s?'Последний снимок: '+dt(s.updated)+'. Текущий P&L не подтверждён.':'Снимок модели ещё не получен.','negative');if(pnl!==null)line(card,'Последний P&L: '+fmt(pnl,4)+' USDT.');}
     else{card.append(make('strong',pnl<0?'negative':'positive',fmt(pnl,4)+' USDT'));line(card,(running?'Текущий':'Итоговый')+' P&L модели · '+(s?.position?(running?'открытая позиция: ':'последняя позиция: ')+s.position.symbol:'нет открытой позиции'));}

@@ -2,11 +2,11 @@ const el = id => document.getElementById(id);
 const fmt = (n, digits=2) => Number(n).toLocaleString(
   'ru-RU', {minimumFractionDigits:digits, maximumFractionDigits:digits}
 );
-const put = (id, value) => { el(id).textContent = value; };
+const put = (id, value) => { const node=el(id),text=String(value);if(node.textContent!==text)node.textContent=text; };
 
 function rows(id, values) {
   const body = el(id);
-  body.replaceChildren();
+  const next=document.createDocumentFragment();
   for (const valuesRow of values) {
     const tr = document.createElement('tr');
     for (const value of valuesRow) {
@@ -14,8 +14,9 @@ function rows(id, values) {
       td.textContent = value;
       tr.appendChild(td);
     }
-    body.appendChild(tr);
+    next.appendChild(tr);
   }
+  LabUI.syncChildren(body,next);
 }
 
 async function refresh() {
@@ -201,33 +202,34 @@ refresh();
         values.pnl.className=pnl<0?'negative':pnl>0?'positive':'';
         values.closed.textContent=s.closed;
         values.dd.textContent=fmt(Math.max(0,1-s.equity/s.peak)*100,3)+'%';
-        position.replaceChildren(make('h2','','Позиция'));
+        const positionDraft=document.createDocumentFragment();positionDraft.append(make('h2','','Позиция'));
         if (s.position) {
           const p=s.position;
-          line(position,p.symbol+' · '+(p.side===1?'LONG':'SHORT'),'position-name');
-          line(position,'Вход '+fmt(p.entry,8)+' USDT · количество '+fmt(p.quantity,8));
-          line(position,'Открыта '+new Date(p.opened*1000).toLocaleTimeString('ru-RU')+
+          line(positionDraft,p.symbol+' · '+(p.side===1?'LONG':'SHORT'),'position-name');
+          line(positionDraft,'Вход '+fmt(p.entry,8)+' USDT · количество '+fmt(p.quantity,8));
+          line(positionDraft,'Открыта '+new Date(p.opened*1000).toLocaleTimeString('ru-RU')+
             ' · возраст '+Math.max(0,Math.round(Date.now()/1000-p.opened))+' сек.');
         } else {
-          line(position,'Открытой позиции нет');
+          line(positionDraft,'Открытой позиции нет');
           const rest=Math.max(0,Math.ceil(s.cooldown_until-Date.now()/1000));
-          line(position,rest ? 'Пауза до новых входов: '+rest+' сек.' :
+          line(positionDraft,rest ? 'Пауза до новых входов: '+rest+' сек.' :
             'Ожидаем совпадения условий входа.','muted');
         }
-        if (!fresh || s.phase==='halted') line(position,'Показана последняя сохранённая оценка.','negative');
-        costs.replaceChildren(make('h2','','Расходы и результат'));
-        line(costs,'Прибыльных / убыточных: '+s.wins+' / '+s.losses+
+        if (!fresh || s.phase==='halted') line(positionDraft,'Показана последняя сохранённая оценка.','negative');
+        const costsDraft=document.createDocumentFragment();costsDraft.append(make('h2','','Расходы и результат'));
+        line(costsDraft,'Прибыльных / убыточных: '+s.wins+' / '+s.losses+
           ' · доля прибыльных: '+(s.closed?fmt(s.wins/s.closed*100,1)+'%':'—'));
-        line(costs,'Комиссии: '+fmt(s.fees,4)+' USDT · funding, оценка: '+fmt(s.funding,4)+' USDT');
-        line(costs,'Комиссии уже включены в результат. Проскальзывание включено в модельные цены.','muted');
-        testing.replaceChildren(make('h2','','Контрольная модель A'));
-        line(testing,'Версия '+s.config.version+' · '+s.closed+' закрытых сделок. Доказанного преимущества пока нет.');
-        line(testing,'Условия: перевес ленты, дисбаланс стакана, движение цены и три подтверждения.');
-        line(testing,'Номинал '+s.config.notional+' USDT · цель +'+s.config.take_profit+
+        line(costsDraft,'Комиссии: '+fmt(s.fees,4)+' USDT · funding, оценка: '+fmt(s.funding,4)+' USDT');
+        line(costsDraft,'Комиссии уже включены в результат. Проскальзывание включено в модельные цены.','muted');
+        const testingDraft=document.createDocumentFragment();testingDraft.append(make('h2','','Контрольная модель A'));
+        line(testingDraft,'Версия '+s.config.version+' · '+s.closed+' закрытых сделок. Доказанного преимущества пока нет.');
+        line(testingDraft,'Условия: перевес ленты, дисбаланс стакана, движение цены и три подтверждения.');
+        line(testingDraft,'Номинал '+s.config.notional+' USDT · цель +'+s.config.take_profit+
           ' / стоп −'+s.config.stop_loss+' USDT · удержание до '+s.config.max_hold+' сек.');
-        line(testing,'Комиссия '+fmt(s.config.fee*100,3)+'% и проскальзывание '+
+        line(testingDraft,'Комиссия '+fmt(s.config.fee*100,3)+'% и проскальзывание '+
           fmt(s.config.slippage*100,3)+'% на сторону. Funding приблизительный.');
-        line(testing,'Текущее состояние модели B показано в её блоке. Изменения правил проверяются на последующих данных.','muted');
+        line(testingDraft,'Текущее состояние модели B показано в её блоке. Изменения правил проверяются на последующих данных.','muted');
+        LabUI.syncChildren(position,positionDraft);LabUI.syncChildren(costs,costsDraft);LabUI.syncChildren(testing,testingDraft);
       } catch (error) {
         state.textContent='PAPER недоступен: '+error.message;
         state.className='negative';
@@ -235,30 +237,32 @@ refresh();
       } finally { setTimeout(updatePaper,5000); }
     }
     async function updateHealth() {
-      health.replaceChildren(make('h2','','Качество данных'));
+      const next=document.createDocumentFragment();next.append(make('h2','','Качество данных'));
       try {
         const s=await get('/api/live');
         const age=Date.now()/1000-s.updated;
         const ready=s.status==='live' && age>=-3 && age<=10;
-        line(health,ready?'LIVE: свежий поток':'LIVE: '+s.status+' · проверь вкладку LIVE');
-        line(health,'Под наблюдением: '+(s.rows || []).map(r=>r.symbol).join(', '));
-        line(health,'Свежесть соединения не является торговым сигналом.','muted');
-      } catch (_) { line(health,'Состояние LIVE недоступно.','negative'); }
+        line(next,ready?'LIVE: свежий поток':'LIVE: '+s.status+' · проверь вкладку LIVE');
+        line(next,'Под наблюдением: '+(s.rows || []).map(r=>r.symbol).join(', '));
+        line(next,'Свежесть соединения не является торговым сигналом.','muted');
+      } catch (_) { line(next,'Состояние LIVE недоступно.','negative'); }
+      LabUI.syncChildren(health,next);
       setTimeout(updateHealth,10000);
     }
     async function updateLedger() {
-      ledger.replaceChildren(make('h2','','Покрытие журнала'));
+      const next=document.createDocumentFragment();next.append(make('h2','','Покрытие журнала'));
       try {
         const s=await get('/api/journal');
-        line(ledger,'Точных записей: '+s.recorded+' · закрытий до установки: '+s.legacy_closed);
-        line(ledger,'Net записанных сделок: '+fmt(s.net,4)+' USDT · средняя: '+
+        line(next,'Точных записей: '+s.recorded+' · закрытий до установки: '+s.legacy_closed);
+        line(next,'Net записанных сделок: '+fmt(s.net,4)+' USDT · средняя: '+
           (s.average===null?'—':fmt(s.average,4)+' USDT'));
-        line(ledger,'Profit factor: '+(s.profit_factor===null?'—':fmt(s.profit_factor))+
+        line(next,'Profit factor: '+(s.profit_factor===null?'—':fmt(s.profit_factor))+
           '. Это отношение суммы положительных net к модулю суммы отрицательных net.');
-        line(ledger,'Открытая позиция и старые сделки в эту статистику не входят.','muted');
+        line(next,'Открытая позиция и старые сделки в эту статистику не входят.','muted');
       } catch (_) {
-        line(ledger,'Отчёт журнала пока недоступен. Обзор продолжает показывать состояние PAPER.');
+        line(next,'Отчёт журнала пока недоступен. Обзор продолжает показывать состояние PAPER.');
       }
+      LabUI.syncChildren(ledger,next);
       setTimeout(updateLedger,10000);
     }
     let selected='market';

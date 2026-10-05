@@ -27,6 +27,11 @@ async function navigate(page,key,width){
    await page.waitForSelector('.fresh-alert-health[data-status="ok"]',{state:'attached'});
    assert.equal(await page.locator('#screener-bots article').count(),4);
    await page.getByLabel('Поиск монеты').fill('ondo');assert.equal(await page.locator('#screener-table tbody tr').count(),1);
+   // This assertion concerns an unchanged snapshot. The real preview closes a
+   // new candle at each minute boundary, which legitimately redraws the chart.
+   const chartRoute='**/api/market-chart?symbol=ONDOUSDT&interval=1';
+   const stableChart=await (await page.request.get(`http://127.0.0.1:${port}/api/market-chart?symbol=ONDOUSDT&interval=1`)).json();
+   await page.route(chartRoute,route=>route.fulfill({json:{...stableChart,updated:Date.now()/1000}}));
    await page.getByRole('button',{name:'ONDOUSDT',exact:true}).click();await page.waitForSelector('#screener-candles svg');
    await page.locator('.chart-analysis>summary').click();await page.waitForSelector('#screener-levels .level-item');
    await page.waitForTimeout(1200);assert.equal(await page.locator('.chart-analysis').getAttribute('open'),'');await page.locator('.chart-analysis>summary').click();
@@ -40,6 +45,7 @@ async function navigate(page,key,width){
    assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '125%','chart scale survives an inactive screener tab');
    assert.equal(await page.locator('#screener-candles svg').evaluate(el=>el.dataset.liveNode),'kept','background data does not replace an unchanged chart');
    assert.equal(await page.locator('#screener-table tbody tr',{hasText:'ONDOUSDT'}).evaluate(el=>el.dataset.liveNode),'kept','background data patches a screener row in place');
+   await page.unroute(chartRoute);
    await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '100%');
    await page.waitForSelector('#screener-orderbook .book-total');assert.equal(await page.locator('#screener-orderbook .book-total').count(),2);
    assert.equal(await page.locator('#screener-orderbook .book-level').count(),10);

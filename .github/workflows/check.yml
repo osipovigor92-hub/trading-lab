@@ -52,6 +52,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: node tools/visual-check.cjs
       - run: node tools/test_engine_center.cjs
+      - run: node tools/test_refresh_ui.cjs
       - run: node tools/test_chart_interactions.cjs
       - run: node tools/test_selection_ui.cjs
       - run: node tools/test_coin_card_ui.cjs
