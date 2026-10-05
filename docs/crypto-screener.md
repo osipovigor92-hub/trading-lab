@@ -175,6 +175,104 @@ independent expiry. `node tools/test_coin_card_ui.cjs` checks all four
 timeframes at 1280/390/320, missing/negative/zero/partial/wrong/stale/error
 responses, delayed coin switching, persistence and recovery; it also runs in CI.
 
+### Stage 4: selected coin PAPER trade plan
+
+The **«План сделки · PAPER»** section follows the selected coin card. It shows
+direction, entry zone, stop, up to two confirmed-zone targets, base quantity,
+virtual entry notional, planned stop loss, risk budget and net reward/risk.
+It uses the selected 1/5/15/60 minute chart plus the existing minute selection
+packet and selected book. There are no additional upstream requests or services.
+It is a planning calculation; model actions, balances, positions and journals
+are unchanged. No trading or control POST request is sent.
+
+The fixed hypothesis is a pullback to a confirmed zone:
+
+- LONG requires EMA20 > EMA50, the latest closed price above VWAP, and a
+  positive close-to-close move over five bars; SHORT requires all opposites.
+  EMAs use a first-period SMA seed followed by the standard 2/(period+1) update.
+- The nearest support behind the closed price is the LONG entry zone, expanded
+  upward by 0.25 ATR; the nearest resistance is the SHORT zone, expanded downward.
+  The stop sits 0.5 ATR beyond the far edge of that zone.
+- Targets sit 0.1 ATR before the nearest and next opposite confirmed zones.
+  The second assumes a break through the first zone; it is absent when no
+  second zone exists. Targets are evaluated for the whole quantity separately,
+  and their reported profits must not be added. A nearer unfavorable target
+  cannot be skipped in order to manufacture a higher reward/risk.
+
+Defaults, editable in **«Капитал и расчёт риска»**:
+
+| Setting | Default | Allowed values |
+|---|---|---|
+| Virtual capital | 600 USDT | 10–1,000,000 USDT |
+| Risk budget | 0.5% | 0.01–5% of virtual capital |
+| Entry notional cap | 100 USDT | 1 USDT up to virtual capital |
+| Fee per side | 0.055% | 0–1% |
+| Residual slippage allowance per side | 0.05% | 0–5% |
+| Minimum net reward/risk to first target | 1.5 | 1–10 |
+
+The fee default matches the existing PAPER simulator and Bybit's published
+base VIP-0 perpetual/futures taker rate, verified 2026-10-05. The account's
+actual rate can differ by region, tier and special trading zone; this setting
+is a simulation assumption, not a lookup of the user's account.
+Sources: [Bybit fee structure](https://www.bybit.com/en/help-center/article/Trading-Fee-Structure),
+[fee calculation](https://www.bybit.com/en/help-center/article/Futures-Contracts-Fees-Explained),
+[funding calculation](https://www.bybit.com/en/help-center/article/Funding-fee-calculation).
+
+Sizing uses the entry edge farthest from the stop. Let `d` be +1 for LONG or
+−1 for SHORT, `E` the entry edge, `S` the stop, `T_i` a target, `f` the fee rate,
+and `a = slippage_pct/100 + max(ticker_spread, book_spread)/200`.
+
+```text
+E' = E × (1 + d × a)
+S' = S × (1 − d × a)
+T_i' = T_i × (1 − d × a)
+F = max(E', S', all T_i') × max(0, d × current_funding_rate)
+L = d × (E' − S') + f × (E' + S') + F
+B = capital × risk_pct / 100
+Q = min(B / L, max_notional / E', capital / (E' × (1 + f)))
+planned_loss = Q × L
+net_profit_i = Q × [d × (T_i' − E') − f × (E' + T_i') − F]
+net_RR_i = net_profit_i / planned_loss
+```
+
+`Q` is reduced by one relative machine epsilon to keep rounded arithmetic on
+the conservative side of the caps. Prices and rates are dimensionally separate;
+`Q` is in base coins and costs/profits are in USDT. The one adverse funding
+payment is an explicit reserve using the largest modeled price and the current
+rate, not a claim about the future settlement mark or holding duration.
+Receiving funding gives no profit credit. Future rates and slippage can change.
+The virtual fractional quantity is not exchange lot-size validation.
+
+Readiness requires all three card sources to be **fresh**, without a transport
+or retained refresh error, a complete matching **passed** selection and rating,
+continuous closed bars, valid confirmed zones, full ±0.1% book coverage and
+agreement between ticker, book mid and best levels. The calculated quantity
+must fit the five verified visible levels on each side, with their actual
+impact no greater than the configured slippage allowance; the 100-USDT
+selection impact is not extrapolated to another position size.
+
+**«Готов для PAPER»** also requires the live price inside the entry zone and
+first-target net RR at least the chosen minimum. Otherwise the panel distinguishes
+waiting for a return, a missing scenario, a rejected plan, missing/stale/error
+inputs, a crossed stop or already reached target, and an existing fresh model
+position on the same coin. A retained halted position is historical and does
+not create a false active-position block. States recompute with new data;
+this stage does not persist a signal lifecycle or implement stage-6 alerts.
+
+Settings are validated and stored locally under `lab-paper-plan-v1` after
+applying them. Editing immediately clears the displayed size/risk until the
+new calculation is applied; invalid or partial settings never produce a ready
+plan. Native expanded settings/method details and metric nodes survive refresh.
+The hypothesis and thresholds require chronological PAPER evaluation before
+any claim of profitability.
+
+`node --test tools/test_paper_plan.cjs` verifies long/short geometry, net costs,
+funding direction, caps, boundaries, identity/expiry/selection gates and actual
+quantity depth. `node tools/test_paper_plan_ui.cjs` checks 1280/390/320 widths,
+all four timeframes, input validation and persistence, waiting/cancellation,
+missing/partial/stale/error data, delayed coin changes and absence of POSTs.
+Both are included in CI.
+
 This update changes the panel only. Existing `tools/update.sh <full SHA>` installs it; no service, VPN, firewall, account or model configuration changes. New endpoints are read-only `/api/screener`, `/api/market-chart?symbol=BTCUSDT&interval=5`, and `/api/market-book?symbol=BTCUSDT`. A fixed hostname and allowlisted public endpoints prevent arbitrary URL requests. Query symbols/timeframes are validated. No credentials are used.
 
 Two background workers, at most two outstanding requests, 24 cached results, 6-second upstream timeout, 2 MB response cap. Cached data is shared across browsers. The panel service prefetches the shared top-100 ticker snapshot every 5 seconds even when no browser has opened the screener. The browser continues updating its selected screener symbol and alert/model snapshots while another section of the same dashboard is open; only DOM painting is deferred for the hidden section. Candles refresh after 25 seconds and the selected book after 2 seconds. A transient refresh error retains the last verified response until its actual timestamp expires; it is never relabelled as fresh. Local UI expires tickers at 45 seconds, candles at 75 seconds since fetch (also checks last closed candle end), and books at 8 seconds. Source errors hide the corresponding data. The feature works when B is halted, except B's trade flow and bot feed-dependent execution. The browser cannot promise background sound while the whole browser tab is suspended, but server-side snapshots and PAPER models continue independently of the open panel section.

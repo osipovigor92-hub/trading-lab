@@ -70,7 +70,75 @@
    quote:ticker.available?{price:finite(quote.price)&&quote.price>0?quote.price:null,change:finite(quote.change)?quote.change:null,turnover:nonnegative(quote.turnover),oi:nonnegative(quote.open_interest),funding_pct:finite(quote.funding)&&finite(quote.funding*100)?quote.funding*100:null,funding_hours:finite(quote.funding_interval_hours)&&quote.funding_interval_hours>0?quote.funding_interval_hours:null}:null,
    chart:candle.available?{price:chart.price,atr:nonnegative(chart.atr),atr_pct:nonnegative(chart.atr_pct),vwap:finite(chart.vwap)&&chart.vwap>0?chart.vwap:null,volume:nonnegative(chart.volume_window),turnover:nonnegative(chart.turnover_window),rvol:nonnegative(chart.rvol)}:null};
  }
- const api={fresh,ratingScore,ratingView,coinCardView,filterRows,botModels,positionView,domain,chartBars,barCount,selectionDefaults,validateSelection,selectionView};
+ const planDefaults=Object.freeze({capital:600,risk_pct:.5,max_notional:100,fee_pct:.055,slippage_pct:.05,min_rr:1.5});
+ const planLimits={capital:[10,1e6],risk_pct:[.01,5],max_notional:[1,1e6],fee_pct:[0,1],slippage_pct:[0,5],min_rr:[1,10]};
+ function validatePlan(values){
+  if(!values||typeof values!=='object'||Array.isArray(values)||Object.keys(values).some(k=>!Object.hasOwn(planDefaults,k)))throw Error('Некорректные настройки PAPER-плана');
+  const result={...planDefaults};for(const [key,value]of Object.entries(values)){const [low,high]=planLimits[key];if(!finite(value)||value<low||value>high)throw Error('Настройка PAPER-плана вне допустимого диапазона');result[key]=value;}
+  if(result.max_notional>result.capital)throw Error('Лимит входа не должен превышать виртуальный капитал');return result;
+ }
+ function paperPlan(input){
+  const {snapshot,chart,book,selectionPacket,symbol,interval,now,models={}}=input;
+  const outcome=(status,reason,data=null)=>({status,reasons:[reason],symbol,interval,data});let settings;
+  try{settings=validatePlan(input.settings===undefined?planDefaults:input.settings);}catch(e){return outcome('settings_error',e.message);}
+  const card=coinCardView(input),names={ticker:'Котировки',chart:'Свечи',book:'Стакан'};
+  for(const [key,source]of Object.entries(card.sources))if(source.status!=='fresh')return outcome('pending',names[key]+': '+({cached:'ошибка обновления; ждём успешный ответ',stale:'данные устарели',pending:'ожидаем загрузку',error:'источник недоступен',missing:'монета отсутствует в подборке'}[source.status]||'ожидаем свежие данные'));
+  const selectionRows=Array.isArray(selectionPacket?.rows)?selectionPacket.rows:[];
+  const verdict=selectionView(selectionRows.find(r=>r?.symbol===symbol)?.selection,selectionPacket?.source_time,snapshot?.updated,now);
+  if(verdict.status==='rejected')return outcome('rejected','Не пройден умный отбор: '+(verdict.checks.filter(c=>c.state==='fail').map(c=>c.label).join(', ')||'условия рынка не подходят'));
+  if(selectionPacket?.status!=='ok'||verdict.ticker_time!==snapshot?.updated||verdict.status!=='passed'||ratingView(verdict,now).status!=='ok')return outcome('pending','Ожидаем полный умный отбор по свежим котировкам, минутным свечам и пяти снимкам стакана');
+  const q=card.quote,c=card.chart,step=Number(interval)*60,bars=chart.candles;
+  if(!q||!finite(q.price)||!finite(q.funding_pct)||!c||!finite(c.vwap)||!finite(c.atr)||c.atr<=0)return outcome('neutral','Для сценария нужны цена, VWAP, funding и положительный ATR');
+  if(bars.length<60||bars.length>180||bars.some((b,i)=>!b||![b.time,b.open,b.high,b.low,b.close].every(finite)||b.low<=0||b.low>Math.min(b.open,b.close)||b.high<Math.max(b.open,b.close)||b.time%step!==0||i&&b.time-bars[i-1].time!==step)||chart.candle_end!==bars.at(-1).time+step||chart.price!==bars.at(-1).close)return outcome('pending','Ожидаем непрерывные закрытые свечи выбранного таймфрейма');
+  const ema=period=>{let value=bars.slice(0,period).reduce((sum,b)=>sum+b.close,0)/period;for(const b of bars.slice(period))value+=(b.close-value)*2/(period+1);return value;};
+  const fast=ema(20),slow=ema(50),last=chart.price,move=last-bars.at(-6).close;
+  const side=fast>slow&&last>c.vwap&&move>0?1:fast<slow&&last<c.vwap&&move<0?-1:0;
+  if(!side)return outcome('neutral','Нет согласованного направления: EMA20/50, VWAP и движение за пять закрытых свечей расходятся');
+  const levels=Array.isArray(chart.levels)?chart.levels:[];
+  const valid=l=>l&&['support','resistance'].includes(l.side)&&[l.low,l.high,l.price].every(finite)&&l.low>0&&l.low<=l.price&&l.price<=l.high&&Number.isInteger(l.pivots)&&l.pivots>0&&(l.side==='support'?l.high<last:l.low>last);
+  if(!levels.length||levels.some(l=>!valid(l)))return outcome('neutral','Нет корректных подтверждённых зон для входа и цели');
+  const behind=levels.filter(l=>l.side===(side===1?'support':'resistance')).sort((a,b)=>Math.abs(a.price-last)-Math.abs(b.price-last));
+  const ahead=levels.filter(l=>l.side===(side===1?'resistance':'support')).sort((a,b)=>Math.abs(a.price-last)-Math.abs(b.price-last));
+  if(!behind.length||!ahead.length)return outcome('neutral','Нужны подтверждённая зона входа и противоположная целевая зона');
+  const zone=behind[0],low=side===1?zone.low:zone.low-.25*c.atr,high=side===1?zone.high+.25*c.atr:zone.high;
+  const entry=side===1?high:low,stop=side===1?zone.low-.5*c.atr:zone.high+.5*c.atr;
+  const prices=ahead.slice(0,2).map(l=>side===1?l.low-.1*c.atr:l.high+.1*c.atr);
+  if(![low,high,entry,stop,...prices].every(v=>finite(v)&&v>0)||side*(entry-stop)<=0||prices.some((p,i)=>side*(p-entry)<=0||i&&side*(p-prices[i-1])<=0))return outcome('rejected','Зоны слишком близки или пересекаются после буфера ATR');
+  const near=book.bands['0.001'];if(near.covered!==true||near.bid<0||near.ask<0)return outcome('pending','Стакан должен полностью покрывать зону ±0,1% с обеих сторон');
+  const row=snapshot.rows.find(r=>r.symbol===symbol),spread=Math.max(book.spread,row.spread);
+  if(!finite(spread)||spread<0||spread>5||Math.abs(q.price/book.mid-1)>Math.max(.001,c.atr/last*.5))return outcome('pending','Котировка и свежий стакан не согласованы; повторяем проверку');
+  const fee=settings.fee_pct/100,execution=settings.slippage_pct/100+spread/200;
+  const filled=entry*(1+side*execution),stopFilled=stop*(1-side*execution),exits=prices.map(p=>p*(1-side*execution));
+  // Reserve one adverse funding payment; receiving funding never inflates rewards.
+  const fundingUnit=Math.max(filled,stopFilled,...exits)*Math.max(0,side*q.funding_pct/100);
+  const lossUnit=side*(filled-stopFilled)+fee*(filled+stopFilled)+fundingUnit;
+  const budget=settings.capital*settings.risk_pct/100;
+  const quantity=Math.min(budget/lossUnit,settings.max_notional/filled,settings.capital/(filled*(1+fee)))*(1-Number.EPSILON);
+  const notional=quantity*filled,risk=quantity*lossUnit;
+  const targets=exits.map((exit,i)=>{const profitUnit=side*(exit-filled)-fee*(filled+exit)-fundingUnit;return {price:prices[i],profit:quantity*profitUnit,rr:profitUnit/lossUnit};});
+  if(![filled,stopFilled,lossUnit,quantity,notional,risk,budget,fundingUnit,...exits,...targets.flatMap(t=>[t.profit,t.rr])].every(finite)||filled<=0||stopFilled<=0||lossUnit<=0||quantity<=0||risk>budget*(1+1e-12)||notional>settings.max_notional*(1+1e-12))return outcome('rejected','Расчёт риска выходит за допустимые числовые пределы');
+  const data={side,direction:side===1?'LONG':'SHORT',low,high,entry,stop,targets,quantity,notional,risk,budget,risk_pct:risk/settings.capital*100,
+   costs:quantity*(side*(filled-entry)+side*(stop-stopFilled)+fee*(filled+stopFilled)),funding_reserve:quantity*fundingUnit,capital:settings.capital,
+   ema20:fast,ema50:slow,vwap:c.vwap,atr:c.atr,stamp:chart.candle_end,settings};
+  const impact=name=>{
+   const levels=book.top?.[name];if(!Array.isArray(levels)||!levels.length||levels.length>5||levels.some((l,i)=>!l||![l.price,l.quantity].every(finite)||l.price<=0||l.quantity<=0||i&&(name==='ask'?l.price<=levels[i-1].price:l.price>=levels[i-1].price)))return null;
+   let left=quantity,value=0;for(const l of levels){const take=Math.min(left,l.quantity);value+=take*l.price;left-=take;if(left<=quantity*1e-10)break;}
+   return left>quantity*1e-10?null:Math.max(0,(name==='ask'?value/quantity/levels[0].price-1:1-value/quantity/levels[0].price)*100);
+  };
+  const buy=impact('ask'),sell=impact('bid');
+  if(buy===null||sell===null||!finite(buy)||!finite(sell)||book.top.bid[0].price>=book.top.ask[0].price)return outcome('rejected','Недостаточно проверенных уровней стакана для рассчитанного количества монет',data);
+  const bestMid=(book.top.bid[0].price+book.top.ask[0].price)/2,bestSpread=(book.top.ask[0].price-book.top.bid[0].price)/bestMid*100;
+  if(Math.abs(bestMid/book.mid-1)>1e-8||Math.abs(bestSpread-book.spread)>1e-7)return outcome('pending','Верхние уровни и сводка стакана не согласованы; повторяем проверку');
+  if(Math.max(buy,sell)>settings.slippage_pct+1e-9)return outcome('rejected','Текущий impact рассчитанного объёма превышает допуск проскальзывания',data);
+  if(side*(q.price-stop)<=0)return outcome('invalidated','Условие отменено: текущая цена уже за стопом',data);
+  if(side*(prices[0]-q.price)<=0)return outcome('invalidated','Условие отменено: первая цель уже достигнута без входа',data);
+  if(targets[0].rr<settings.min_rr)return outcome('rejected','Прибыль / риск первой цели после издержек ниже '+fmt(settings.min_rr,2),data);
+  const occupied=Object.entries(models).filter(([,s])=>positionView(s,now)?.current&&s.position.symbol===symbol).map(([id])=>id);
+  if(occupied.length)return outcome('watch','По монете уже есть PAPER-позиция: '+occupied.join(', '),data);
+  if(q.price<low||q.price>high)return outcome('watch','Ожидаем возврата цены в зону входа; направление подтверждено закрытыми свечами',data);
+  return outcome('ready','Цена в зоне входа; направление, отбор, стакан и расчёт риска подтверждены для PAPER-плана',data);
+ }
+ const api={fresh,ratingScore,ratingView,coinCardView,paperPlan,planDefaults,validatePlan,filterRows,botModels,positionView,domain,chartBars,barCount,selectionDefaults,validateSelection,selectionView};
  if(typeof module!=='undefined')module.exports=api;
  if(typeof document==='undefined')return;
  scope.LabScreener=api;
@@ -137,6 +205,24 @@
   const explanation=el('details','screener-method');explanation.append(el('summary','','Как рассчитываются уровни'));
   line(explanation,'До 180 закрытых свечей. Экстремумы подтверждаются двумя барами слева и справа. Близкие экстремумы объединяются в зоны шириной до max(0,05% цены; 0,25 ATR).');
   line(explanation,'Три ближайшие зоны ниже и выше последнего закрытия. Число экстремумов не является вероятностью отскока. По умолчанию видно 90 свечей, на телефоне — 45. Колесо меняет масштаб времени, колесо над правой шкалой — масштаб цены; перетаскивание сдвигает вид, щипок меняет масштаб, двойной клик сбрасывает. Голубая линия — VWAP 60 свечей, столбцы — оборот в USDT.');analysis.append(explanation);
+  const planBox=el('section','box paper-plan');planBox.id='screener-plan';planBox.setAttribute('aria-label','План PAPER-сделки');root.append(planBox);
+  const planHeading=el('div','panel-heading'),planContext=el('p','paper-plan-context'),planStatus=el('p','paper-plan-status'),planFacts=el('dl','paper-plan-facts'),planFields={},planCosts=el('p','paper-plan-costs');
+  planHeading.append(el('h2','','План сделки · PAPER'));planStatus.setAttribute('role','status');planBox.append(planHeading,planContext,planStatus,planFacts,planCosts);
+  for(const [key,name]of [['direction','Направление'],['entry','Зона входа, USDT'],['stop','Стоп, USDT'],['target1','Цель 1, USDT'],['target2','Цель 2, USDT'],['size','Виртуальный вход'],['risk','Риск, USDT'],['rr','Прибыль / риск']]){const item=el('div'),label=el('dt','',name),value=el('dd','','—'),hint=el('small');item.dataset.planField=key;item.append(label,value,hint);planFacts.append(item);planFields[key]={item,value,hint};}
+  let planSettings={...planDefaults},planDirty=false;try{planSettings=validatePlan(JSON.parse(localStorage.getItem('lab-paper-plan-v1')||'null'));}catch{}
+  const planControls=el('details','paper-plan-controls'),planForm=el('form'),planInputs={},planSettingsSummary=el('summary','','Капитал и расчёт риска'),planFieldset=el('fieldset','paper-plan-inputs');planFieldset.append(el('legend','sr-only','Настройки PAPER-плана'));
+  const planSettingsFields=[['capital','Виртуальный капитал, USDT'],['risk_pct','Риск на план, % капитала'],['max_notional','Лимит входа, USDT'],['fee_pct','Комиссия на сторону, %'],['slippage_pct','Допуск проскальзывания на сторону, %'],['min_rr','Минимум прибыль / риск']];
+  const planMessage=el('p','paper-plan-message');planMessage.setAttribute('role','status');
+  for(const [key,name]of planSettingsFields){const label=el('label','',name),input=el('input');input.type='number';input.inputMode='decimal';input.id='paper-plan-'+key;input.min=String(planLimits[key][0]);input.max=String(planLimits[key][1]);input.step='any';input.required=true;input.value=String(planSettings[key]);label.htmlFor=input.id;label.append(input);planInputs[key]=input;planFieldset.append(label);input.addEventListener('input',()=>{planDirty=true;input.setAttribute('aria-invalid','false');planMessage.textContent='Настройки изменены · примените расчёт';render();});input.addEventListener('invalid',()=>{input.setAttribute('aria-invalid','true');planMessage.textContent='Проверьте поле: '+name;});}
+  const planActions=el('div','paper-plan-actions'),planApply=el('button','primary-button','Применить расчёт'),planReset=el('button','secondary-button','Сбросить расчёт');planApply.type='submit';planReset.type='button';planActions.append(planApply,planReset);planForm.append(planFieldset,planActions,planMessage);planControls.append(planSettingsSummary,planForm);planBox.append(planControls);
+  function applyPlan(reset=false){let values={...planDefaults};if(!reset){values={};for(const [key,input]of Object.entries(planInputs))values[key]=input.valueAsNumber;}try{planSettings=validatePlan(values);}catch(e){planMessage.textContent=e.message;planDirty=true;render();return;}for(const [key,input]of Object.entries(planInputs)){input.value=String(planSettings[key]);input.setAttribute('aria-invalid','false');}planDirty=false;try{localStorage.setItem('lab-paper-plan-v1',JSON.stringify(planSettings));}catch{}planMessage.textContent=reset?'Параметры расчёта сброшены':'Параметры расчёта применены';render();}
+  planForm.addEventListener('submit',e=>{e.preventDefault();applyPlan();});planReset.addEventListener('click',()=>applyPlan(true));
+  const planMethod=el('details','paper-plan-method');planMethod.append(el('summary','','Почему такой план'));
+  for(const text of ['Направление: EMA20 выше EMA50, закрытие выше VWAP и рост за пять свечей для LONG; обратные условия для SHORT. Вход — ближайшая подтверждённая зона позади цены закрытия с расширением 0,25 ATR в сторону входа. Стоп — на 0,5 ATR за зоной.',
+   'Первая цель — перед ближайшей противоположной зоной, вторая — перед следующей, с буфером 0,1 ATR. Цель 2 предполагает пробой первой зоны. Если второй зоны нет, цель 2 остаётся неподтверждённой. Результат каждой цели рассчитан на полный объём отдельно и не складывается.',
+   'Риск рассчитан от дальнего от стопа края входа: комиссия на вход и выход, половина текущего спреда и допуск проскальзывания на каждой стороне. Добавлен резерв одного funding-платежа по текущей ставке, если его платит выбранное направление; получение funding не увеличивает прибыль.',
+   'Количество монет ограничено риском, лимитом входа и виртуальным капиталом без плеча. Размер дробный, для PAPER-расчёта. Impact проверяется для этого количества по доступным пяти верхним уровням каждой стороны; если их мало, план не подходит.',
+   '«Готов для PAPER» требует свежих источников без ошибки обновления, полного отбора, согласованного стакана, цены в зоне входа и достаточного прибыль / риск первой цели после издержек. Параметры сценария — исследовательские правила, не проверенная прибыльная стратегия. Фактическое проскальзывание и будущий funding могут изменить результат.'])line(planMethod,text);planBox.append(planMethod);
   const bookBox=el('section','box screener-orderbook');bookBox.id='screener-orderbook';root.append(bookBox);
   const botsBox=el('section','box screener-bots');botsBox.id='screener-bots';root.append(botsBox);
   let snapshot=null,chart=null,book=null,models={},bState=null,wState=null,researchState=null,selected='BTCUSDT',generation=0,tickerError='',chartError='',bookError='';
@@ -290,7 +376,23 @@
     if(s?.reason)line(card,s.reason,'bot-reason');let last=null;for(const t of s?.trades||s?.journal_trades||[])if(finite(t.closed)&&(!last||t.closed>last.closed))last=t;if(last)line(card,'Последняя: '+last.symbol+' · net '+fmt(last.net,4)+' USDT','bot-last-close');grid.append(card);
    }botsBox.append(grid);line(botsBox,'PAPER · состояния и позиции моделей. Оборот рынка и заявки стакана не являются доходностью бота.','muted');
   }
-  function render(){if(!visible())return;const now=Date.now()/1000;renderTable(now);renderCard(now);renderLevels(now);renderAlerts(now);renderBook(now);renderBots(now);}
+  function renderPlan(now){
+   const result=planDirty?{status:'settings_error',reasons:['Настройки изменены · примените расчёт'],data:null}:paperPlan({snapshot,chart,book,selectionPacket,symbol:selected,interval:timeframe.value,now,models,settings:planSettings,tickerError,chartError,bookError});
+   const data=result.data,tf=timeframe.value==='60'?'1ч':timeframe.value+'м',base=selected.slice(0,-4),number=v=>!finite(v)?'—':v!==0&&Math.abs(v)<1e-8?v.toExponential(3).replace('.',','):fmt(v,Math.abs(v)>=1000?2:Math.abs(v)>=1?4:Math.abs(v)>=.01?6:8),money=v=>finite(v)&&Math.abs(v)>=.001?fmt(v,3):number(v);
+   planBox.dataset.state=result.status;planBox.dataset.symbol=selected;planBox.dataset.interval=timeframe.value;
+   planContext.textContent=selected+' · '+tf+' · капитал '+fmt(planSettings.capital,2)+' USDT · риск до '+fmt(planSettings.risk_pct,2)+'% · лимит '+fmt(planSettings.max_notional,2)+' USDT';
+   const statusText=({ready:'Готов для PAPER',watch:'Ожидание входа',pending:'Проверяется',neutral:'Сценарий не найден',rejected:'План не подходит',invalidated:'Условие отменено',settings_error:'Проверьте расчёт'}[result.status]||'Проверяется')+' · '+result.reasons.join('; ');if(planStatus.textContent!==statusText)planStatus.textContent=statusText;
+   const goal=index=>{const t=data?.targets[index];return [t?number(t.price):'—',t?'Прибыль '+money(t.profit)+' USDT · '+fmt(t.rr,3)+'× после издержек':data?'Нет второй подтверждённой зоны':'Ожидаем расчёт'];};
+   const fields={direction:[data?.direction||'—',data?(data.side===1?'EMA20 > EMA50 · выше VWAP · рост за 5 свечей':'EMA20 < EMA50 · ниже VWAP · снижение за 5 свечей'):'Нужны согласованные закрытые свечи'],
+    entry:[data?number(data.low)+'–'+number(data.high):'—','Возврат к подтверждённой зоне · '+tf],stop:[data?number(data.stop):'—','0,5 ATR за зоной входа'],target1:goal(0),target2:goal(1),
+    size:[data?number(data.quantity)+' '+base:'—',data?'Номинал '+money(data.notional)+' USDT · без плеча':'Зависит от риска и лимита входа'],
+    risk:[data?money(data.risk):'—',data?fmt(data.risk_pct,3)+'% капитала · бюджет '+money(data.budget)+' USDT':'Убыток по стопу с издержками и резервом funding'],
+    rr:[data?fmt(data.targets[0].rr,3)+'×':'—',data?'Цель 1 · минимум '+fmt(planSettings.min_rr,2)+'×':'Прибыль / риск после всех принятых издержек']};
+   for(const [key,[value,hint]]of Object.entries(fields)){const node=planFields[key];node.value.textContent=value;node.hint.textContent=hint;node.item.dataset.available=String(value!=='—');}
+   planFields.direction.value.className=data?(data.side===1?'positive':'negative'):'';
+   planCosts.textContent=data?'В риск включены издержки по стопу '+money(data.costs)+' USDT и резерв одного funding-платежа '+money(data.funding_reserve)+' USDT.':'Расчёт учитывает комиссию, спред, допуск проскальзывания и резерв одного funding-платежа.';
+  }
+  function render(){if(!visible())return;const now=Date.now()/1000;renderTable(now);renderCard(now);renderLevels(now);renderPlan(now);renderAlerts(now);renderBook(now);renderBots(now);}
   async function get(path){const res=await scope.labFetch(path);if(!res.ok)throw Error('HTTP '+res.status);return res.json();}
   const selectionQuery=()=>new URLSearchParams({...selectionFilters,search:search.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,24)}).toString();
   async function refreshSelection(){if(selectionBusy||!visible())return;selectionBusy=true;const query=selectionQuery();try{const next=await get('/api/market-selection?'+query);if(query===selectionQuery()){selectionPacket=next;selectionError=next.status==='error'?'Отбор временно недоступен':'';render();}}catch(e){if(query===selectionQuery()){selectionPacket=null;selectionError='Не удалось обновить отбор · повторяем запрос';render();}}finally{selectionBusy=false;}}
