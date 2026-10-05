@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {filterRows,ratingScore,ratingView,positionView,fresh,domain,botModels,chartBars,selectionView,selectionDefaults,validateSelection}=require('../src/trading-panel/screener.js');
+const {filterRows,ratingScore,ratingView,coinCardView,positionView,fresh,domain,botModels,chartBars,selectionView,selectionDefaults,validateSelection}=require('../src/trading-panel/screener.js');
 const rows=[{symbol:'BTCUSDT',turnover:1e8,spread:.01,range24:2,change:4,selection:{status:'passed'},rating:{status:'ok',score:83}},{symbol:'ONDOUSDT',turnover:3e7,spread:.02,range24:8,change:-5,selection:{status:'passed'},rating:{status:'ok',score:55}},{symbol:'THINUSDT',turnover:1e6,spread:.15,range24:20,change:10,selection:{status:'rejected'},rating:{status:'ok',score:10}}];
 test('screeners distinguish activity, tight spread, movers and bot universe',()=>{
  assert.deepEqual(filterRows(rows,{preset:'active'}).map(r=>r.symbol),['ONDOUSDT']);
@@ -75,4 +75,44 @@ test('selection thresholds and old or mismatched verification cannot mark a coin
  assert.equal(selectionView(null,1000,1000,1000).status,'pending');
  assert.deepEqual(validateSelection({}),selectionDefaults);
  for(const v of [{oi_min:NaN},{spread_max:-1},{range_min:31},{oi_min:Infinity},{rvol_min:'1'},{unknown:1}])assert.throws(()=>validateSelection(v));
+});
+function cardFixture(){return {symbol:'BTCUSDT',interval:'5',now:1000,
+ snapshot:{status:'ok',updated:1000,rows:[{symbol:'BTCUSDT',price:100,change:2,turnover:20e6,open_interest:10e6,funding:-.0002,funding_interval_hours:4}]},
+ chart:{status:'ok',symbol:'BTCUSDT',interval:'5',updated:1000,candle_end:900,candles:Array(60).fill({}),price:99,atr:1,atr_pct:1,vwap:98,volume_window:60,turnover_window:5880,rvol:1.2},
+ book:{status:'ok',symbol:'BTCUSDT',updated:1000,mid:100,spread:.01,bands:{'0.001':{bid:20000,ask:30000,covered:true}}}};}
+test('coin card separates quote units, contract funding and chart volume',()=>{
+ const view=coinCardView(cardFixture());
+ assert.equal(view.quote.funding_pct,-.02);assert.equal(view.quote.funding_hours,4);assert.equal(view.quote.oi,10e6);
+ assert.equal(view.chart.volume,60);assert.equal(view.chart.turnover,5880);assert.equal(view.chart.atr,1);
+ assert.deepEqual(Object.values(view.sources).map(s=>s.status),['fresh','fresh','fresh']);
+});
+test('coin card expires each source independently and never exposes a different coin or timeframe',()=>{
+ const f=cardFixture();
+ for(const [key,stamp]of [['snapshot',954],['chart',924],['book',991],['snapshot',1003],['chart',1003],['book',1003]]){
+  const source={...f[key],updated:stamp},view=coinCardView({...f,[key]:source}),name=key==='snapshot'?'ticker':key;
+  assert.equal(view.sources[name].status,'stale');assert.equal(view.sources[name].available,false);
+  assert.equal(view.sources[name==='ticker'?'chart':'ticker'].available,true);
+ }
+ assert.equal(coinCardView({...f,chart:{...f.chart,candle_end:624}}).chart,null);
+ assert.equal(coinCardView({...f,chart:{...f.chart,symbol:'ETHUSDT'}}).chart,null);
+ assert.equal(coinCardView({...f,chart:{...f.chart,interval:'1'}}).chart,null);
+ assert.equal(coinCardView({...f,book:{...f.book,symbol:'ETHUSDT'}}).sources.book.available,false);
+ const missing=coinCardView({...f,symbol:'SOLUSDT'});assert.equal(missing.quote,null);assert.equal(missing.sources.ticker.status,'missing');
+});
+test('missing coin-card values stay unavailable and measured zeros remain valid',()=>{
+ const f=cardFixture();for(const bad of [null,undefined,NaN,Infinity,'1',true,-1]){
+  const row={...f.snapshot.rows[0],open_interest:bad},view=coinCardView({...f,snapshot:{...f.snapshot,rows:[row]}});assert.equal(view.quote.oi,null);assert.equal(view.quote.price,100);
+ }
+ const zero=coinCardView({...f,snapshot:{...f.snapshot,rows:[{...f.snapshot.rows[0],open_interest:0,funding:0,funding_interval_hours:null}]},chart:{...f.chart,atr:0,atr_pct:0,volume_window:0,vwap:null}});
+ assert.equal(zero.quote.oi,0);assert.equal(zero.quote.funding_pct,0);assert.equal(zero.quote.funding_hours,null);
+ assert.equal(zero.chart.atr,0);assert.equal(zero.chart.volume,0);assert.equal(zero.chart.vwap,null);
+ assert.equal(coinCardView({...f,snapshot:{...f.snapshot,rows:[{...f.snapshot.rows[0],funding:1e308}]}}).quote.funding_pct,null);
+});
+test('coin-card refresh errors keep the original age and expire instead of relabelling old data',()=>{
+ const f=cardFixture(),view=coinCardView({...f,now:1005,tickerError:'HTTP 503',chartError:'HTML response',bookError:'HTTP 503'});
+ assert.deepEqual(Object.values(view.sources).map(s=>s.status),['cached','cached','cached']);assert.equal(view.sources.chart.stamp,1000);assert.equal(view.sources.chart.age,5);
+ assert.equal(coinCardView({...f,now:1080,chartError:'HTTP 503'}).chart,null);
+ const partial=coinCardView({...f,book:{...f.book,bands:{'0.001':{bid:1,ask:2,covered:false}}}});
+ assert.equal(partial.sources.book.available,true);assert.match(partial.sources.book.note,/частично/);
+ for(const key of ['snapshot','chart','book'])assert.equal(coinCardView({...f,[key]:{status:'error',error:'offline'}}).sources[key==='snapshot'?'ticker':key].status,'error');
 });

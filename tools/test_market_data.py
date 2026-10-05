@@ -63,6 +63,9 @@ class MarketTests(unittest.TestCase):
             self.assertTrue(level['high']<data['price'] if level['side']=='support' else level['low']>data['price'])
         expected=sum(b['turnover'] for b in bars[-60:])/sum(b['volume'] for b in bars[-60:])
         self.assertAlmostEqual(data['vwap'],expected)
+        self.assertEqual(data['volume_window'],600,'volume remains base quantity rather than USDT turnover')
+        self.assertAlmostEqual(data['atr']/data['price']*100,data['atr_pct'])
+        self.assertAlmostEqual(data['turnover_window'],sum(b['turnover'] for b in bars[-60:]))
         bars[-1]['low']=1
         changed=market.chart_analysis('BTCUSDT','5',bars,stamp)
         self.assertTrue(all(l['low']>1 for l in changed['levels']))
@@ -72,6 +75,7 @@ class MarketTests(unittest.TestCase):
         data=market.chart_analysis('BTCUSDT','1',bars,3600)
         self.assertEqual(data['levels'],[])
         self.assertIsNone(data['rvol']);self.assertIsNone(data['vwap'])
+        self.assertEqual(data['volume_window'],0);self.assertEqual(data['atr'],0)
 
     def test_orderbook_notional_nested_zones_walls_validation(self):
         result=dict(s='BTCUSDT',ts=1000000,b=[['99.99','10'],['99.95','20'],['99.8','30']],a=[['100.01','15'],['100.05','25'],['100.2','35']])

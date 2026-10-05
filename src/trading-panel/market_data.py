@@ -155,9 +155,9 @@ def chart_analysis(symbol, interval, bars, stamp):
     vwap = sum(b["turnover"] for b in bars[-60:]) / volume if volume > 0 else None
     return dict(status="ok", updated=stamp, symbol=symbol, interval=interval,
                 candle_end=bars[-1]["time"] + INTERVALS[interval], candles=bars, levels=chosen,
-                price=price, atr_pct=atr / price * 100, vwap=vwap,
+                price=price, atr=atr, atr_pct=atr / price * 100, vwap=vwap,
                 rvol=recent / base if base > 0 else None, zone_width=tolerance,
-                turnover_window=sum(b["turnover"] for b in bars[-60:]))
+                volume_window=volume, turnover_window=sum(b["turnover"] for b in bars[-60:]))
 
 
 def orderbook_analysis(symbol, result, stamp):
