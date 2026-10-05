@@ -157,6 +157,14 @@ class SelectionTests(unittest.TestCase):
             for query in ('oi_min=nan','x=1','rvol_min=','oi_min=1&oi_min=2','atr_min=5&atr_max=1'):
                 self.assertEqual(request('/api/market-selection?'+query)[0],400)
             snapshot.assert_not_called()
+        with patch.object(panel.MARKET,'alerts_snapshot',return_value={'status':'ok','events':[]}) as snapshot:
+            self.assertEqual(request('/api/market-alerts?spread_max=.01&search=BTC')[0],200)
+            self.assertEqual(snapshot.call_args.args[0]['spread_max'],.01)
+            self.assertEqual(snapshot.call_args.args[1],'BTC')
+            snapshot.reset_mock()
+            for query in ('oi_min=nan','x=1','rvol_min=','oi_min=1&oi_min=2','atr_min=5&atr_max=1'):
+                self.assertEqual(request('/api/market-alerts?'+query)[0],400)
+            snapshot.assert_not_called()
         panel.MARKET.close()
 
     def test_warmup_respects_two_outstanding_calls_and_harvests_all_watched_books(self):

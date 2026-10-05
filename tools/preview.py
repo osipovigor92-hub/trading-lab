@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PANEL = ROOT/'src/trading-panel'
 sys.path.insert(0, str(PANEL))
 import selection
+from market_alerts import MarketAlerts
 from manual_paper import ManualPaper
 spec = importlib.util.spec_from_file_location('lab_report', ROOT/'src/trading-report/report.py')
 report = importlib.util.module_from_spec(spec)
@@ -125,6 +126,7 @@ class DemoControl:
 
 CONTROL = DemoControl()
 PAPER_TEST = False
+ALERTS = MarketAlerts()
 
 def market_fixture(path, query):
     now=time.time()
@@ -137,6 +139,16 @@ def market_fixture(path, query):
                    change=(4-i*2.5),range24=5+i,spread=.008+i*.008 if i<4 else .03,
                    open_interest=20e6,funding=.0001,next_funding=now+3600,volume24=1e6,funding_interval_hours=8) for i,(s,p) in enumerate(prices.items())]
         return dict(status='ok',updated=now//5*5,rows=rows,eligible=len(prices),rejected=0,limit=100)
+    if path=='/api/market-alerts':
+        filters=selection.parse_filters({k:v[0] for k,v in query.items() if k!='search'})
+        key=ALERTS.register(filters,query.get('search',[''])[0],now)
+        tickers=market_fixture('/api/screener',{});charts={};books={};histories={}
+        for row in tickers['rows']:
+            symbol=row['symbol'];charts[symbol]=market_fixture('/api/market-chart',dict(symbol=[symbol],interval=['1']))
+            books[symbol]=market_fixture('/api/market-book',dict(symbol=[symbol]))
+            histories[symbol]=[dict(books[symbol],updated=books[symbol]['updated']-8+i*2,seq=i+1) for i in range(5)]
+        ALERTS.update(key,tickers,charts,books,histories,now)
+        return ALERTS.snapshot(key,now)
     if path=='/api/market-selection':
         filters=selection.parse_filters({k:v[0] for k,v in query.items() if k!='search'})
         tickers=market_fixture('/api/screener',{});rows=[]
@@ -227,7 +239,7 @@ class Handler(BaseHTTPRequestHandler):
         data=fixtures()
         if path == '/api/manual-paper':
             body=json.dumps(dict(MANUAL.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
-        elif path in ('/api/screener','/api/market-chart','/api/market-book','/api/market-selection'):
+        elif path in ('/api/screener','/api/market-chart','/api/market-book','/api/market-selection','/api/market-alerts'):
             body=json.dumps(market_fixture(path,parse_qs(urlsplit(self.path).query)),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in data:
             body=json.dumps(data[path],ensure_ascii=False).encode();kind='application/json; charset=utf-8'

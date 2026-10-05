@@ -40,7 +40,7 @@ const server=spawn(process.env.PYTHON||'python3',[path.join(__dirname,'preview.p
   await sort.click();assert.match(await sort.textContent(),/▼/);
   await sort.click();assert.match(await sort.textContent(),/▲/);
   await page.getByRole('button',{name:'Алерты',exact:true}).click();
-  assert.ok(await page.locator('.alerts-head button').filter({hasText:/Уведомления/}).isVisible());
+  assert.ok(await page.locator('.fresh-alerts-head button').filter({hasText:/Уведомления/}).isVisible());
   assert.deepEqual(errors,[]);
   console.log('Chart interactions OK: wheel time/price, pan, persistence, reset, sorting and notification control');
  }finally{if(browser)await browser.close();server.kill();}

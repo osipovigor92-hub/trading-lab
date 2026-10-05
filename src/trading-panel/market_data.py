@@ -9,6 +9,7 @@ import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import selection
+from market_alerts import MarketAlerts
 
 SYMBOL = re.compile(r"^[A-Z0-9]{2,24}USDT$")
 INTERVALS = {"1": 60, "5": 300, "15": 900, "60": 3600}
@@ -223,6 +224,7 @@ class MarketData:
         self.selection_until = 0
         self.selection_cursor = 0
         self.book_history = OrderedDict()
+        self.alerts = MarketAlerts()
         self.stop_event = None
         self.prefetcher = None
         if background:
@@ -239,6 +241,7 @@ class MarketData:
                 try:
                     self.get("screener")
                     self._selection_tick()
+                    self._alerts_tick()
                 except Exception:
                     pass
                 self.stop_event.wait(1)
@@ -249,6 +252,40 @@ class MarketData:
     def _peek(self, key):
         with self.lock:
             return self.entries.get(key, {}).get('data')
+
+    def _alert_cache(self):
+        """Copy verified cached packets, including failed-refresh flags, without scheduling jobs."""
+        with self.lock:
+            packets = {}
+            for key, entry in self.entries.items():
+                packet = dict(entry.get('data') or dict(status='pending', updated=0))
+                if entry.get('error'):
+                    packet['refresh_error'] = entry['error']
+                packets[key] = packet
+            return packets
+
+    def _alerts_tick(self, now=None):
+        now = time.time() if now is None else now
+        active = self.alerts.active(now)
+        if not active:
+            return
+        packets = self._alert_cache()
+        tickers = packets.get(('screener', '', ''), {})
+        charts = {key[1]: value for key, value in packets.items() if key[0] == 'chart' and key[2] == '1'}
+        books = {key[1]: value for key, value in packets.items() if key[0] == 'book'}
+        with self.selection_lock:
+            histories = {symbol: list(values) for symbol, values in self.book_history.items()}
+        for key, _, _ in active:
+            self.alerts.update(key, tickers, charts, books, histories, now)
+
+    def alerts_snapshot(self, filters=None, search='', now=None):
+        filters = selection.parse_filters(filters)
+        # Reuse the same bounded shortlist and workers as smart selection.
+        self.selection_snapshot(filters, search, now)
+        now = time.time() if now is None else now
+        key = self.alerts.register(filters, search, now)
+        self._alerts_tick(now)
+        return self.alerts.snapshot(key, now)
 
     def selection_snapshot(self, filters=None, search='', now=None):
         filters = selection.parse_filters(filters)
