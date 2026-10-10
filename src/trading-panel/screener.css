@@ -32,3 +32,17 @@
 .coin-price.flash-up{animation:labFlashUp .8s ease-out}
 .coin-price.flash-down{animation:labFlashDown .8s ease-out}
 @media(prefers-reduced-motion:reduce){.coin-price.flash-up,.coin-price.flash-down{animation:none}}
+.screener-tracking{padding:14px 0;border-bottom:1px solid var(--line)}
+.screener-tracking h3{font-size:14px;margin:0 0 8px}
+.watch-list{display:flex;flex-direction:column;gap:4px}
+.watch-item{display:flex;align-items:center;gap:12px;min-width:0;font-variant-numeric:tabular-nums}
+.watch-item>span{flex:1;min-width:0;font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.watch-item button{min-height:44px;flex-shrink:0}
+.watch-item button[aria-pressed="true"]{color:var(--accent);text-decoration:underline;text-underline-offset:4px}
+.order-controls{display:flex;flex-wrap:wrap;align-items:end;gap:12px;padding:16px 0;border-bottom:1px solid var(--line)}
+.order-controls label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--muted)}
+.order-controls select,.order-controls button{min-height:44px}
+.order-controls p{flex-basis:100%;margin:0;font-size:13px;line-height:1.5}
+.screener-alerts .compact-alert-body>small,.screener-alerts .compact-alert-body>b,.screener-alerts .compact-alert-body>strong{display:block;margin-bottom:4px}
+.compact-alert[data-live="false"] .fresh-kind{color:var(--muted)}
+@media(max-width:600px){.order-controls label{flex:1;min-width:0}.order-controls select{max-width:100%;font-size:16px}.watch-item{flex-wrap:wrap;gap:4px 12px}.watch-item>span{font-size:14px;flex-basis:55%}.watch-item button{font-size:14px}.screener-tracking>p,.order-controls p{font-size:14px}}

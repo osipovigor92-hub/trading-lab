@@ -140,8 +140,8 @@ def market_fixture(path, query):
                    open_interest=20e6,funding=.0001,next_funding=now+3600,volume24=1e6,funding_interval_hours=8) for i,(s,p) in enumerate(prices.items())]
         return dict(status='ok',updated=now//5*5,rows=rows,eligible=len(prices),rejected=0,limit=100)
     if path=='/api/market-alerts':
-        filters=selection.parse_filters({k:v[0] for k,v in query.items() if k!='search'})
-        key=ALERTS.register(filters,query.get('search',[''])[0],now)
+        filters=selection.parse_filters({k:v[0] for k,v in query.items() if k not in ('search','watch')})
+        key=ALERTS.register(filters,query.get('search',[''])[0],now,query.get('watch',[''])[0])
         tickers=market_fixture('/api/screener',{});charts={};books={};histories={}
         for row in tickers['rows']:
             symbol=row['symbol'];charts[symbol]=market_fixture('/api/market-chart',dict(symbol=[symbol],interval=['1']))
@@ -150,7 +150,7 @@ def market_fixture(path, query):
         ALERTS.update(key,tickers,charts,books,histories,now)
         return ALERTS.snapshot(key,now)
     if path=='/api/market-selection':
-        filters=selection.parse_filters({k:v[0] for k,v in query.items() if k!='search'})
+        filters=selection.parse_filters({k:v[0] for k,v in query.items() if k not in ('search','watch')})
         tickers=market_fixture('/api/screener',{});rows=[]
         for row in tickers['rows']:
             symbol=row['symbol'];chart=market_fixture('/api/market-chart',dict(symbol=[symbol],interval=['1']))

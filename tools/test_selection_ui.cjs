@@ -25,6 +25,7 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
    await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
    assert.equal(await page.locator('.selection-row[data-state=rejected]').count(),2);
    assert.equal(await page.locator('.selection-row[data-rating=pending]').count(),0);
+   await page.getByRole('button',{name:'Пересортировать',exact:true}).click();
    assert.deepEqual(await page.locator('#screener-table .coin-button').allTextContents(),['BTCUSDT','ETHUSDT','SOLUSDT','LINKUSDT','ONDOUSDT','AVAXUSDT'],'rating sort keeps passed candidates first');
    const btc=page.locator('#screener-table tbody tr',{has:page.getByRole('button',{name:'BTCUSDT',exact:true})});
    assert.equal(await btc.locator('.selection-row').getAttribute('data-rating'),'83');
@@ -70,7 +71,9 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
    mode='pending';await until(async()=>await page.locator('.selection-reasons').filter({hasText:'Снимки стакана: 3 / 5'}).count()>0);
    assert.match(await btc.locator('.selection-reasons').textContent(),/Снимки стакана: 3 \/ 5/);
    assert.equal(await btc.locator('.selection-row').getAttribute('data-rating'),'pending');
-   assert.equal(await btc.locator('.rating-button').textContent(),'—');
+   assert.equal(await btc.locator('.rating-button').textContent(),'Было 83');
+   assert.match(await btc.locator('.rating-button').getAttribute('title'),/Последний подтверждённый рейтинг.*сейчас проверяется/);
+   assert.match(await btc.locator('.rating-compact').textContent(),/Было 83 · проверяется/);
    assert.deepEqual(await btc.locator('.rating-part b').allTextContents(),['25 / 25','— / 25','13 / 25','— / 25'],'known parts remain visible without inventing or rescaling the total');
    mode='stale';await until(async()=>await page.locator('.selection-reasons').filter({hasText:'Данные проверки устарели'}).count()>0);
    assert.equal(await page.locator('.selection-row[data-state=passed]').count(),0);
@@ -83,6 +86,27 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
    mode='invalid_rating';await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4);
    assert.equal(await page.locator('.selection-row[data-rating=pending]').count(),6,'malformed totals cannot be displayed or used for sorting');
    mode='normal';await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4&&await page.locator('.selection-row[data-rating=pending]').count()===0);
+   if(width===1280){
+    mode='html';await until(async()=> (await page.locator('.selection-summary').textContent()).includes('Не удалось обновить'));
+    assert.equal(await btc.locator('.rating-breakdown h3').textContent(),'Рейтинг: Было 83 · проверяется');
+    await btc.evaluate(el=>el.dataset.ratingExpiry='retained');
+    const reasonsBefore=await btc.locator('.selection-reasons p').allTextContents();let clockOffset=0;
+    await page.evaluate(()=>{
+     const originalNow=Date.now,originalJson=Response.prototype.json;window.ratingExpiryClockOffset=0;
+     Date.now=()=>originalNow()+window.ratingExpiryClockOffset;
+     Response.prototype.json=async function(){const data=await originalJson.call(this);if(new URL(this.url).pathname==='/api/screener')window.ratingExpiryClockOffset=data.testClockOffset||0;return data;};
+     window.restoreRatingExpiryClock=()=>{Date.now=originalNow;Response.prototype.json=originalJson;};
+    });
+    await page.route('**/api/screener',async route=>{const response=await route.fetch(),data=await response.json();data.updated+=clockOffset/1000;data.testClockOffset=clockOffset;await route.fulfill({response,json:data});});
+    // Move browser time together with the fresh quote response; the pending verdict stays unchanged.
+    clockOffset=301000;await until(async()=> (await btc.locator('.rating-button').textContent())==='—');
+    assert.equal(await btc.getAttribute('data-rating-expiry'),'retained','expiry updates the existing row');
+    assert.equal(await btc.locator('.rating-compact').textContent(),'Рейтинг: проверяется');
+    assert.equal(await btc.locator('.rating-breakdown h3').textContent(),'Рейтинг: проверяется','expanded historical score expires with the button');
+    assert.deepEqual(await btc.locator('.selection-reasons p').allTextContents(),reasonsBefore,'pending evidence stays unchanged during expiry');
+    clockOffset=0;await page.evaluate(()=>window.restoreRatingExpiryClock());await page.unroute('**/api/screener');mode='normal';
+    await until(async()=>await page.locator('.selection-row[data-state=passed]').count()===4&&await page.locator('.selection-row[data-rating=pending]').count()===0);
+   }
    await page.getByLabel('Поиск монеты',{exact:true}).fill('link');await until(async()=>await page.locator('#screener-table .coin-button').count()===1);
    assert.equal(await page.locator('#screener-table .coin-button').textContent(),'LINKUSDT');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);

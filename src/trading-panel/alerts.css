@@ -43,3 +43,6 @@
  .fresh-condition{grid-template-columns:1fr;gap:5px}
  .fresh-condition small{grid-column:1}
 }
+.fresh-event[data-live="false"] .fresh-kind{color:var(--muted)}
+.fresh-event-actions{display:flex;flex-wrap:wrap;gap:8px}
+.fresh-event-actions button[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}

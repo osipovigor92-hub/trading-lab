@@ -1,5 +1,8 @@
 # Crypto screener and levels
 
+See [stable tracking](stable-tracking.md) for pinned row order, historical rating
+labels, priority watchlists and the retained alert feed added after these stages.
+
 The **Скринер** tab lists the top 100 valid Bybit linear USDT perpetual tickers by 24-hour turnover. Search, minimum turnover, sorting and presets run locally. Expiry futures, pre-listing rows, malformed and duplicate tickers are excluded. This does not change the symbol selection or entry rules of trading models.
 
 - Price, 24-hour change, turnover in USDT, daily high/low range and quoted bid/ask spread.
