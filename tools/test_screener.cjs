@@ -1,6 +1,27 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {filterRows,ratingScore,ratingView,coinCardView,positionView,fresh,domain,botModels,chartBars,selectionView,selectionDefaults,validateSelection}=require('../src/trading-panel/screener.js');
 const rows=[{symbol:'BTCUSDT',turnover:1e8,spread:.01,range24:2,change:4,selection:{status:'passed'},rating:{status:'ok',score:83}},{symbol:'ONDOUSDT',turnover:3e7,spread:.02,range24:8,change:-5,selection:{status:'passed'},rating:{status:'ok',score:55}},{symbol:'THINUSDT',turnover:1e6,spread:.15,range24:20,change:10,selection:{status:'rejected'},rating:{status:'ok',score:10}}];
+test('assistant values require coherent original source times and complete component sums',()=>{
+ const {assistantView}=require('../src/trading-panel/screener.js'),now=6005;
+ const a={status:'ok',timeframe:'1',candle_end:6000,sources:{quote:6005,chart:6005,candle:6000},score:65,score_components:[['volume',40,30],['range',30,15],['movement',20,10],['turnover',10,10]].map(([key,max,points])=>({key,max,points})),indicators:{rsi14:55,ema20:100,ema50:99,vwap60:99.5,atr14:.2,atr14_pct:.2,rvol5:2,change5_pct:.2,range5_pct:.4}};
+ assert.equal(assistantView(a,now,now,now).score,65);
+ for(const invalid of [{...a,sources:{...a.sources,chart:5999}},{...a,candle_end:5940},{...a,score:66},{...a,score_components:a.score_components.slice(1)},{...a,indicators:{...a.indicators,rvol5:null}}])assert.equal(assistantView(invalid,now,now,now).score,null);
+ assert.equal(assistantView(a,6004,now,now).score,null);assert.equal(assistantView(a,now,now,now+46).score,null);
+});
+test('new activity sorting keeps unknown measurements distinct and filters only confirmed setups',()=>{
+ const {assistantRows,stableRows}=require('../src/trading-panel/screener.js'),candidates=rows.map((r,i)=>({...r,assistant:{score:i===0?null:i===1?80:95,eligible:i===1,activity:'active',setup:i===1?'breakout_down':'watch'}}));
+ assert.equal(assistantRows(candidates)[0].symbol,'THINUSDT');assert.deepEqual(assistantRows(candidates,{preset:'active'}).map(r=>r.symbol),['ONDOUSDT']);assert.deepEqual(assistantRows(candidates,{minScore:70}).map(r=>r.symbol),['THINUSDT','ONDOUSDT']);assert.deepEqual(stableRows(assistantRows(candidates),['BTCUSDT','ONDOUSDT','THINUSDT']).map(r=>r.symbol),['BTCUSDT','ONDOUSDT','THINUSDT']);
+});
+test('risk estimates respect cash and risk in both directions and reject overflow or wrong levels',()=>{
+ const {riskEstimate}=require('../src/trading-panel/screener.js'),input={capital:600,risk:.5,entry:100,stop:98,target:104,side:1,fee:.055,slippage:.05};
+ const a=riskEstimate(input),b=riskEstimate({...input,stop:102,target:96,side:-1});assert.ok(a.loss<=3&&b.loss<=3&&a.notional<=600);assert.equal(a.rr,b.rr);assert.ok(a.rr<2);assert.ok(riskEstimate({...input,risk:5,stop:99.999}).notional<=600);
+ for(const changes of [{stop:100},{target:99},{capital:Infinity},{entry:Infinity},{capital:1e308},{risk:6}])assert.equal(riskEstimate({...input,...changes}),null);
+});
+test('closed chart windows reject gaps, different identity and refresh failures',()=>{
+ const {chartReady,indicatorSeries}=require('../src/trading-panel/screener.js'),bars=Array.from({length:60},(_,i)=>({time:i*60,open:100,high:101,low:99,close:100,volume:2,turnover:200})),chart={status:'ok',symbol:'BTCUSDT',interval:'1',updated:3605,candle_end:3600,candles:bars};
+ assert.equal(chartReady(chart,'BTCUSDT','1',3605),true);assert.equal(chartReady({...chart,refresh_error:'timeout'},'BTCUSDT','1',3605),false);assert.equal(chartReady(chart,'ETHUSDT','1',3605),false);assert.equal(chartReady({...chart,candles:bars.map((b,i)=>i===30?{...b,time:b.time+60}:b)},'BTCUSDT','1',3605),false);assert.equal(chartReady(chart,'BTCUSDT','1',3700),false);
+ const series=indicatorSeries(bars);assert.equal(series.ema20[19],100);assert.equal(series.ema50[49],100);assert.equal(series.vwap60[58],null);assert.equal(series.vwap60[59],100);
+});
 test('pinned order survives rating loss and changed scores while values stay live',()=>{
  const {stableRows}=require('../src/trading-panel/screener.js');
  const order=rows.map(r=>r.symbol),changed=[{...rows[1],price:123,rating:{status:'ok',score:99}},{...rows[0],rating:{status:'pending'}},rows[2]];

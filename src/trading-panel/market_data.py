@@ -9,7 +9,7 @@ import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import selection
-from market_alerts import MarketAlerts
+from market_alerts import ASSISTANT_KINDS, MarketAlerts
 
 SYMBOL = re.compile(r"^[A-Z0-9]{2,24}USDT$")
 INTERVALS = {"1": 60, "5": 300, "15": 900, "60": 3600}
@@ -113,6 +113,106 @@ def closed_candles(result, stamp, interval):
     return bars
 
 
+def candle_indicators(bars, interval, stamp):
+    """Measured indicators from a finite window of verified, closed candles.
+
+    EMA uses an SMA seed; RSI/ATR use Wilder smoothing. VWAP is explicitly
+    rolling 60 bars, calculated with exchange turnover and base volume rather
+    than an approximation from OHLC. No ticker price or forming bar is used.
+    """
+    step = INTERVALS.get(interval)
+    if (step is None or not selection.finite(stamp) or not isinstance(bars, list)
+            or not 60 <= len(bars) <= 180):
+        return None
+    for index, bar in enumerate(bars):
+        if not isinstance(bar, dict) or any(not selection.finite(bar.get(key))
+                for key in ('time', 'open', 'high', 'low', 'close', 'volume', 'turnover')):
+            return None
+        if (bar['time'] % step != 0 or bar['time'] + step > stamp or
+                not 0 < bar['low'] <= min(bar['open'], bar['close']) <=
+                max(bar['open'], bar['close']) <= bar['high'] or
+                bar['volume'] < 0 or bar['turnover'] < 0 or
+                index and bar['time'] - bars[index-1]['time'] != step):
+            return None
+    if not 0 <= stamp - (bars[-1]['time'] + step) < step:
+        return None
+    closes = [bar['close'] for bar in bars]
+
+    def average(values, length, alpha):
+        result = sum(values[:length]) / length
+        for value in values[length:]:
+            result += alpha * (value - result)
+        return result
+
+    ema20 = average(closes, 20, 2 / 21)
+    ema50 = average(closes, 50, 2 / 51)
+    changes = [b-a for a, b in zip(closes, closes[1:])]
+    gain = average([max(value, 0) for value in changes], 14, 1 / 14)
+    loss = average([max(-value, 0) for value in changes], 14, 1 / 14)
+    # A flat sequence is neutral, never a momentum confirmation.
+    rsi = 50.0 if gain == loss == 0 else 100.0 if loss == 0 else 100 - 100 / (1 + gain / loss)
+    ranges = [bars[0]['high'] - bars[0]['low']] + [
+        max(b['high'] - b['low'], abs(b['high'] - a['close']), abs(b['low'] - a['close']))
+        for a, b in zip(bars, bars[1:])]
+    atr = average(ranges, 14, 1 / 14)
+    previous_atr = average(ranges[:-1], 14, 1 / 14)
+    volume = sum(bar['volume'] for bar in bars[-60:])
+    vwap = sum(bar['turnover'] for bar in bars[-60:]) / volume if volume > 0 else None
+    base = sum(bar['volume'] for bar in bars[-25:-5]) / 20
+    recent = sum(bar['volume'] for bar in bars[-5:]) / 5
+    price = closes[-1]
+    upper, lower = max(bar['high'] for bar in bars[-21:-1]), min(bar['low'] for bar in bars[-21:-1])
+    previous_upper = max(bar['high'] for bar in bars[-22:-2])
+    previous_lower = min(bar['low'] for bar in bars[-22:-2])
+    # Keep the original level of an unbroken closed-candle breakout episode.
+    # A rolling range alone would absorb the breakout bar on the next minute,
+    # making a large extension appear safe again. Re-entry resets the episode.
+    atr_values = [None] * 13 + [sum(ranges[:14]) / 14]
+    for value in ranges[14:]:
+        atr_values.append(atr_values[-1] + (value - atr_values[-1]) / 14)
+    contexts = dict(up=None, down=None)
+    for index in range(22, len(bars)):
+        close, local_atr = closes[index], atr_values[index]
+        if contexts['up'] and close <= contexts['up']['level']:
+            contexts['up'] = None
+        if contexts['down'] and close >= contexts['down']['level']:
+            contexts['down'] = None
+        if local_atr <= 0:
+            continue
+        high = max(bar['high'] for bar in bars[index-20:index])
+        low = min(bar['low'] for bar in bars[index-20:index])
+        old_high = max(bar['high'] for bar in bars[index-21:index-1])
+        old_low = min(bar['low'] for bar in bars[index-21:index-1])
+        if (contexts['up'] is None and close > high + .1 * local_atr and
+                closes[index-1] <= old_high + .1 * atr_values[index-1]):
+            contexts['up'] = dict(level=high, candle_end=bars[index]['time'] + step)
+        if (contexts['down'] is None and close < low - .1 * local_atr and
+                closes[index-1] >= old_low - .1 * atr_values[index-1]):
+            contexts['down'] = dict(level=low, candle_end=bars[index]['time'] + step)
+    for side, context in contexts.items():
+        if context:
+            context['extension_atr'] = max(0, (price-context['level'] if side == 'up' else
+                                              context['level']-price) / atr) if atr > 0 else None
+    return dict(rsi14=rsi, ema20=ema20, ema50=ema50,
+                ema_gap_pct=(ema20 / ema50 - 1) * 100,
+                vwap60=vwap, vwap_distance_pct=(price / vwap - 1) * 100 if vwap else None,
+                atr14=atr, atr14_pct=atr / price * 100,
+                rvol5=recent / base if base > 0 else None,
+                change5_pct=(price / closes[-6] - 1) * 100,
+                range5_pct=(max(bar['high'] for bar in bars[-5:]) /
+                            min(bar['low'] for bar in bars[-5:]) - 1) * 100,
+                close=price, closed_bars=len(bars), window_start=bars[0]['time'],
+                window_end=bars[-1]['time'] + step,
+                prior20_high=upper, prior20_low=lower,
+                breakout_up=atr > 0 and price > upper + .1 * atr and closes[-2] <= previous_upper + .1 * previous_atr,
+                breakout_down=atr > 0 and price < lower - .1 * atr and closes[-2] >= previous_lower - .1 * previous_atr,
+                extension_up_atr=max(0, (price-upper) / atr) if atr > 0 else None,
+                extension_down_atr=max(0, (lower-price) / atr) if atr > 0 else None,
+                breakout_context_up=contexts['up'], breakout_context_down=contexts['down'],
+                vwap_bars=60, rvol_recent_bars=5, rvol_base_bars=20,
+                smoothing='Wilder RSI/ATR; SMA-seeded EMA')
+
+
 def chart_analysis(symbol, interval, bars, stamp):
     """Confirmed 2+2 swings grouped into price zones. Descriptive, not a forecast."""
     price = bars[-1]["close"]
@@ -160,7 +260,8 @@ def chart_analysis(symbol, interval, bars, stamp):
                 candle_end=bars[-1]["time"] + INTERVALS[interval], candles=bars, levels=chosen,
                 price=price, atr=atr, atr_pct=atr / price * 100, vwap=vwap,
                 rvol=recent / base if base > 0 else None, zone_width=tolerance,
-                volume_window=volume, turnover_window=sum(b["turnover"] for b in bars[-60:]))
+                volume_window=volume, turnover_window=sum(b["turnover"] for b in bars[-60:]),
+                indicators=candle_indicators(bars, interval, stamp))
 
 
 def orderbook_analysis(symbol, result, stamp):
@@ -278,17 +379,29 @@ class MarketData:
         for key, _, _ in active:
             self.alerts.update(key, tickers, charts, books, histories, now)
 
-    def alerts_snapshot(self, filters=None, search='', now=None, watch=''):
+    def alerts_snapshot(self, filters=None, search='', now=None, watch='', priority='turnover'):
         filters = selection.parse_filters(filters)
         # Reuse the same bounded shortlist and workers as smart selection.
-        self.selection_snapshot(filters, search, now, watch)
+        self.selection_snapshot(filters, search, now, watch, priority)
         now = time.time() if now is None else now
-        key = self.alerts.register(filters, search, now, watch)
+        key = self.alerts.register(filters, search, now, watch, priority)
         self._alerts_tick(now)
         return self.alerts.snapshot(key, now)
 
-    def selection_snapshot(self, filters=None, search='', now=None, watch=''):
+    def assistant_snapshot(self, filters=None, search='', now=None, watch=''):
+        return self.selection_snapshot(filters, search, now, watch, priority='activity')
+
+    def assistant_alerts_snapshot(self, filters=None, search='', now=None, watch=''):
+        packet = self.alerts_snapshot(filters, search, now, watch, priority='activity')
+        # The cursor covers the full shared stream. Filtering must not rewrite it
+        # or resurrect legacy book-readiness events in the trader interface.
+        return dict(packet, events=[event for event in packet.get('events', [])
+                                   if event.get('kind') in ASSISTANT_KINDS + ('near_level',)])
+
+    def selection_snapshot(self, filters=None, search='', now=None, watch='', priority='turnover'):
         filters = selection.parse_filters(filters)
+        if priority not in ('turnover', 'activity'):
+            raise ValueError('Неизвестный приоритет анализа')
         watched = selection.parse_watch(watch)
         if not isinstance(search, str) or not re.fullmatch(r'[A-Z0-9]{0,24}', search):
             raise ValueError('Некорректный поиск монеты')
@@ -298,21 +411,28 @@ class MarketData:
         if tickers.get('status') != 'ok' or not selection.fresh(stamp, now, 45):
             return dict(status='pending', source_time=stamp, rows=[], filters=filters,
                         error='Нет свежих котировок Bybit', analysis_limit=selection.ANALYSIS_LIMIT)
-        eligible = selection.shortlist(tickers['rows'], stamp, filters, search, watched, now)
+        shortlist = selection.assistant_shortlist if priority == 'activity' else selection.shortlist
+        eligible = shortlist(tickers['rows'], stamp, filters, search, watched, now)
         with self.selection_lock:
             self.selection_watch = eligible[:selection.ANALYSIS_LIMIT]
             self.selection_until = self.clock() + 30
             histories = {symbol: list(values) for symbol, values in self.book_history.items()}
             watch = list(self.selection_watch)
+        packets = self._alert_cache()
+        quote_available = not tickers.get('error') and not tickers.get('refresh_error')
         rows = []
         for row in tickers['rows']:
-            chart = self._peek(('chart', row['symbol'], '1'))
+            chart = packets.get(('chart', row['symbol'], '1'), {})
             verdict = selection.evaluate(row, stamp, chart, histories.get(row['symbol'], []), filters, now)
-            rows.append(dict(symbol=row['symbol'], selection=verdict))
+            rows.append(dict(symbol=row['symbol'], selection=verdict,
+                             assistant=selection.assistant(row, stamp, chart, now, quote_available, filters)))
         counts = {state: sum(r['selection']['status'] == state for r in rows)
                   for state in ('passed', 'pending', 'rejected')}
         return dict(status='ok', source_time=stamp, rows=rows, filters=filters,
-                    counts=counts, analyzing=watch, analysis_limit=selection.ANALYSIS_LIMIT)
+                    counts=counts, analyzing=watch, analysis_limit=selection.ANALYSIS_LIMIT,
+                    priority=priority,
+                    discovery_note='Наблюдение первым; min(|24ч|,20)/20 + min(диапазон24ч,30)/30; затем оборот'
+                    if priority == 'activity' else 'Приоритет оборота 24ч')
 
     def _selection_tick(self):
         with self.selection_lock:

@@ -6,10 +6,13 @@ import threading
 import uuid
 import selection
 
-KINDS = ('ready', 'almost', 'cancelled', 'book_worse', 'near_level')
+ASSISTANT_KINDS = ('breakout_up', 'breakout_down', 'momentum_up', 'momentum_down')
+KINDS = ('ready', 'almost', 'cancelled', 'book_worse', 'near_level') + ASSISTANT_KINDS
 LABELS = dict(ready='Кандидат готов', almost='Почти готов',
               cancelled='Условие отменено', book_worse='Стакан ухудшился',
-              near_level='Цена у уровня')
+              near_level='Цена у уровня', breakout_up='Пробой вверх · закрытие 1м',
+              breakout_down='Пробой вниз · закрытие 1м', momentum_up='Импульс вверх · 1м',
+              momentum_down='Импульс вниз · 1м')
 BOOK_KEYS = ('depth', 'book_spread', 'impact', 'coverage')
 
 
@@ -81,13 +84,15 @@ class MarketAlerts:
         self.sequence = 0
         self.scopes = OrderedDict()
 
-    def register(self, filters, search, now, watch=''):
+    def register(self, filters, search, now, watch='', priority='turnover'):
+        if priority not in ('turnover', 'activity'):
+            raise ValueError('Неизвестный приоритет анализа')
         watched = selection.parse_watch(watch)
-        key = hashlib.sha256(json.dumps([filters, search, watched], sort_keys=True).encode()).hexdigest()[:20]
+        key = hashlib.sha256(json.dumps([filters, search, watched, priority], sort_keys=True).encode()).hexdigest()[:20]
         with self.lock:
             if key not in self.scopes:
-                self.scopes[key] = dict(filters=dict(filters), search=search, watch=watched, touched=now,
-                                        states={}, events=[], rows=[], analyzing=[])
+                self.scopes[key] = dict(filters=dict(filters), search=search, watch=watched, priority=priority, touched=now,
+                                        states={}, assistant_states={}, events=[], rows=[], analyzing=[])
             self.scopes[key]['touched'] = now
             self.scopes.move_to_end(key)
             while len(self.scopes) > 4:
@@ -108,7 +113,8 @@ class MarketAlerts:
             quotes = {r['symbol']: r for r in tickers.get('rows', [])[:100]
                       if isinstance(r, dict) and isinstance(r.get('symbol'), str) and
                       (search in r['symbol'] or r['symbol'] in scope['watch'])}
-            analyzing = selection.shortlist(list(quotes.values()), tickers.get('updated'), filters,
+            shortlist = selection.assistant_shortlist if scope['priority'] == 'activity' else selection.shortlist
+            analyzing = shortlist(list(quotes.values()), tickers.get('updated'), filters,
                                             search, scope['watch'], now) if usable(tickers, now, 45) else []
             symbols = list(dict.fromkeys(analyzing + list(scope['states'])))[:100]
             current = []
@@ -116,9 +122,13 @@ class MarketAlerts:
                 if symbol not in quotes:
                     # A missing row or a shorter response is not evidence of a cancelled condition.
                     scope['states'][symbol]['current'] = None
+                    if symbol in scope['assistant_states']:
+                        scope['assistant_states'][symbol]['current'] = None
                     continue
                 value = measure(quotes[symbol], tickers, charts.get(symbol, {}), books.get(symbol, {}),
                                 histories.get(symbol, []), filters, now)
+                value['assistant'] = self._update_assistant(scope, quotes[symbol], tickers,
+                                                           charts.get(symbol, {}), filters, now)
                 previous = scope['states'].get(symbol, dict(state=None, book_good=None, near=None, sources={}))
                 # Never turn a response from an older cache generation into a new transition.
                 rollback = any(selection.finite(value['sources'].get(k)) and selection.finite(t) and
@@ -160,7 +170,55 @@ class MarketAlerts:
             scope['rows'], scope['analyzing'] = current, analyzing
             scope['events'] = [e for e in scope['events'] if -2 <= now - e['time'] <= 300][:50]
 
-    def _emit(self, scope, value, kind, now, detail, required=None, level=None):
+    def _update_assistant(self, scope, row, tickers, chart, filters, now):
+        value = selection.assistant(row, tickers.get('updated'), chart, now,
+                                    usable(tickers, now, 45), filters)
+        previous = scope['assistant_states'].get(row['symbol'],
+                    dict(setup=None, momentum_episode=None, last_breakout=None, last_momentum=None,
+                         sources={}, current=None))
+        rollback = any(selection.finite(value['sources'].get(key)) and selection.finite(stamp) and
+                       value['sources'][key] < stamp for key, stamp in previous['sources'].items())
+        if value['status'] != 'ok' or rollback:
+            # A gap is not a new episode or evidence that a condition was cancelled.
+            previous['current'] = None
+            scope['assistant_states'][row['symbol']] = previous
+            if rollback:
+                value.update(status='pending', score=None, signal_id=None, setup='waiting', indicators={},
+                             missing=value['missing'] + ['Источник старее предыдущего снимка'],
+                             reasons=['Ожидаем источник без отката времени'])
+            return value
+        setup, signal_id = value['setup'], value['signal_id']
+        movement = value['indicators']['change5_pct']
+        momentum_episode = (value['trend'] if value['eligible'] and value['activity'] == 'active' and
+                            (value['trend'] == 'up' and movement >= .1 or
+                             value['trend'] == 'down' and movement <= -.1) and
+                            not (selection.finite(value['extension_atr']) and value['extension_atr'] > 1.5)
+                            else None)
+        first_breakout = setup.startswith('breakout_') and signal_id != previous['last_breakout']
+        first_momentum = (setup.startswith('momentum_') and momentum_episode != previous.get('momentum_episode') and
+                          signal_id != previous['last_momentum'])
+        if first_breakout or first_momentum:
+            required = ('quote', 'chart', 'candle')
+            expires = {key: value['sources'][key] + dict(quote=45, chart=75, candle=120)[key]
+                       for key in required}
+            event_value = dict(symbol=row['symbol'], sources=value['sources'], expires=expires,
+                               score=value['score'], price=value['indicators']['close'])
+            self._emit(scope, event_value, setup, now, '; '.join(value['reasons']), required,
+                       observation=dict(signal_id=signal_id, interval='1', timeframe='1',
+                                        candle_end=value['candle_end'], activity=value['activity'],
+                                        score_note=value['note'], breakout_level=value['breakout_level'],
+                                        extension_atr=value['extension_atr']))
+            previous['last_breakout' if first_breakout else 'last_momentum'] = signal_id
+        if value['eligible']:
+            previous['setup'] = setup
+            # Breakout is an observation within momentum, not a gap in its episode.
+            previous['momentum_episode'] = momentum_episode
+        previous['sources'] = dict(value['sources'])
+        previous['current'] = value
+        scope['assistant_states'][row['symbol']] = previous
+        return value
+
+    def _emit(self, scope, value, kind, now, detail, required=None, level=None, observation=None):
         for previous in scope['events']:
             if previous['symbol'] == value['symbol'] and previous['kind'] == kind:
                 previous['superseded'] = True
@@ -171,6 +229,8 @@ class MarketAlerts:
                      expires=min(now + 30, *(value['expires'][k] for k in required)),
                      sources={k: value['sources'][k] for k in required},
                      detail=detail, score=value['score'], price=value['price'], level=level)
+        if observation:
+            event.update(observation)
         scope['events'].insert(0, event)
         scope['events'] = scope['events'][:50]
 
@@ -182,8 +242,13 @@ class MarketAlerts:
                             cursor=self.sequence, rows=[], events=[], analyzing=[], analysis_limit=8)
             events = []
             for event in scope['events']:
-                value = scope['states'].get(event['symbol'], {}).get('current')
+                value = scope['assistant_states' if event['kind'] in ASSISTANT_KINDS else 'states'].get(
+                    event['symbol'], {}).get('current')
                 valid = value and not event.get('superseded') and event['expires'] >= now and -2 <= now - event['time'] <= 30
+                if valid and event['kind'] in ASSISTANT_KINDS:
+                    valid = value['status'] == 'ok' and value['setup'] == event['kind']
+                    if valid and event['kind'].startswith('breakout_'):
+                        valid = value['signal_id'] == event['signal_id']
                 if valid and event['kind'] in ('ready', 'almost'):
                     valid = value['state'] == event['kind']
                 if valid and event['kind'] == 'cancelled':
@@ -200,4 +265,5 @@ class MarketAlerts:
             return dict(status='ok', epoch=self.epoch, scope=key, updated=now, cursor=self.sequence,
                         analyzing=list(scope['analyzing']), analysis_limit=8,
                         rows=[{k: v for k, v in row.items() if k not in ('expires', 'checks')} for row in scope['rows']],
-                        events=events, filters=dict(scope['filters']), search=scope['search'], watch=list(scope['watch']))
+                        events=events, filters=dict(scope['filters']), search=scope['search'], watch=list(scope['watch']),
+                        priority=scope['priority'])

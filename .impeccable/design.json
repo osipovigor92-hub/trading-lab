@@ -1,0 +1,340 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-10T16:40:26.917Z",
+  "title": "Design System: Trading Lab",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Cyan action",
+        "canonical": "#55cee9",
+        "tonalRamp": [
+          "oklch(15% 0.13 219)",
+          "oklch(26% 0.13 219)",
+          "oklch(38% 0.13 219)",
+          "oklch(49% 0.13 219)",
+          "oklch(61% 0.13 219)",
+          "oklch(72% 0.13 219)",
+          "oklch(84% 0.13 219)",
+          "oklch(95% 0.13 219)"
+        ]
+      },
+      "background": {
+        "role": "neutral",
+        "displayName": "Graphite background",
+        "canonical": "#101418",
+        "tonalRamp": [
+          "oklch(15% 0.012 250)",
+          "oklch(26% 0.012 250)",
+          "oklch(38% 0.012 250)",
+          "oklch(49% 0.012 250)",
+          "oklch(61% 0.012 250)",
+          "oklch(72% 0.012 250)",
+          "oklch(84% 0.012 250)",
+          "oklch(95% 0.012 250)"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Graphite panel",
+        "canonical": "#191e24",
+        "tonalRamp": [
+          "oklch(15% 0.015 250)",
+          "oklch(26% 0.015 250)",
+          "oklch(38% 0.015 250)",
+          "oklch(49% 0.015 250)",
+          "oklch(61% 0.015 250)",
+          "oklch(72% 0.015 250)",
+          "oklch(84% 0.015 250)",
+          "oklch(95% 0.015 250)"
+        ]
+      },
+      "control": {
+        "role": "neutral",
+        "displayName": "Graphite control",
+        "canonical": "#20272e",
+        "tonalRamp": [
+          "oklch(15% 0.018 250)",
+          "oklch(26% 0.018 250)",
+          "oklch(38% 0.018 250)",
+          "oklch(49% 0.018 250)",
+          "oklch(61% 0.018 250)",
+          "oklch(72% 0.018 250)",
+          "oklch(84% 0.018 250)",
+          "oklch(95% 0.018 250)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Graphite border",
+        "canonical": "#343d46",
+        "tonalRamp": [
+          "oklch(15% 0.021 250)",
+          "oklch(26% 0.021 250)",
+          "oklch(38% 0.021 250)",
+          "oklch(49% 0.021 250)",
+          "oklch(61% 0.021 250)",
+          "oklch(72% 0.021 250)",
+          "oklch(84% 0.021 250)",
+          "oklch(95% 0.021 250)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Near-white text",
+        "canonical": "#edf3fa",
+        "tonalRamp": [
+          "oklch(15% 0.013 250)",
+          "oklch(26% 0.013 250)",
+          "oklch(38% 0.013 250)",
+          "oklch(49% 0.013 250)",
+          "oklch(61% 0.013 250)",
+          "oklch(72% 0.013 250)",
+          "oklch(84% 0.013 250)",
+          "oklch(95% 0.013 250)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted context",
+        "canonical": "#a7b3be",
+        "tonalRamp": [
+          "oklch(15% 0.018 250)",
+          "oklch(26% 0.018 250)",
+          "oklch(38% 0.018 250)",
+          "oklch(49% 0.018 250)",
+          "oklch(61% 0.018 250)",
+          "oklch(72% 0.018 250)",
+          "oklch(84% 0.018 250)",
+          "oklch(95% 0.018 250)"
+        ]
+      },
+      "rising": {
+        "role": "secondary",
+        "displayName": "Rising green",
+        "canonical": "#59d5a1",
+        "tonalRamp": [
+          "oklch(15% 0.13 164)",
+          "oklch(26% 0.13 164)",
+          "oklch(38% 0.13 164)",
+          "oklch(49% 0.13 164)",
+          "oklch(61% 0.13 164)",
+          "oklch(72% 0.13 164)",
+          "oklch(84% 0.13 164)",
+          "oklch(95% 0.13 164)"
+        ]
+      },
+      "falling": {
+        "role": "secondary",
+        "displayName": "Falling rose",
+        "canonical": "#f1848b",
+        "tonalRamp": [
+          "oklch(15% 0.115 16)",
+          "oklch(26% 0.115 16)",
+          "oklch(38% 0.115 16)",
+          "oklch(49% 0.115 16)",
+          "oklch(61% 0.115 16)",
+          "oklch(72% 0.115 16)",
+          "oklch(84% 0.115 16)",
+          "oklch(95% 0.115 16)"
+        ]
+      },
+      "chart-fast": {
+        "role": "tertiary",
+        "displayName": "Fast EMA cyan",
+        "canonical": "#4bd0f5",
+        "tonalRamp": [
+          "oklch(15% 0.14 224)",
+          "oklch(26% 0.14 224)",
+          "oklch(38% 0.14 224)",
+          "oklch(49% 0.14 224)",
+          "oklch(61% 0.14 224)",
+          "oklch(72% 0.14 224)",
+          "oklch(84% 0.14 224)",
+          "oklch(95% 0.14 224)"
+        ]
+      },
+      "chart-slow": {
+        "role": "tertiary",
+        "displayName": "Slow EMA violet",
+        "canonical": "#a78bcc",
+        "tonalRamp": [
+          "oklch(15% 0.1 302)",
+          "oklch(26% 0.1 302)",
+          "oklch(38% 0.1 302)",
+          "oklch(49% 0.1 302)",
+          "oklch(61% 0.1 302)",
+          "oklch(72% 0.1 302)",
+          "oklch(84% 0.1 302)",
+          "oklch(95% 0.1 302)"
+        ]
+      },
+      "chart-vwap": {
+        "role": "tertiary",
+        "displayName": "Rolling VWAP amber",
+        "canonical": "#e9bc68",
+        "tonalRamp": [
+          "oklch(15% 0.11 82)",
+          "oklch(26% 0.11 82)",
+          "oklch(38% 0.11 82)",
+          "oklch(49% 0.11 82)",
+          "oklch(61% 0.11 82)",
+          "oklch(72% 0.11 82)",
+          "oklch(84% 0.11 82)",
+          "oklch(95% 0.11 82)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Screener headline",
+        "purpose": "Main screener title; other page headings are 27px."
+      },
+      "title": {
+        "displayName": "Panel title",
+        "purpose": "Compact titles inside the watch/table/detail workspace."
+      },
+      "body": {
+        "displayName": "Interface body",
+        "purpose": "Base interface text, with 1.6 line height for paragraphs."
+      },
+      "label": {
+        "displayName": "Context label",
+        "purpose": "Muted supporting context; denser measurement labels vary from 10px to 12px."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "navigation-state",
+        "value": "background .15s ease,color .15s ease",
+        "purpose": "Navigation hover/selection; enabled only when reduced motion is not requested."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "wide-workspace-min",
+        "value": "1600px"
+      },
+      {
+        "name": "detail-reflow-max",
+        "value": "1200px"
+      },
+      {
+        "name": "header-compact-max",
+        "value": "1050px"
+      },
+      {
+        "name": "bottom-navigation-max",
+        "value": "760px"
+      },
+      {
+        "name": "stacked-screener-max",
+        "value": "650px"
+      },
+      {
+        "name": "stacked-alerts-max",
+        "value": "600px"
+      },
+      {
+        "name": "narrow-header-max",
+        "value": "350px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Explicit search or virtual-position action.",
+      "html": "<button class=\"ds-primary\" type=\"button\">Найти сетапы</button>",
+      "css": ".ds-primary{min-height:42px;padding:10px 16px;border-radius:5px;font:600 14px Inter,\"Segoe UI\",system-ui,-apple-system,sans-serif;border:1px solid var(--accent,#55cee9);background:var(--accent,#55cee9);color:#08151b;cursor:pointer}.ds-primary:enabled:hover{filter:brightness(1.1)}.ds-primary:focus-visible{outline:2px solid var(--accent,#55cee9);outline-offset:3px}.ds-primary:disabled{opacity:.48;cursor:not-allowed}@media(max-width:650px){.ds-primary{min-height:44px}}"
+    },
+    {
+      "name": "Secondary action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Watch, refresh and other deliberate secondary actions.",
+      "html": "<button class=\"ds-secondary\" type=\"button\">Наблюдать</button>",
+      "css": ".ds-secondary{min-height:42px;padding:10px 16px;border-radius:5px;font:600 14px Inter,\"Segoe UI\",system-ui,-apple-system,sans-serif;border:1px solid #536d84;background:#17212c;color:#d9e9f8;cursor:pointer}.ds-secondary:enabled:hover{filter:brightness(1.1)}.ds-secondary:focus-visible{outline:2px solid var(--accent,#55cee9);outline-offset:3px}.ds-secondary:disabled{opacity:.48;cursor:not-allowed}@media(max-width:650px){.ds-secondary{min-height:44px}}"
+    },
+    {
+      "name": "Coin search",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "Ticker input at the start of the screener controls.",
+      "html": "<input class=\"ds-search\" aria-label=\"Поиск монеты\" placeholder=\"Монета или тикер…\" />",
+      "css": ".ds-search{min-height:42px;max-width:100%;padding:9px 11px;border:1px solid #3d4954;border-radius:5px;background:#20272e;color:#edf3fa;font:14px Inter,\"Segoe UI\",system-ui,-apple-system,sans-serif;caret-color:var(--accent,#55cee9)}.ds-search::placeholder{color:var(--muted,#a7b3be);opacity:1}.ds-search:focus-visible{outline:2px solid var(--accent,#55cee9);outline-offset:3px}@media(max-width:650px){.ds-search{min-height:44px}}"
+    },
+    {
+      "name": "Desktop page navigation",
+      "kind": "nav",
+      "refersTo": "navigation",
+      "description": "The active page uses cyan text and a bottom underline.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Разделы помощника\"><button class=\"ds-nav-item ds-selected\" aria-pressed=\"true\" type=\"button\">Скринер</button><button class=\"ds-nav-item\" aria-pressed=\"false\" type=\"button\">Алерты</button><button class=\"ds-nav-item\" aria-pressed=\"false\" type=\"button\">Позиции</button><button class=\"ds-nav-item\" aria-pressed=\"false\" type=\"button\">Настройки</button></nav>",
+      "css": ".ds-nav{display:flex;align-items:stretch;gap:8px;background:#141d27}.ds-nav-item{min-height:64px;padding:10px 15px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:#b7c7da;font:500 14px Inter,\"Segoe UI\",system-ui,-apple-system,sans-serif;cursor:pointer;white-space:nowrap}.ds-nav-item:hover{background:#1a2733}.ds-nav-item.ds-selected{border-bottom-color:var(--accent,#55cee9);color:var(--accent,#55cee9);font-weight:650}.ds-nav-item:focus-visible{outline:2px solid var(--accent,#55cee9);outline-offset:3px}@media(prefers-reduced-motion:no-preference){.ds-nav-item{transition:background .15s ease,color .15s ease}}"
+    },
+    {
+      "name": "Fresh-event count",
+      "kind": "chip",
+      "refersTo": "alert-count",
+      "description": "Compact count of currently verified events.",
+      "html": "<span class=\"ds-alert-count\" aria-label=\"Свежих событий: 4\">4</span>",
+      "css": ".ds-alert-count{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 4px;border-radius:4px;background:var(--accent,#55cee9);color:#071b1f;font:10px Inter,\"Segoe UI\",system-ui,-apple-system,sans-serif;line-height:1}"
+    },
+    {
+      "name": "Workspace panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Flat bordered containment for one task or evidence group.",
+      "html": "<section class=\"ds-panel\"><h2 class=\"ds-panel-heading\">Мои монеты</h2><p class=\"ds-panel-note\">До 8 монет · анализ в приоритете</p></section>",
+      "css": ".ds-panel{min-width:0;padding:16px;border:1px solid var(--line,#343d46);border-radius:8px;background:var(--panel,#191e24);color:#edf3fa;font:14px Inter,\"Segoe UI\",system-ui,-apple-system,sans-serif}.ds-panel-heading{margin:0 0 12px;font-size:17px;font-weight:650;line-height:1.3;letter-spacing:-.025em}.ds-panel-note{margin:0 0 14px;font-size:11px;line-height:1.6;color:var(--muted,#a7b3be)}@media(max-width:650px){.ds-panel{padding:14px}}"
+    },
+    {
+      "name": "Selected watched coin",
+      "kind": "custom",
+      "description": "A tracked symbol remains identifiable independently of its score.",
+      "html": "<button class=\"ds-watch\" type=\"button\"><strong>BTC</strong><b>+1,8%</b><small>Наблюдать · 53</small></button>",
+      "css": ".ds-watch{display:grid;grid-template-columns:1fr auto;gap:7px;min-height:66px;width:100%;padding:12px 9px;border:1px solid #485963;border-radius:5px;background:#25313a;color:#edf3fa;text-align:left;font:14px Inter,\"Segoe UI\",system-ui,-apple-system,sans-serif;cursor:pointer}.ds-watch strong{font-size:14px}.ds-watch b{font-size:12px;font-weight:500;color:var(--buy,#59d5a1);font-variant-numeric:tabular-nums}.ds-watch small{grid-column:1/-1;font-size:11px;color:var(--muted,#a7b3be)}.ds-watch:hover{filter:brightness(1.1)}.ds-watch:focus-visible{outline:2px solid var(--accent,#55cee9);outline-offset:3px}"
+    },
+    {
+      "name": "Activity component",
+      "kind": "custom",
+      "description": "An observed component contributes capped integer points to the index.",
+      "html": "<div class=\"ds-score-part\"><div class=\"ds-score-caption\"><span>RVOL 5 / 20</span><b>13 / 40</b></div><div class=\"ds-score-track\"><span></span></div></div>",
+      "css": ".ds-score-part{padding:11px 0;font:11px Inter,\"Segoe UI\",system-ui,-apple-system,sans-serif;color:var(--muted,#a7b3be)}.ds-score-caption{display:flex;justify-content:space-between;gap:10px}.ds-score-caption b{font-weight:500;color:#d0dce5;font-variant-numeric:tabular-nums}.ds-score-track{height:4px;margin-top:7px;border-radius:2px;overflow:hidden;background:#303b45}.ds-score-track span{display:block;width:32.5%;height:100%;background:#62baca}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Graphite trading workspace",
+    "overview": "The approved concept is a dark working surface built around legible data, restrained cyan actions and clear selected states. Flat panels and fine dividers contain dense measurements without ornamental elevation. Green and rose indicate direction; muted text carries context and unavailable states.\n\nThe implemented identity is shared by all four pages. A compact header keeps navigation quiet, and the screener's selected coin remains recognizable across its watch entry, table row and detail panel. Numbers change in place. The visual system makes observation and manual action easy to distinguish.",
+    "keyCharacteristics": [
+      "Graphite backgrounds with slightly lighter flat panels.",
+      "Cyan actions, active navigation and activity emphasis.",
+      "Direction color accompanied by numbers or setup text.",
+      "Compact data typography with tabular numbers.",
+      "Persistent selection and restrained freshness labels."
+    ],
+    "rules": [
+      {
+        "name": "The Direction Rule",
+        "body": "Use direction color with a signed value or an explicit setup label; color alone does not explain the observation.",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "Do preserve the pinned graphite identity and compact data hierarchy.",
+      "Do keep selected symbols and watched symbols visibly identifiable as values update.",
+      "Do pair direction and freshness colors with text.",
+      "Do keep dense tables scrollable inside their container on narrow screens.",
+      "Do use visible focus and honor reduced-motion preferences."
+    ],
+    "donts": [
+      "Don't turn an activity score into a profit claim or a command to trade.",
+      "Don't erase an observation when its current-validity label expires.",
+      "Don't imply that synthetic preview captures prove live exchange availability.",
+      "Don't reintroduce removed website sections into the four-page navigation."
+    ]
+  }
+}
