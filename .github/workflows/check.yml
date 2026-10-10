@@ -51,15 +51,8 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: node tools/visual-check.cjs
-      - run: node tools/test_engine_center.cjs
-      - run: node tools/test_refresh_ui.cjs
-      - run: node tools/test_chart_interactions.cjs
-      - run: node tools/test_selection_ui.cjs
-      - run: node tools/test_coin_card_ui.cjs
-      - run: node tools/test_paper_plan_ui.cjs
-      - run: node tools/test_positions_ui.cjs
+      - run: node tools/test_assistant_ui.cjs
       - run: node tools/test_fresh_alerts_ui.cjs
-      - run: node tools/test_tracking_ui.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

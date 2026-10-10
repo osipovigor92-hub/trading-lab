@@ -1,180 +1,38 @@
-/* Run with Playwright installed. Own isolated synthetic preview, never production services. */
+/* One bounded screenshot batch of the assistant, using isolated synthetic data. */
 const {chromium}=require('playwright');
 const {spawn}=require('node:child_process'),path=require('node:path'),fs=require('node:fs'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18788;
-const sections={overview:'Обзор',market:'Скринер',positions:'Позиции',alerts:'Алерты',chart:'График',live:'LIVE',research:'Модели',journals:'Журнал',grid:'Grid',tests:'Тесты',settings:'Настройки'};
+const sections={market:'Скринер',alerts:'Алерты',positions:'Позиции',settings:'Настройки'};
+const until=async(check,label)=>{const end=Date.now()+15000;while(Date.now()<end){if(await check())return;await new Promise(resolve=>setTimeout(resolve,100));}throw Error(label);};
 async function navigate(page,key,width){
- if(width<=850&&!['overview','market','alerts','research'].includes(key)){
-  await page.getByRole('button',{name:'Ещё',exact:true}).click();
-  await page.getByRole('dialog',{name:'Другие разделы'}).getByRole('button',{name:key==='live'?'Стакан LIVE':sections[key],exact:true}).click();
- }else await page.getByRole('button',{name:sections[key],exact:true}).click();
- await page.waitForSelector('#page-'+key+':not([hidden])');
+ const nav=page.locator(width<=760?'.mobile-nav':'#dashboard-tabs');
+ await nav.getByRole('button',{name:sections[key],exact:true}).click();
+ await page.locator('#page-'+key).waitFor({state:'visible'});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'horizontal overflow '+key+' at '+width);
 }
 (async()=>{
- const server=spawn(process.env.PYTHON||'python3',[path.join(__dirname,'preview.py'),'--port',String(port)],{stdio:'ignore'});let browser;
+ const server=spawn(process.env.PYTHON||'python3',[path.join(__dirname,'preview.py'),'--port',String(port)],{cwd:root,stdio:['ignore','ignore','pipe']});let browser,log='';server.stderr.on('data',data=>log+=data);
  try{
-  for(let i=0;i<50;i++){try{const r=await fetch(`http://127.0.0.1:${port}/`);if(r.ok)break;}catch{}if(i===49)throw Error('Preview not ready');await new Promise(r=>setTimeout(r,100));}
+  await until(()=>fetch(`http://127.0.0.1:${port}/`).then(response=>response.ok).catch(()=>false),'Preview not ready');
   browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});
-  for(const width of [390,1280]){
-   const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
-   await page.route('https://www.tradingview-widget.com/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Chart fixture</title><p>Provider fixture</p>'}));
-   await page.goto(`http://127.0.0.1:${port}/`);await page.waitForSelector('#screener-table .coin-button');
-   assert.equal(await page.evaluate(()=>LabNavigation.current()),'market','first visit starts at the approved screener');
-   assert.equal(await page.locator('#screener-table tbody tr').count(),6);
-   assert.equal(await page.locator('#dashboard-tabs .nav-item').count(),11);
-   assert.equal(await page.locator('.mobile-nav button').count(),5);
-   await page.waitForSelector('.fresh-alert-health[data-status="ok"]',{state:'attached'});
-   assert.equal(await page.locator('#screener-bots article').count(),4);
-   await page.getByLabel('Поиск монеты').fill('ondo');assert.equal(await page.locator('#screener-table tbody tr').count(),1);
-   // This assertion concerns an unchanged snapshot. The real preview closes a
-   // new candle at each minute boundary, which legitimately redraws the chart.
-   const chartRoute='**/api/market-chart?symbol=ONDOUSDT&interval=1';
-   const stableChart=await (await page.request.get(`http://127.0.0.1:${port}/api/market-chart?symbol=ONDOUSDT&interval=1`)).json();
-   await page.route(chartRoute,route=>route.fulfill({json:{...stableChart,updated:Date.now()/1000}}));
-   await page.getByRole('button',{name:'ONDOUSDT',exact:true}).click();await page.waitForSelector('#screener-candles svg');
-   await page.locator('.chart-analysis>summary').click();await page.waitForSelector('#screener-levels .level-item');
-   await page.waitForTimeout(1200);assert.equal(await page.locator('.chart-analysis').getAttribute('open'),'');await page.locator('.chart-analysis>summary').click();
-   assert.match(await page.locator('#screener-candles svg').getAttribute('aria-label'),/ONDOUSDT/);
-   assert.equal(await page.locator('#screener-candles .volume-bar').count(),width===390?45:90);
-   await page.getByRole('button',{name:'Увеличить масштаб графика',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '125%');
-   assert.equal(await page.locator('#screener-candles .volume-bar').count(),width===390?36:72);
-   await page.locator('#screener-candles svg').evaluate(el=>el.dataset.liveNode='kept');
-   await page.locator('#screener-table tbody tr',{hasText:'ONDOUSDT'}).evaluate(el=>el.dataset.liveNode='kept');
-   await navigate(page,'alerts',width);await page.waitForTimeout(2300);await navigate(page,'market',width);
-   assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '125%','chart scale survives an inactive screener tab');
-   assert.equal(await page.locator('#screener-candles svg').evaluate(el=>el.dataset.liveNode),'kept','background data does not replace an unchanged chart');
-   assert.equal(await page.locator('#screener-table tbody tr',{hasText:'ONDOUSDT'}).evaluate(el=>el.dataset.liveNode),'kept','background data patches a screener row in place');
-   await page.unroute(chartRoute);
-   await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '100%');
-   await page.waitForSelector('#screener-orderbook .book-total');assert.equal(await page.locator('#screener-orderbook .book-total').count(),2);
-   assert.equal(await page.locator('#screener-orderbook .book-level').count(),10);
-   await page.locator('.book-details>summary').click();await page.waitForSelector('#screener-orderbook .book-band');
-   await page.waitForTimeout(1300);assert.equal(await page.locator('.book-details').getAttribute('open'),'');assert.equal(await page.locator('.book-band').count(),3);await page.locator('.book-details>summary').click();
-   await page.getByRole('button',{name:'Избранное ONDOUSDT',exact:true}).click();
-   assert.equal(await page.getByRole('button',{name:'Избранное ONDOUSDT',exact:true}).getAttribute('aria-pressed'),'true');
-   await page.getByLabel('Поиск монеты').fill('');await page.getByRole('button',{name:'Дополнительные фильтры',exact:true}).click();
-   await page.getByLabel('Подборка',{exact:true}).selectOption('favorites');assert.equal(await page.locator('#screener-table .coin-button').count(),1);
-   await page.getByLabel('Подборка',{exact:true}).selectOption('all');await page.getByRole('button',{name:'Дополнительные фильтры',exact:true}).click();
-   await page.getByRole('button',{name:'Ликвидные',exact:true}).click();assert.equal(await page.locator('#screener-table .coin-button').count(),2);await page.getByRole('button',{name:'Все',exact:true}).click();
-   await page.getByRole('button',{name:'15 минут',exact:true}).click();await page.waitForSelector('#screener-candles svg');
-   const selectedVisible=await page.locator('#screener-table .selected-coin').evaluate(r=>{const s=r.closest('.screener-scroll'),a=r.getBoundingClientRect(),b=s.getBoundingClientRect();return a.top>=b.top-1&&a.bottom<=b.bottom+1;});
-   assert.equal(selectedVisible,true,'selected coin should stay inside the list viewport');
-   assert.equal(await page.locator('#screener-candles').evaluate(e=>e.scrollWidth>e.clientWidth),false,'chart needs horizontal scrolling');
-   await page.screenshot({path:path.join(root,'artifacts',`screener-${width}.png`),fullPage:true});
-   await page.screenshot({path:path.join(root,'artifacts',`dashboard-${width}.png`)});
-   await page.getByRole('button',{name:'Открыть график',exact:true}).click();await page.waitForSelector('#page-chart:not([hidden])');
-   assert.equal(await page.getByLabel('Контракт для анализа').inputValue(),'ONDOUSDT');
-   await page.waitForSelector('.terminal-quote strong');await page.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();await page.waitForSelector('.chart-host iframe');
-   assert.equal(await page.locator('.chart-host iframe').getAttribute('sandbox'),'allow-scripts allow-same-origin allow-popups');
-   await page.frameLocator('.chart-host iframe').locator('#chart-status').filter({hasText:'Внешние данные'}).waitFor();
-   await page.getByLabel('Таймфрейм графика').selectOption('15');assert.match(await page.locator('.chart-host iframe').getAttribute('src'),/interval=15/);
-   await page.screenshot({path:path.join(root,'artifacts',`terminal-${width}.png`),fullPage:true});
-   for(const key of Object.keys(sections)){await navigate(page,key,width);await page.waitForTimeout(150);}
-   await page.getByLabel('Плотность интерфейса').selectOption('compact');await page.getByLabel('Стартовый раздел').selectOption('market');await page.reload();await page.waitForSelector('#page-settings:not([hidden])');
-   assert.equal(await page.getByLabel('Плотность интерфейса').inputValue(),'compact');assert.equal(await page.locator('body').getAttribute('data-density'),'compact');
-   await page.getByRole('button',{name:'Сбросить оформление',exact:true}).click();assert.equal(await page.locator('body').getAttribute('data-density'),'comfortable');
-   await navigate(page,'market',width);await page.waitForSelector('#screener-table .coin-button');
-   assert.equal(await page.getByRole('button',{name:'Избранное ONDOUSDT',exact:true}).getAttribute('aria-pressed'),'true');
-   await navigate(page,'research',width);await page.waitForSelector('#model-controls .managed-card');
-   assert.equal(await page.locator('#model-controls .managed-card').count(),4);assert.equal(await page.locator('#engine-controls .managed-card').count(),3);
-   assert.equal(await page.locator('.research-catalog').count(),0,'source catalog should be replaced by actual test controls');
-   const bCard=page.locator('.managed-card[data-model="B"]');
-   await bCard.getByRole('button',{name:'Отключить Модель B',exact:true}).click();
-   await bCard.locator('.managed-badge').filter({hasText:'Отключена'}).waitFor();
-   assert.match(await bCard.locator('.control-response').textContent(),/Отключение подтверждено/);
-   assert.match(await bCard.textContent(),/600,2/,'disabling must preserve capital');
-   assert.equal(await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).isEnabled(),true);
-   // Verify server rejection is shown, without pretending a command succeeded.
-   await page.route('**/api/models-control',async route=>{if(route.request().method()==='POST')await route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({status:'error',error:'Состояние изменилось. Повторите действие'})});else await route.continue();});
-   await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).click();
-   await bCard.locator('.control-response').filter({hasText:'Состояние изменилось'}).waitFor();
-   assert.equal(await bCard.locator('.managed-badge').textContent(),'Отключена');await page.unroute('**/api/models-control');
-   // Gateways sometimes return an HTML page instead of the local JSON API.
-   // The panel must explain the fix, never leak a browser JSON parser error.
-   await page.route('**/api/models-control',async route=>{if(route.request().method()==='POST')await route.fulfill({status:502,contentType:'text/html',body:'<html><h1>Gateway</h1></html>'});else await route.continue();});
-   await bCard.getByRole('button',{name:'Включить Модель B',exact:true}).click();
-   await bCard.locator('.control-response').filter({hasText:'SSH-туннель'}).waitFor();
-   assert.doesNotMatch(await bCard.locator('.control-response').textContent(),/Unexpected token/);
-   await page.unroute('**/api/models-control');
-   await bCard.getByRole('button',{name:'Перезапустить Модель B',exact:true}).click();
-   await bCard.locator('.managed-badge').filter({hasText:'Прогрев'}).waitFor();await bCard.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
-   assert.match(await bCard.locator('.control-response').textContent(),/Перезапуск подтверждён/);
-   const ft=page.locator('.managed-card[data-model="freqtrade"]');
-   assert.equal(await page.locator('.engine-readiness li').count(),9);
-   await page.locator('.models-setup>summary').click();assert.match(await page.locator('.models-setup pre').textContent(),/diagnose_models.py/);
-   await page.locator('.models-setup>summary').click();
-   const hb=page.locator('.managed-card[data-model="hummingbot"]'),jesse=page.locator('.managed-card[data-model="jesse"]');
-   assert.match(await ft.locator('.engine-readiness').textContent(),/3 ГБ всего, 2 ГБ доступно/);
-   assert.match(await hb.locator('.engine-readiness').textContent(),/5 ГБ всего, 4 ГБ доступно/);
-   assert.match(await hb.locator('.engine-readiness').textContent(),/Окружение не подготовлено/);
-   await ft.locator('.engine-prepare>summary').click();assert.match(await ft.locator('.setup-command').textContent(),/--engine freqtrade --install/);
-   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'setup commands need to fit narrow screens');
-   await page.waitForTimeout(1200);assert.equal(await ft.locator('.engine-prepare').getAttribute('open'),'');await ft.locator('.engine-prepare>summary').click();
-   assert.equal(await page.locator('.managed-card[data-model="hummingbot"]').getByRole('button',{name:'Запустить тест Hummingbot',exact:true}).isDisabled(),true);
-   await ft.getByRole('button',{name:'Запустить тест Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
-   assert.equal(await jesse.getByRole('button',{name:'Запустить тест Jesse',exact:true}).isDisabled(),true,'other native engines must wait for the single slot');
-   assert.match(await jesse.locator('.engine-readiness').textContent(),/Слот занят: Freqtrade/);
-   await ft.getByRole('button',{name:'Остановить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест отменён'}).waitFor();
-   assert.match(await ft.locator('.control-response').textContent(),/Остановка теста подтверждена/);
-   assert.equal(await jesse.getByRole('button',{name:'Запустить тест Jesse',exact:true}).isEnabled(),true,'cancellation releases the slot');
-   await ft.getByRole('button',{name:'Повторить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест завершён'}).waitFor();
-   await ft.locator('.engine-runs>summary').click();assert.ok(await ft.locator('.engine-run').count()>=2);
-   const csv=await page.request.get(`http://127.0.0.1:${port}/api/engine-journal?engine=freqtrade`);assert.equal(csv.status(),200);assert.match(await csv.text(),/cancelled/);
-   assert.match(await page.locator('#pc-worker-status').textContent(),/Мой ПК подключён/);
-   await ft.getByLabel('Исполнитель Freqtrade').selectOption('pc');
-   assert.match(await ft.textContent(),/Исполнение на ПК/);
-   await ft.locator('.engine-prepare>summary').click();assert.match(await ft.locator('.setup-command').textContent(),/worker_setup.py prepare --engine freqtrade --install/);
-   await ft.locator('.engine-prepare>summary').click();
-   await ft.getByRole('button',{name:'Запустить тест Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Работает'}).waitFor();
-   assert.equal(await ft.getByLabel('Исполнитель Freqtrade').isDisabled(),true,'active PC task pins its executor');
-   assert.equal(await jesse.getByRole('button',{name:'Запустить тест Jesse',exact:true}).isDisabled(),true,'PC task also occupies the VDS slot');
-   await page.reload();await page.waitForSelector('#page-research:not([hidden])');
-   assert.equal(await ft.getByLabel('Исполнитель Freqtrade').inputValue(),'pc','PC choice survives reload');
-   await ft.getByRole('button',{name:'Остановить Freqtrade',exact:true}).click();await ft.locator('.managed-badge').filter({hasText:'Тест отменён'}).waitFor();
-   assert.match(await ft.locator('.control-response').textContent(),/Остановка теста подтверждена/);
-   await ft.locator('.engine-runs>summary').click();assert.match(await ft.locator('.engine-run-list').textContent(),/ПК/);
-   const pcCsv=await page.request.get(`http://127.0.0.1:${port}/api/engine-journal?engine=freqtrade`);assert.match(await pcCsv.text(),/,pc,cancelled,/);
-   await page.screenshot({path:path.join(root,'artifacts',`pc-models-${width}.png`),fullPage:true});
-   await page.locator('.models-audit>summary').click();assert.match(await page.locator('.control-log').textContent(),/B.*Отключение.*подтверждено/);
-   await page.screenshot({path:path.join(root,'artifacts',`models-${width}.png`),fullPage:true});
-   await page.locator('.models-analysis>summary').click();await page.waitForSelector('#research-observations .research-card');
-   assert.equal(await page.locator('#research-observations .research-card').count(),6);
-   assert.equal(await page.locator('#all-model-status article').count(),4);assert.equal(await page.locator('#research-paper-summary .research-card').count(),2);
-   assert.match(await page.locator('#research-paper-summary').textContent(),/PAPER работает/);assert.equal(await page.locator('#page-research .alert-long,#page-research .alert-short').count(),0);
-   const researchDetails=page.locator('#research-observations details[data-key="C:BTCUSDT"]');
-   await researchDetails.locator('summary').click();await page.waitForTimeout(1200);assert.equal(await researchDetails.getAttribute('open'),'');
-   await page.screenshot({path:path.join(root,'artifacts',`research-${width}.png`),fullPage:true});
-   await navigate(page,'journals',width);await page.waitForSelector('#model-journals a');assert.equal(await page.locator('#model-journals a').count(),2);assert.equal(await page.locator('#research-journals a').count(),2);
-   assert.equal(await page.locator('#page-journals #lab-report').count(),1);await page.screenshot({path:path.join(root,'artifacts',`journals-${width}.png`),fullPage:true});
-   await navigate(page,'live',width);await page.screenshot({path:path.join(root,'artifacts',`liquidity-${width}.png`),fullPage:true});
-   await navigate(page,'alerts',width);await page.locator('.model-alert-diagnostics>summary').click();await page.waitForSelector('#page-alerts .alert-long');assert.equal(await page.locator('.alert-card').count(),9);assert.ok(await page.locator('.alert-watch').count()>=1);assert.ok(await page.locator('#page-alerts details[data-key="C:BTCUSDT"]').count(),1,'C/D candidates stay live when the alert panel opens');
-   // Alerts are sorted by their current status. Keep checking the same coin
-   // when a newer snapshot changes the order, as a user would do.
-   const alertDetails=page.locator('#page-alerts details[data-key="B:BTCUSDT"]');
-   await alertDetails.locator('summary').click();const historyIds=await page.locator('#fresh-alert-history .fresh-event').evaluateAll(rows=>rows.map(r=>r.dataset.id));
-   assert.equal(new Set(historyIds).size,historyIds.length,'history identities are unique');
-   await page.waitForTimeout(2300);assert.equal(await alertDetails.getAttribute('open'),'');
-   await page.screenshot({path:path.join(root,'artifacts',`alerts-${width}.png`),fullPage:true});
-   await page.getByLabel('Фильтр условий моделей').selectOption('entry');assert.equal(await page.locator('.alert-card').count(),2);await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.locator('.model-alert-diagnostics>summary').click();await page.waitForSelector('#page-alerts .alert-long');
-   const restoredIds=await page.locator('#fresh-alert-history .fresh-event').evaluateAll(rows=>rows.map(r=>r.dataset.id));for(const id of historyIds)assert.ok(restoredIds.includes(id),'history survives reload');
-   const frozen=await page.evaluate(()=>Date.now());await page.evaluate(t=>{Date.now=()=>t+20000},frozen);await page.waitForTimeout(1300);
-   assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');assert.equal(await page.locator('#fresh-alert-events .fresh-event[data-live="true"]').count(),0,'expired source never remains a current event');
-   for(const id of historyIds)assert.equal(await page.locator('#fresh-alert-events .fresh-event').evaluateAll((rows,id)=>rows.some(r=>r.dataset.id===id),id),true,'expired observations remain accessible');
-   await navigate(page,'chart',width);await page.waitForTimeout(1100);assert.equal(await page.locator('.terminal-quote strong').textContent(),'—');assert.match(await page.locator('.decision-box').textContent(),/сигнал скрыт до свежего снимка/);
-   await navigate(page,'research',width);await page.locator('.models-analysis>summary').click();assert.equal(await page.locator('.research-match').count(),0);assert.match(await page.locator('#page-research').textContent(),/ОТЧЁТ УСТАРЕЛ/);
-   assert.equal(await page.locator('#model-controls button[data-action]:enabled').count(),0,'stale control reply must disable commands');
-   await navigate(page,'market',width);await page.evaluate(t=>{Date.now=()=>t+90000},frozen);await page.waitForTimeout(4500);
-   assert.equal(await page.locator('#screener-table .coin-button').count(),0,'expired tickers stay visible');assert.equal(await page.locator('.book-total,.book-level').count(),0,'expired depth stays visible');assert.equal(await page.locator('#screener-candles svg').count(),0,'expired candles stay visible');
-   assert.equal(await page.locator('.compact-alert.long,.compact-alert.short,.compact-alert.watch').count(),0,'expired compact alerts stay colored');assert.equal(await page.locator('.screener-summary strong').nth(1).textContent(),'0');assert.deepEqual(errors,[]);await page.close();
+  const evidence=[];
+  for(const width of [1280,390,320]){
+   const page=await browser.newPage({viewport:{width,height:950}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
+   await page.goto(`http://127.0.0.1:${port}/`);await page.locator('#screener-table .coin-button').first().waitFor();
+   assert.equal(await page.evaluate(()=>LabNavigation.current()),'market');
+   assert.deepEqual(await page.evaluate(()=>Object.keys(LabNavigation.names)),Object.keys(sections));
+   for(const key of Object.keys(sections)){
+    await navigate(page,key,width);
+    if(key==='market')await page.locator('.screener-chart-note[data-status="ok"]').waitFor();
+    if(key==='alerts')await page.locator('.fresh-alert-health[data-status="ok"]').waitFor({state:'attached'});
+    if(key==='positions')await until(()=>page.locator('#manual-paper').textContent().then(text=>text.includes('Баланс')),'Manual PAPER not ready');
+    await page.screenshot({path:path.join(root,'artifacts',`assistant-${key}-${width}.png`),fullPage:true});
+    evidence.push({width,page:key,overflow:await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)});
+   }
+   assert.equal(await page.locator('[data-model],#screener-bots,#screener-orderbook').count(),0);
+   assert.deepEqual(errors,[]);await page.close();
   }
-  const small=await browser.newPage({viewport:{width:320,height:740}});await small.goto(`http://127.0.0.1:${port}/`);await small.waitForSelector('#screener-candles svg');
-  for(const key of Object.keys(sections))await navigate(small,key,320);await small.close();
-  // Provider smoke is separate: external availability does not substitute for deterministic checks.
-  const remote=await browser.newPage({viewport:{width:1280,height:900}}),providerErrors=[];remote.on('pageerror',e=>providerErrors.push(e.message));
-  await remote.goto(`http://127.0.0.1:${port}/`);await navigate(remote,'chart',1280);await remote.getByRole('button',{name:'Загрузить TradingView',exact:true}).click();await remote.waitForTimeout(15000);
-  const provider={frames:remote.frames().map(f=>f.url()),errors:providerErrors,canvases:0};for(const frame of remote.frames())if(/tradingview/.test(frame.url()))provider.canvases+=await frame.locator('canvas').count().catch(()=>0);
-  fs.writeFileSync(path.join(root,'artifacts','tradingview-smoke.json'),JSON.stringify(provider,null,2));await remote.locator('.chart-box').screenshot({path:path.join(root,'artifacts','tradingview-provider.png')});console.log('TradingView provider smoke:',JSON.stringify(provider));await remote.close();
-  console.log('VISUAL OK: 320/390/1280 px, eleven sections, model controls, rejection/stop/restart/warmup, native test cards and journals, chart/book, preferences, stale data');
- }finally{if(browser)await browser.close();server.kill();}
-})().catch(e=>{console.error(e);process.exitCode=1;});
+  fs.writeFileSync(path.join(root,'artifacts','assistant-visual.json'),JSON.stringify(evidence,null,2));
+  console.log('Visual assistant check passed: four pages at 1280/390/320 px, no overflow or browser errors.');
+ }catch(error){console.error(log);throw error;}finally{if(browser)await browser.close();server.kill('SIGTERM');}
+})().catch(error=>{console.error(error);process.exitCode=1;});

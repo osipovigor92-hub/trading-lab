@@ -21,6 +21,8 @@
 .fresh-event button{flex-shrink:0}
 .fresh-kind{font-size:14px;color:var(--accent)}
 .kind-ready{color:var(--buy)}
+.kind-momentum_up,.kind-breakout_up{color:var(--buy)}
+.kind-momentum_down,.kind-breakout_down{color:var(--sell)}
 .kind-almost,.kind-near_level{color:#edc474}
 .kind-cancelled,.kind-book_worse{color:var(--sell)}
 .fresh-condition{display:grid;grid-template-columns:150px 1fr;gap:6px 20px;padding:12px 0;border-bottom:1px solid var(--line);font-size:13px}

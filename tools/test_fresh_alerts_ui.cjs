@@ -1,5 +1,5 @@
 /* Offline transition feed, source failures, reload and request-generation checks. */
-const {chromium}=require('playwright'),{spawn}=require('node:child_process'),path=require('node:path'),fs=require('node:fs'),assert=require('node:assert/strict');
+const {chromium}=require('playwright'),{spawn}=require('node:child_process'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18796;
 async function until(fn,label='condition'){const end=Date.now()+15000;while(Date.now()<end){if(await fn())return;await new Promise(r=>setTimeout(r,100));}throw Error('Fresh alerts: '+label+' was not met');}
 const labels={ready:'Кандидат готов',almost:'Почти готов',cancelled:'Условие отменено',book_worse:'Стакан ухудшился',near_level:'Цена у уровня'};
@@ -8,7 +8,7 @@ const event=(kind,sequence,symbol,now=Date.now()/1000)=>({id:'ui:'+sequence,sequ
  const server=spawn(process.env.PYTHON||'python3',['tools/preview.py','--port',String(port)],{cwd:root,stdio:'ignore'});let browser;
  try{
   await until(()=>fetch(`http://127.0.0.1:${port}/`).then(r=>r.ok).catch(()=>false),'preview');
-  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});
+  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
   for(const width of [1280,390,320]){
    const page=await browser.newPage({viewport:{width,height:950}}),errors=[],posts=[];let mode='normal',events=Object.keys(labels).map((k,i)=>event(k,i+1,['BTCUSDT','ETHUSDT','SOLUSDT','ONDOUSDT','LINKUSDT'][i])),cursor=5,delay=false;
    page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST')posts.push(r.url());});
@@ -24,19 +24,20 @@ const event=(kind,sequence,symbol,now=Date.now()/1000)=>({id:'ui:'+sequence,sequ
     if(scope==='changed'){outgoing=[event('ready',20,'ETHUSDT')];outCursor=20;}
     else if(requestedMode==='late'){outgoing=[event('ready',1,'OLDUSDT')];outCursor=1;}
     if(requestedMode==='stale')for(const e of outgoing)e.sources.book=now-100;
+    if(requestedMode==='stale_signal')for(const e of outgoing)e.sources.chart=now-100;
     const packet={status:'ok',epoch:'ui',scope,updated:now,cursor:outCursor,events:outgoing,search:'',rows:outgoing.map(e=>({symbol:e.symbol,state:e.kind==='ready'?'ready':e.kind==='almost'?'almost':'waiting',score:80,reasons:[],sources:{quote:now,chart:now,candle:now-20,book:now,fetched:now}}))};
     if(delay&&scope==='default'){delay=false;packet.events=[event('ready',19,'OLDUSDT')];packet.cursor=19;await new Promise(r=>setTimeout(r,800));}
     await route.fulfill({contentType:'application/json',json:packet});
    });
-   await page.goto(`http://127.0.0.1:${port}/`);await until(()=>page.locator('#screener-alerts .compact-alert[data-kind]').count().then(n=>n===3),'compact feed');
+   await page.goto(`http://127.0.0.1:${port}/`);await until(()=>page.locator('.screener-events .screener-event[data-id]').count().then(n=>n>=1),'compact feed');
    await page.getByRole('button',{name:'Алерты',exact:true}).click();const feed=page.locator('#fresh-alert-events'),history=page.locator('#fresh-alert-history');
    await until(()=>feed.locator('.fresh-event').count().then(n=>n===5),'all five event types');
-   assert.match(await page.locator('.fresh-alerts-head').textContent(),/направление и вход проверяются в PAPER-плане/);
-   assert.equal(await page.locator('.model-alert-diagnostics').getByText('Прежняя история моделей',{exact:true}).count(),1);assert.match(await page.locator('.model-alert-diagnostics').textContent(),/сохранённое наблюдение/);
+   assert.match(await page.locator('.fresh-alerts-head').textContent(),/Алерты и наблюдение/);
+   assert.equal(await page.locator('.model-alert-diagnostics').count(),0,'legacy model diagnostics are removed');
    assert.equal(await page.evaluate(()=>permissionRequests),0,'no implicit notification permission request');assert.equal(await page.evaluate(()=>alertBeeps),0,'initial events stay silent');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'overflow '+width);
    for(const b of await feed.locator('button').all())assert.equal(await b.evaluate(n=>n.getBoundingClientRect().height>=44),true,'touch target');
-   await page.screenshot({path:path.join(root,'artifacts',`fresh-alerts-${width}.png`),fullPage:true});
+
    await page.getByLabel('Тип события').selectOption('book_worse');assert.equal(await feed.locator('.fresh-event').count(),1);assert.match(await feed.textContent(),/Стакан ухудшился/);await page.getByLabel('Тип события').selectOption('all');
    await page.locator('.fresh-alert-history>summary').click();assert.equal(await history.locator('.fresh-event').count(),5);assert.match(await page.locator('.fresh-alert-history').textContent(),/прошлые наблюдения/);
    await page.getByRole('button',{name:'Звук: выключен',exact:true}).click();assert.equal(await page.evaluate(()=>alertBeeps),1);
@@ -57,10 +58,14 @@ const event=(kind,sequence,symbol,now=Date.now()/1000)=>({id:'ui:'+sequence,sequ
    await page.getByRole('button',{name:'Очистить историю',exact:true}).click();await page.waitForTimeout(2200);assert.equal(await history.locator('.fresh-event').count(),0,'clear keeps duplicate cursor');
    assert.equal(await feed.locator('.fresh-event').count(),1,'clear removes archive but keeps the active event');assert.equal(await feed.locator('.fresh-event[data-id="ui:20"][data-live="true"]').count(),1);
    assert.match(await page.locator('.fresh-alert-health').textContent(),/Свежих событий: 1/);assert.equal(await page.evaluate(()=>alertBeeps),beepsBeforeClear,'clear and repeated poll do not replay sound');
-   await page.getByRole('button',{name:'Скринер',exact:true}).click();await until(()=>page.locator('#screener-alerts .compact-alert[data-id="ui:20"][data-live="true"]').count().then(n=>n===1),'compact feed also keeps the active event');await page.getByRole('button',{name:'Алерты',exact:true}).click();
-   events=[event('ready',21,'ETHUSDT')];cursor=21;await page.evaluate(()=>{localStorage.setItem('lab-selection-v1',JSON.stringify({rvol_min:1}));document.dispatchEvent(new CustomEvent('lab-selection-changed'));});await until(()=>feed.locator('.fresh-event[data-id="ui:21"]').count().then(n=>n===1),'new event after clear');await feed.getByRole('button',{name:'Карточка ETHUSDT',exact:true}).click();await until(()=>page.locator('#page-market').isVisible(),'open coin card');assert.match(await page.locator('#screener-detail').getAttribute('data-symbol'),/ETHUSDT/);assert.equal(await page.locator('#screener-detail').getAttribute('data-interval'),'1','alert opens its own analysis timeframe');
+   await page.getByRole('button',{name:'Скринер',exact:true}).click();await until(()=>page.locator('.screener-events .screener-event[data-id="ui:20"][data-live="true"]').count().then(n=>n===1),'compact feed also keeps the active event');await page.getByRole('button',{name:'Алерты',exact:true}).click();
+   events=[event('ready',21,'ETHUSDT')];cursor=21;await page.evaluate(()=>{localStorage.setItem('lab-selection-v1',JSON.stringify({rvol_min:1}));document.dispatchEvent(new CustomEvent('lab-selection-changed'));});await until(()=>feed.locator('.fresh-event[data-id="ui:21"]').count().then(n=>n===1),'new event after clear');await feed.getByRole('button',{name:'Карточка ETHUSDT',exact:true}).click();await until(()=>page.locator('#page-market').isVisible(),'open coin card');assert.match(await page.locator('.screener-detail').getAttribute('data-symbol'),/ETHUSDT/);assert.equal(await page.locator('.screener-detail').getAttribute('data-interval'),'1','alert opens its own analysis timeframe');
+   await page.getByRole('button',{name:'Алерты',exact:true}).click();const modernKinds={breakout_up:'Пробой вверх',breakout_down:'Пробой вниз',momentum_up:'Импульс вверх',momentum_down:'Импульс вниз'},now=Date.now()/1000;
+   events=Object.entries(modernKinds).map(([kind,label],index)=>({...event('ready',22+index,['BTCUSDT','ETHUSDT','SOLUSDT','LINKUSDT'][index],now),kind,label,sources:{quote:now,chart:now,candle:now-20}}));cursor=25;
+   await until(()=>feed.locator('.fresh-event[data-live="true"]').count().then(n=>n===4),'four closed-candle signal types need no browser depth source');await page.getByLabel('Тип события').selectOption('breakout_up');assert.equal(await feed.locator('.fresh-event').count(),1);assert.match(await feed.textContent(),/Пробой вверх/);await page.getByLabel('Тип события').selectOption('all');
+   const modernHistory=await history.locator('.fresh-event').count();mode='stale_signal';await until(()=>feed.locator('.fresh-event[data-live="true"]').count().then(n=>n===0),'stale candle source disables current signal');assert.equal(await history.locator('.fresh-event').count(),modernHistory,'stale signals remain in retained history');
    assert.deepEqual(errors,[],'browser errors '+width);assert.deepEqual(posts,[],'alerts never post commands');await page.close();
   }
-  console.log('Fresh alerts UI passed: 1280/390/320, five types, source failure, history/reload/clear, dedup, explicit sound/notifications, late filter response and coin card.');
+  console.log('Fresh alerts UI passed: 1280/390/320, four closed-candle signals and five history types, source failure, history/reload/clear, dedup, explicit sound/notifications, late filter response and coin card.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -3,95 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trading Lab · PAPER</title>
+<meta name="theme-color" content="#101418">
+<title>Trading Lab · Помощник трейдера</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/screener.css">
+<link rel="stylesheet" href="/alerts.css">
+<link rel="stylesheet" href="/positions.css">
 <link rel="stylesheet" href="/layout.css">
 <script src="/ui.js" defer></script>
 <script src="/data-client.js" defer></script>
 <script src="/app.js" defer></script>
-<link rel="stylesheet" href="/alerts.css">
 <script src="/fresh-alerts.js" defer></script>
-<script src="/alerts.js" defer></script>
-<script src="/scanner.js" defer></script>
-<script src="/scalp.js" defer></script>
-<script src="/live.js" defer></script>
-<script src="/paper.js" defer></script>
-<script src="/signals.js" defer></script>
-<script src="/model-b.js" defer></script>
-<script src="/lab-report.js" defer></script>
-<script src="/model-journals.js" defer></script>
-<script src="/workspace.js" defer></script>
-<script src="/research.js" defer></script>
-<script src="/model-status.js" defer></script>
-<link rel="stylesheet" href="/models.css">
-<script src="/models.js" defer></script>
 <script src="/screener.js" defer></script>
-<link rel="stylesheet" href="/positions.css">
 <script src="/positions.js" defer></script>
 <script src="/layout.js" defer></script>
 </head>
-<body>
-<main>
-<header>
-  <div><small>NODE-02 / ВИРТУАЛЬНАЯ ТОРГОВЛЯ</small>
-  <h1>Trading dashboard</h1></div>
-  <span class="badge">PAPER</span>
+<body class="lab-shell">
+<a class="skip-link" href="#app-main">К содержимому</a>
+<header class="lab-topbar">
+  <div class="app-brand"><div><b>Trading<span>Lab</span></b><span>Помощник трейдера</span></div></div>
+  <nav id="dashboard-tabs" aria-label="Разделы помощника"></nav>
+  <span class="market-source">Bybit · USDT perpetual</span>
 </header>
-<div id="status" class="notice">Подключение…</div>
-<p id="updated" class="muted"></p>
-
-<section id="scanner" class="box"></section>
-<section class="cards">
-<article><label>Капитал, USDT</label><strong id="equity">—</strong></article>
-<article><label>Общий P&L, USDT</label><strong id="pnl">—</strong></article>
-<article><label>Позиция LINK</label><strong id="position">—</strong></article>
-<article><label>Исполнения</label><strong id="fills">—</strong></article>
-</section>
-
-<section class="box">
-<h2 id="symbol">LINKUSDT · нейтральная сетка</h2>
-<div class="details">
-<div>Баланс <b id="balance">—</b></div>
-<div>Начальный капитал <b id="capital">—</b></div>
-<div>Средняя цена позиции <b id="average">—</b></div>
-<div>Комиссии <b id="fees">—</b></div>
-<div>Funding, оценка <b id="funding">—</b></div>
-<div>Просадка от максимума <b id="drawdown">—</b></div>
-<div>Диапазон <b id="range">—</b></div>
-<div>Размер ордера <b id="quantity">—</b></div>
-<div>Лимит позиции <b id="limit">—</b></div>
-<div>Расчётный порог капитала <b id="stop">—</b></div>
-</div>
-<p class="muted">Капитал включает оценку расходов на закрытие.
-Funding приблизительный. Порог остановки не гарантирует цену исполнения.</p>
-</section>
-
-<div class="columns">
-<section class="box">
-<h2>Покупки</h2>
-<div class="scroll"><table>
-<thead><tr><th>Цена</th><th>LINK</th><th>Лимит</th></tr></thead>
-<tbody id="buys"></tbody></table></div>
-</section>
-<section class="box">
-<h2>Продажи</h2>
-<div class="scroll"><table>
-<thead><tr><th>Цена</th><th>LINK</th><th>Лимит</th></tr></thead>
-<tbody id="sells"></tbody></table></div>
-</section>
-</div>
-
-<section class="box">
-<h2>Последние виртуальные исполнения</h2>
-<div class="scroll"><table>
-<thead><tr><th>Время</th><th>Сторона</th><th>LINK</th>
-<th>Цена</th><th>Позиция после</th></tr></thead>
-<tbody id="events"></tbody></table></div>
-<p id="empty" class="muted"></p>
-</section>
-
-<footer>PAPER · реальных ордеров нет · время в часовом поясе браузера</footer>
+<main id="app-main" tabindex="-1">
+  <div id="page-market" class="dashboard-page" hidden></div>
+  <div id="page-alerts" class="dashboard-page" hidden></div>
+  <div id="page-positions" class="dashboard-page" hidden></div>
+  <div id="page-settings" class="dashboard-page" hidden></div>
+  <footer>Сигналы и расчёт риска для ручного решения · время браузера · PAPER без реальных ордеров</footer>
 </main>
+<noscript><p class="notice">Для скринера и обновления котировок включите JavaScript в браузере.</p></noscript>
 </body>
 </html>

@@ -1,59 +1,32 @@
-/* Navigation and presentation preferences; no trading configuration writes. */
+/* Local presentation preferences; no model state or trading configuration writes. */
 document.addEventListener('DOMContentLoaded',()=>{
  'use strict';
- const nav=document.getElementById('dashboard-tabs'),main=document.querySelector('main'),api=window.LabNavigation;
- if(!nav||!main||!api)return;
- const make=(tag,cls='',text='')=>{const e=document.createElement(tag);e.className=cls;e.textContent=text;return e;};
- const go=key=>api.activate(key);
- document.body.classList.add('lab-shell');main.id='app-main';main.tabIndex=-1;
- nav.className='lab-sidebar';document.body.prepend(nav);
- const brand=make('div','sidebar-brand');brand.append(LabUI.brand(),make('b','','Trading Lab'));nav.prepend(brand);
- const links=make('div','sidebar-links');nav.append(links);
- const buttons=[...nav.querySelectorAll('button')];
- for(const button of buttons){
-  const key=button.getAttribute('aria-controls').replace('page-',''),label=api.names[key];
-  button.className='nav-item'+(button.classList.contains('selected')?' selected':'');
-  button.dataset.page=key;button.replaceChildren(LabUI.icon(key),make('span','nav-label',key==='live'?'Стакан LIVE':label));
-  button.setAttribute('aria-label',label);links.append(button);
-  if(key==='alerts'){const badge=make('span','nav-count','0');badge.setAttribute('aria-hidden','true');button.append(badge);}
- }
- const footer=make('div','sidebar-footer');footer.append(make('span','mode-pill','PAPER'),make('small','','NODE 02'));nav.append(footer);
- const header=main.querySelector('header');header.classList.add('mobile-brand');
- const title=header.querySelector('div');title.replaceChildren(LabUI.brand(),make('b','','Trading Lab'));
- header.querySelector('.badge').className='mode-pill';
+ const main=document.getElementById('app-main'),api=window.LabNavigation;
+ if(!main||!api)return;
+ const make=(tag,cls='',text='')=>{const node=document.createElement(tag);node.className=cls;node.textContent=text;return node;};
  const mobile=make('nav','mobile-nav');mobile.setAttribute('aria-label','Основная навигация');
- const mobileButtons={};
- for(const key of ['overview','market','alerts','research','more']){
-  const b=make('button','mobile-nav-item');b.type='button';b.setAttribute('aria-label',key==='more'?'Ещё':api.names[key]);
-  b.append(LabUI.icon(key),make('span','',key==='more'?'Ещё':api.names[key]));
-  if(key==='alerts'){const badge=make('small','nav-count','0');badge.setAttribute('aria-hidden','true');b.append(badge);}
-  mobileButtons[key]=b;mobile.append(b);
+ const buttons={};
+ for(const [key,label]of Object.entries(api.names)){
+  const button=make('button','mobile-nav-item');button.type='button';button.setAttribute('aria-label',label);button.setAttribute('aria-controls','page-'+key);
+  button.append(LabUI.icon(key),make('span','',label));
+  if(key==='alerts'){const badge=make('small','nav-count','0');badge.setAttribute('aria-hidden','true');button.append(badge);}
+  button.addEventListener('click',()=>api.activate(key));buttons[key]=button;mobile.append(button);
  }
  document.body.append(mobile);
- const more=make('dialog','more-menu');more.setAttribute('aria-label','Другие разделы');
- const moreHead=make('div','more-heading');moreHead.append(make('h2','','Другие разделы'));
- const close=make('button','icon-button');close.type='button';close.setAttribute('aria-label','Закрыть меню');close.append(LabUI.icon('close'));close.addEventListener('click',()=>more.close());moreHead.append(close);more.append(moreHead);
- for(const key of ['positions','chart','live','journals','grid','tests','settings']){const b=make('button','more-link');b.type='button';b.append(LabUI.icon(key),make('span','',key==='live'?'Стакан LIVE':api.names[key]));b.addEventListener('click',()=>{more.close();go(key);});more.append(b);}
- more.addEventListener('click',e=>{if(e.target===more){const r=more.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)more.close();}});document.body.append(more);
- for(const [key,b]of Object.entries(mobileButtons))b.addEventListener('click',()=>key==='more'?more.showModal():go(key));
- const reflect=()=>{const key=api.current();for(const [k,b]of Object.entries(mobileButtons)){const on=k===key||(k==='more'&&!['overview','market','alerts','research'].includes(key));b.classList.toggle('selected',on);b.setAttribute('aria-pressed',String(on));}main.dataset.page=key;};
+ const reflect=()=>{const selected=api.current();for(const [key,button]of Object.entries(buttons)){const active=key===selected;button.classList.toggle('selected',active);button.setAttribute('aria-pressed',String(active));}main.dataset.page=selected;};
  document.addEventListener('lab-tab',()=>{reflect();window.scrollTo({top:0,behavior:'instant'});});reflect();
- document.addEventListener('lab-alerts',e=>{const count=Number.isInteger(e.detail)&&e.detail>=0?e.detail:0;for(const badge of document.querySelectorAll('.nav-count')){badge.textContent=String(count);badge.classList.toggle('has-alerts',count>0);}});
- const graph=document.getElementById('page-chart');
- const graphHead=make('div','page-heading');graphHead.append(make('h2','','График и анализ'),make('p','muted','Выбери контракт и таймфрейм'));graph.append(graphHead);
- for(const selector of ['.terminal-toolbar','.terminal-layout']){const node=document.querySelector(selector);if(node)graph.append(node);}
- const journals=document.getElementById('page-journals'),journalHead=make('div','page-heading');journalHead.append(make('h2','','Журнал моделей'),make('p','muted','Закрытые PAPER-сделки, расходы и результаты'));journals.append(journalHead);
- for(const id of ['model-journals','lab-report','research-journals']){const node=document.getElementById(id);if(node)journals.append(node);}
- const settings=document.getElementById('page-settings'),settingsBox=make('section','box settings-box');
- settingsBox.append(make('h2','','Настройки интерфейса'),make('p','muted','Оформление сохраняется в этом браузере.'));
- const density=make('select');density.setAttribute('aria-label','Плотность интерфейса');
- for(const [value,text]of [['comfortable','Комфортная'],['compact','Компактная']]){const o=make('option','',text);o.value=value;density.append(o);}
- const start=make('select');start.setAttribute('aria-label','Стартовый раздел');
- for(const key of ['market','overview','positions','alerts','chart','research','journals']){const o=make('option','',api.names[key]);o.value=key;start.append(o);}
- for(const [text,control]of [['Плотность интерфейса',density],['Стартовый раздел',start]]){const label=make('label','settings-field',text);label.append(control);settingsBox.append(label);}
- const storage=make('p','muted'),reset=make('button','secondary-button','Сбросить оформление');reset.type='button';settingsBox.append(reset,storage);settings.append(settingsBox);
- const readPrefs=()=>{try{density.value=localStorage.getItem('lab-ui-density')==='compact'?'compact':'comfortable';const key=localStorage.getItem('lab-start-page')||'market';start.value=[...start.options].some(o=>o.value===key)?key:'market';}catch{density.value='comfortable';start.value='market';storage.textContent='Сохранение настроек недоступно.';}document.body.dataset.density=density.value;};
- const savePrefs=()=>{document.body.dataset.density=density.value;try{localStorage.setItem('lab-ui-density',density.value);localStorage.setItem('lab-start-page',start.value);storage.textContent='Оформление сохранено.';}catch{storage.textContent='Оформление применено на эту сессию: браузер запретил сохранение.';}};
- density.addEventListener('change',savePrefs);start.addEventListener('change',savePrefs);
- reset.addEventListener('click',()=>{density.value='comfortable';start.value='market';savePrefs();});readPrefs();
+ document.addEventListener('lab-alerts',event=>{const count=Number.isInteger(event.detail)&&event.detail>=0?event.detail:0;for(const badge of document.querySelectorAll('.nav-count')){badge.textContent=String(count);badge.classList.toggle('has-alerts',count>0);}});
+ const settings=document.getElementById('page-settings'),heading=make('div','page-heading');heading.append(make('h2','','Рабочее место'),make('p','muted','Настройки сохраняются в этом браузере.'));settings.append(heading);
+ const box=make('section','box settings-box');box.append(make('h3','','Оформление и навигация'));
+ const density=make('select');density.id='ui-density';density.setAttribute('aria-label','Плотность интерфейса');
+ for(const [value,text]of [['comfortable','Комфортная'],['compact','Компактная']]){const option=make('option','',text);option.value=value;density.append(option);}
+ const start=make('select');start.id='ui-start-page';start.setAttribute('aria-label','Стартовый раздел');
+ for(const [key,label]of Object.entries(api.names)){const option=make('option','',label);option.value=key;start.append(option);}
+ for(const [text,control]of [['Плотность интерфейса',density],['Стартовый раздел',start]]){const label=make('label','settings-field',text);label.htmlFor=control.id;label.append(control);box.append(label);}
+ const reset=make('button','secondary-button','Сбросить оформление'),status=make('p','muted');reset.type='button';status.setAttribute('role','status');box.append(reset,status);settings.append(box);
+ const tools=make('section','box settings-box');tools.append(make('h3','','Параметры помощника'),make('p','muted','Фильтры активности, список наблюдения и расчёт риска находятся в скринере. Звук и условия событий — в алертах.'));
+ const actions=make('div','settings-actions');for(const [key,label]of [['market','Открыть фильтры скринера'],['alerts','Открыть настройки алертов']]){const button=make('button','secondary-button',label);button.type='button';button.addEventListener('click',()=>api.activate(key));actions.append(button);}tools.append(actions);settings.append(tools);
+ const read=()=>{try{density.value=localStorage.getItem('lab-ui-density')==='compact'?'compact':'comfortable';const key=localStorage.getItem('lab-start-page')||'market';start.value=Object.prototype.hasOwnProperty.call(api.names,key)?key:'market';}catch(_){density.value='comfortable';start.value='market';status.textContent='Сохранение настроек недоступно.';}document.body.dataset.density=density.value;};
+ const save=()=>{document.body.dataset.density=density.value;try{localStorage.setItem('lab-ui-density',density.value);localStorage.setItem('lab-start-page',start.value);status.textContent='Оформление сохранено.';}catch(_){status.textContent='Оформление применено на эту сессию: браузер запретил сохранение.';}};
+ density.addEventListener('change',save);start.addEventListener('change',save);reset.addEventListener('click',()=>{density.value='comfortable';start.value='market';save();});read();
 });

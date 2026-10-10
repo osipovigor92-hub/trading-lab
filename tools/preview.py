@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PANEL = ROOT/'src/trading-panel'
 sys.path.insert(0, str(PANEL))
 import selection
-from market_alerts import MarketAlerts
+from market_alerts import ASSISTANT_KINDS, MarketAlerts
 from manual_paper import ManualPaper
 spec = importlib.util.spec_from_file_location('lab_report', ROOT/'src/trading-report/report.py')
 report = importlib.util.module_from_spec(spec)
@@ -141,14 +141,16 @@ def market_fixture(path, query):
         return dict(status='ok',updated=now//5*5,rows=rows,eligible=len(prices),rejected=0,limit=100)
     if path=='/api/market-alerts':
         filters=selection.parse_filters({k:v[0] for k,v in query.items() if k not in ('search','watch')})
-        key=ALERTS.register(filters,query.get('search',[''])[0],now,query.get('watch',[''])[0])
+        key=ALERTS.register(filters,query.get('search',[''])[0],now,query.get('watch',[''])[0],priority='activity')
         tickers=market_fixture('/api/screener',{});charts={};books={};histories={}
         for row in tickers['rows']:
             symbol=row['symbol'];charts[symbol]=market_fixture('/api/market-chart',dict(symbol=[symbol],interval=['1']))
             books[symbol]=market_fixture('/api/market-book',dict(symbol=[symbol]))
             histories[symbol]=[dict(books[symbol],updated=books[symbol]['updated']-8+i*2,seq=i+1) for i in range(5)]
         ALERTS.update(key,tickers,charts,books,histories,now)
-        return ALERTS.snapshot(key,now)
+        packet=ALERTS.snapshot(key,now)
+        packet['events']=[event for event in packet['events'] if event['kind'] in ASSISTANT_KINDS or event['kind']=='near_level']
+        return packet
     if path=='/api/market-selection':
         filters=selection.parse_filters({k:v[0] for k,v in query.items() if k not in ('search','watch')})
         tickers=market_fixture('/api/screener',{});rows=[]
@@ -156,7 +158,8 @@ def market_fixture(path, query):
             symbol=row['symbol'];chart=market_fixture('/api/market-chart',dict(symbol=[symbol],interval=['1']))
             book=market_fixture('/api/market-book',dict(symbol=[symbol]))
             books=[dict(book,updated=now-8+i*2,seq=i+1) for i in range(5)]
-            rows.append(dict(symbol=symbol,selection=selection.evaluate(row,tickers['updated'],chart,books,filters,now)))
+            rows.append(dict(symbol=symbol,selection=selection.evaluate(row,tickers['updated'],chart,books,filters,now),
+                             assistant=selection.assistant(row,tickers['updated'],chart,now,True,filters)))
         return dict(status='ok',source_time=tickers['updated'],rows=rows,filters=filters,analysis_limit=8,
                     counts={state:sum(r['selection']['status']==state for r in rows) for state in ('passed','pending','rejected')})
     symbol=query.get('symbol',['BTCUSDT'])[0];interval=query.get('interval',['5'])[0]
@@ -260,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
             body=allowed[name].read_bytes()
             kind={'.html':'text/html','.js':'text/javascript','.css':'text/css'}[allowed[name].suffix]+'; charset=utf-8'
             if name=='index.html':
-                body=body.replace(b'<body>', '<body><aside class="notice bad">ДЕМО · СИНТЕТИЧЕСКИЕ ДАННЫЕ · НЕ СЕРВЕР</aside>'.encode())
+                body=body.replace(b'<body class="lab-shell">', '<body class="lab-shell"><aside class="notice bad">ДЕМО · СИНТЕТИЧЕСКИЕ ДАННЫЕ · НЕ СЕРВЕР</aside>'.encode())
         self.send_response(200)
         self.send_header('Content-Type',kind)
         self.send_header('Content-Length',str(len(body)))
