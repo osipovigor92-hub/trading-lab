@@ -26,8 +26,8 @@
   return out;
  }
  function observationFeed(history,packet,now){
-  const active=new Set(currentEvents(packet,now).map(e=>e.id));
-  return archive(history,[],now).map(e=>({...e,live:active.has(e.id)}));
+  const events=currentEvents(packet,now),active=new Set(events.map(e=>e.id));
+  return archive(history,events,now).map(e=>({...e,live:active.has(e.id)}));
  }
  const api={observationFeed,currentEvents,consume,archive,kinds};scope.LabMarketAlerts=api;
  if(typeof module!=='undefined')module.exports=api;
