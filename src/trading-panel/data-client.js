@@ -40,7 +40,7 @@
 
   window.labFetch = async (url, options = {}) => {
     const method = String(options.method || 'GET').toUpperCase();
-    const {background, ...requestOptions} = options;
+    const {background, fresh, ...requestOptions} = options;
     if (!(background === true && method === 'GET' && /^\/api\/market-alerts(?:\?|$)/.test(String(url)))) await visible();
     // Only safe, body-less reads can share a response. Commands must never
     // accidentally reuse a pending GET or another command to the same URL.
@@ -49,7 +49,7 @@
     if (!key) return request();
     const now = performance.now();
     const prior = cache.get(key);
-    if (prior && now - prior.time < 750) return prior.response.clone();
+    if (fresh !== true && prior && now - prior.time < 750) return prior.response.clone();
     if (!pending.has(key)) {
       // Start timeout after visibility resumes, not while Safari is suspended.
       const work = request()

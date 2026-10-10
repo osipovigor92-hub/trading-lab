@@ -3,7 +3,7 @@ document.addEventListener('DOMContentLoaded', () => {
  'use strict';
  const nav=document.getElementById('dashboard-tabs');
  if(!nav)return;
- const names={market:'Скринер',alerts:'Алерты',positions:'Позиции',settings:'Настройки'},pages={},buttons={};
+ const names={market:'Скринер',densities:'Плотности',alerts:'Алерты',positions:'Позиции',settings:'Настройки'},pages={},buttons={};
  for(const [key,label]of Object.entries(names)){
   const page=document.getElementById('page-'+key);
   if(!page)continue;

@@ -91,7 +91,7 @@ components:
 
 The approved concept is a dark working surface built around legible data, restrained cyan actions and clear selected states. Flat panels and fine dividers contain dense measurements without ornamental elevation. Green and rose indicate direction; muted text carries context and unavailable states.
 
-The implemented identity is shared by all four pages. A compact header keeps navigation quiet, and the screener's selected coin remains recognizable across its watch entry, table row and detail panel. Numbers change in place. The visual system makes observation and manual action easy to distinguish.
+The implemented identity is shared by all five pages. A compact header keeps navigation quiet, and the screener's selected coin remains recognizable across its watch entry, table row and detail panel. Numbers change in place. The visual system makes observation and manual action easy to distinguish.
 
 **Key Characteristics:**
 
@@ -119,9 +119,11 @@ The main screener heading is 28px; other page headings are 27px. Panel titles ar
 
 The shell caps content at 1900px with 24px desktop side padding and a 64px header. The screener follows the pinned watch/table/detail arrangement: the watchlist and table form the left workspace, observation events sit directly beneath them, and the selected-coin detail occupies the right column. Standard desktop widths reserve 200px for the watchlist and 330px for detail; at 1600px and above these become 220px and 370px. The center table absorbs the remaining width.
 
-At 1200px and below the detail moves under the watch/table region and uses a two-column internal layout. At 650px and below the screener stacks its panels: watchlist, results, observations and detail. The table scrolls within its own container; the page must not acquire horizontal overflow. Mobile watch entries form two columns. At 760px and below four fixed bottom-navigation items replace desktop tabs, and page padding reserves space for the navigation and safe area.
+At 1200px and below the detail moves under the watch/table region and uses a two-column internal layout. At 650px and below the screener stacks its panels: watchlist, results, observations and detail. The table scrolls within its own container; the page must not acquire horizontal overflow. Mobile watch entries form two columns. At 760px and below five fixed bottom-navigation items replace desktop tabs, and page padding reserves space for the navigation and safe area.
 
 Desktop panels use 16px internal padding, 15px grid gutters and fine one-pixel boundaries. Mobile panels use 14px padding and 12px vertical gaps. Table headers stay visible inside their scrolling region. The left workspace has its own grid so the tall detail column does not push the observation feed down.
+
+The default screener view now uses a responsive chart grid within the same market page; the activity table remains a deliberate view choice. Density filters sit above a two-column workspace: a narrow list of confirmed hour-old levels at left and newer/unconfirmed rows or a distance radar at right. At mobile widths the regions stack, stable entries form two columns and the table scrolls within its own region. Radar marker position represents signed distance and size represents relative notional, with source/side/size/distance/status exposed in its accessible name. Colors and typography inherit the existing system.
 
 ## Elevation & Depth
 
@@ -139,7 +141,7 @@ Primary actions have a solid cyan background, dark text and a five-pixel radius.
 
 ### Navigation and counts
 
-Desktop labels occupy the header with a cyan underline and stronger text for the active page. Mobile navigation has four labeled icons and a subdued selected background. Alert counts use compact badges and represent fresh events, not the retained history total.
+Desktop labels occupy the header with a cyan underline and stronger text for the active page. Mobile navigation has five labeled icons and a subdued selected background. Alert counts use compact badges and represent fresh events, not the retained history total.
 
 ### Panels and watch entries
 
@@ -150,6 +152,10 @@ Flat bordered panels contain one task or evidence group. Watch entries keep thei
 Rows preserve their symbol identity while values update. The selected row has a tonal highlight. The star indicates observation independently of selection. Activity is numeric and cyan; setup text names momentum, breakout, observation or waiting. Unavailable measurements use dashes.
 
 The selected detail groups a price/chart area, current 1m setup, trend, volume/movement, liquidity, nearby levels and four-part activity breakdown. Reasons and risk calculation use disclosures. Chart timeframe controls change the visual candle series while the setup caption continues to state its 1m timeframe.
+
+### Densities
+
+Compact filter fields and exchange checkboxes retain their labels. Table, radar and refresh controls expose selected/disabled states. Stable levels are flat rows with dividers; the current table and missing-history disclosure retain source identities. Bid/ask colors always accompany side labels. Unavailable and out-of-depth rows use text status and muted colors; they do not inherit current confirmation. The radar uses authored geometry, a central reference line and keyboard-focusable markers, without decorative effects.
 
 ### Observations and PAPER
 
@@ -170,4 +176,6 @@ Observation rows show coin, time and event text. Current versus historical statu
 - Don't turn an activity score into a profit claim or a command to trade.
 - Don't erase an observation when its current-validity label expires.
 - Don't imply that synthetic preview captures prove live exchange availability.
-- Don't reintroduce removed website sections into the four-page navigation.
+- Don't reintroduce models, journals, Live or execution controls into the five-page navigation.
+
+The chart-grid and densities extension preserves the documented palette and components. The bounded visual review passed after one grouped fix batch and one confirmation batch: 18 synthetic captures cover the chart grid, table, densities and three retained pages at 1280, 390 and 320px, with no page overflow or browser errors. Root inspected the chart grid and densities at desktop/mobile widths and representative retained-page captures. A navigation color transition found in the confirmation batch was corrected and checked through focused functional assertions. These captures establish layout and state presentation, not live market availability.

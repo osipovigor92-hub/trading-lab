@@ -1,10 +1,16 @@
 /* Real browser behavior over isolated public-data fixtures and a temporary PAPER ledger. */
 const {chromium}=require('playwright'),{spawn}=require('node:child_process'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18797;
-const names={market:'Скринер',alerts:'Алерты',positions:'Позиции',settings:'Настройки'};
+const names={market:'Скринер',densities:'Плотности',alerts:'Алерты',positions:'Позиции',settings:'Настройки'};
+const navigationOnly=process.argv.includes('--navigation-only');
 const legacy=/^\/api\/(?:state|scanner|scalp|live|paper|model-b|research|signals|lab-report|journal(?:-[ab])?|models-control|engine-journal|market-book)(?:\?|$)/;
 async function until(check,label){const end=Date.now()+15000;while(Date.now()<end){if(await check())return;await new Promise(resolve=>setTimeout(resolve,100));}throw Error('Assistant UI: '+label);}
-async function go(page,key,width){const nav=page.locator(width<=760?'.mobile-nav':'#dashboard-tabs');await nav.getByRole('button',{name:names[key],exact:true}).click();await page.locator('#page-'+key).waitFor({state:'visible'});}
+async function go(page,key,width){
+ const nav=page.locator(width<=760?'.mobile-nav':'#dashboard-tabs');await nav.getByRole('button',{name:names[key],exact:true}).click();await page.locator('#page-'+key).waitFor({state:'visible'});
+ for(const selector of ['#dashboard-tabs','.mobile-nav']){const selected=page.locator(selector+' button[aria-pressed="true"]');assert.equal(await selected.count(),1,'one active button in '+selector);assert.equal(await selected.getAttribute('aria-controls'),'page-'+key,'navigation selection matches visible page in '+selector);assert.equal(await selected.evaluate(button=>button.classList.contains('selected')),true);}
+ assert.deepEqual(await page.locator('.dashboard-page').evaluateAll(nodes=>nodes.filter(node=>!node.hidden).map(node=>node.id)),['page-'+key]);
+ const instant=await nav.locator('button[aria-pressed="true"]').evaluate(button=>{const probe=document.createElement('span');probe.style.color='var(--accent)';document.body.append(probe);const expected=getComputedStyle(probe).color;probe.remove();return {actual:getComputedStyle(button).color,expected};});assert.equal(instant.actual,instant.expected,'selection is visibly current immediately after navigation');
+}
 (async()=>{
  const server=spawn(process.env.PYTHON||'python3',['tools/preview.py','--port',String(port),'--paper-test'],{cwd:root,stdio:['ignore','ignore','pipe']});let browser,log='';server.stderr.on('data',data=>log+=data);
  try{
@@ -21,10 +27,11 @@ async function go(page,key,width){const nav=page.locator(width<=760?'.mobile-nav
     if(route.request().method()==='POST'&&dropReply){dropReply=false;const response=await route.fetch();assert.equal(response.status(),202);return route.abort('failed');}
     return route.continue();
    });
-   await page.goto(`http://127.0.0.1:${port}/`);await page.getByLabel('Минимум оборота',{exact:true}).selectOption('0');await until(()=>page.locator('#screener-table tbody tr').count().then(count=>count===6),'six rows');
+   await page.goto(`http://127.0.0.1:${port}/`);await page.locator('#page-market').getByRole('button',{name:'Таблица',exact:true}).click();await page.getByLabel('Минимум оборота',{exact:true}).selectOption('0');await until(()=>page.locator('#screener-table tbody tr').count().then(count=>count===6),'six rows');
    assert.deepEqual(await page.evaluate(()=>Object.keys(LabNavigation.names)),Object.keys(names));assert.equal(await page.evaluate(()=>LabNavigation.current()),'market','removed saved routes fall back to screener');
-   assert.equal(await page.locator('#dashboard-tabs button').count(),4);assert.equal(await page.locator('.mobile-nav button').count(),4);assert.equal(await page.locator('#page-grid,#page-live,#page-research,#page-tests,#page-journals,#page-chart,[data-model],#screener-orderbook,#screener-bots').count(),0);
+   assert.equal(await page.locator('#dashboard-tabs button').count(),5);assert.equal(await page.locator('.mobile-nav button').count(),5);assert.equal(await page.locator('#page-grid,#page-live,#page-research,#page-tests,#page-journals,#page-chart,[data-model],#screener-orderbook,#screener-bots').count(),0);
    const scripts=await page.locator('script[src]').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('src')));assert.equal(scripts.some(src=>/\/(?:models|model-b|model-status|research|live|workspace|scanner|scalp|paper|signals|alerts|lab-report|model-journals)\.js$/.test(src)),false,'legacy modules are not loaded');
+   if(navigationOnly){for(const key of ['densities','alerts','positions','settings','market','settings','positions','alerts','densities']){await go(page,key,width);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'navigation overflow '+width+' '+key);}assert.deepEqual(requests.filter(request=>legacy.test(request)),[]);assert.deepEqual(posts,[]);assert.deepEqual(errors,[]);await page.close();continue;}
    await page.getByLabel('Сортировка монет',{exact:true}).selectOption('turnover');
    const symbols=()=>page.locator('#screener-table tbody tr').evaluateAll(rows=>rows.map(row=>row.dataset.symbol));const initial=await symbols();
    await page.locator('#screener-table tbody tr').first().evaluate(row=>row.dataset.retained='yes');changed=true;
@@ -52,6 +59,6 @@ async function go(page,key,width){const nav=page.locator(width<=760?'.mobile-nav
    for(const key of Object.keys(names)){await go(page,key,width);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'overflow '+width+' '+key);const nav=page.locator(width<=760?'.mobile-nav':'#dashboard-tabs');assert.equal(await nav.locator('[aria-pressed="true"]').count(),1);}
    assert.deepEqual(requests.filter(request=>legacy.test(request)),[],'no deleted section requests');assert.equal(posts.every(post=>post.path==='/api/manual-paper'&&post.token==='isolated-preview-token'),true);assert.deepEqual(errors,[]);await page.close();
   }
-  console.log('Assistant UI passed: 1280/390/320, lean navigation/network, fixed ordering, watch/search/reload, risk-to-PAPER review without execution, PAPER auth/retry/open/close/durable storage/stale/offline recovery.');
+  console.log(navigationOnly?'Assistant navigation passed: 1280/390/320, both navigation selections match visible pages with immediate accent feedback, no overflow or browser errors.':'Assistant UI passed: 1280/390/320, lean navigation/network, fixed ordering, watch/search/reload, risk-to-PAPER review without execution, PAPER auth/retry/open/close/durable storage/stale/offline recovery.');
  }catch(error){console.error(log);throw error;}finally{if(browser)await browser.close();server.kill('SIGTERM');}
 })().catch(error=>{console.error(error);process.exitCode=1;});

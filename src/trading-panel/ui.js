@@ -5,6 +5,7 @@
  const paths={
   overview:['M4 4h6v16H4z','M14 4h6v6h-6z','M14 14h6v6h-6z'],
   market:['M21 21l-5-5','M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13'],
+  densities:['M4 4v16h16','M7 7h6','M7 11h11','M7 15h8','M17 7h3','M18 15h2'],
   positions:['M3 7h18v14H3z','M8 7V3h8v4','M3 12h18','M10 12v3h4v-3'],
   alerts:['M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9','M10 21h4'],
   chart:['M4 4v16h16','M7 15l4-5 4 3 5-7'],

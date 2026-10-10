@@ -8,6 +8,8 @@ from market_data import MarketData
 import control_client
 import selection
 from manual_paper import ManualPaper
+from exchange_data import get_exchange_data
+from densities import DensityMonitor
 
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
@@ -15,7 +17,14 @@ STATE = Path("/var/lib/trading-bot/state.json")
 # never has to wait for another browser tab to have visited the screener first.
 MARKET = MarketData(background=True)
 MANUAL = ManualPaper(MARKET, background=True)
+EXCHANGE_DATA = get_exchange_data()
+# Read-only observations restart their continuous-age clock after service restart.
+DENSITIES = DensityMonitor(EXCHANGE_DATA, background=__name__ == '__main__')
 FILES = {
+    "/chart-grid.js": ("chart-grid.js", "text/javascript; charset=utf-8"),
+    "/chart-grid.css": ("chart-grid.css", "text/css; charset=utf-8"),
+    "/densities.js": ("densities.js", "text/javascript; charset=utf-8"),
+    "/densities.css": ("densities.css", "text/css; charset=utf-8"),
     "/fresh-alerts.js": ("fresh-alerts.js", "text/javascript; charset=utf-8"),
     "/alerts.css": ("alerts.css", "text/css; charset=utf-8"),
     "/positions.js": ("positions.js", "text/javascript; charset=utf-8"),
@@ -131,6 +140,23 @@ class Handler(BaseHTTPRequestHandler):
                     method = MARKET.assistant_alerts_snapshot if path == '/api/market-alerts' else MARKET.assistant_snapshot
                     data = method(filters, query.get('search', [''])[0], watch=query.get('watch', [''])[0])
                 except ValueError as exc:
+                    self.api_error(400, str(exc))
+                    return
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            elif path in ("/api/exchange-screener", "/api/exchange-chart", "/api/densities"):
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                allowed = {'exchanges', 'symbols', 'watch'} if path == '/api/densities' else ({'exchange'} if path == '/api/exchange-screener' else {'exchange', 'symbol', 'interval'})
+                if len(urlsplit(self.path).query) > 3000 or any(len(v) != 1 for v in query.values()) or set(query) - allowed:
+                    self.api_error(400, 'Некорректные параметры публичных данных')
+                    return
+                try:
+                    if path == '/api/densities':
+                        data = DENSITIES.request(**{k: v[0] for k, v in query.items()})
+                    elif path == '/api/exchange-screener':
+                        data = EXCHANGE_DATA.exchange_snapshot(query.get('exchange', ['bybit'])[0])
+                    else:
+                        data = EXCHANGE_DATA.chart_snapshot(query.get('exchange', ['bybit'])[0], query.get('symbol', [''])[0], query.get('interval', ['5'])[0])
+                except (ValueError, TypeError) as exc:
                     self.api_error(400, str(exc))
                     return
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
