@@ -112,12 +112,12 @@ class Fixture:
         return packet
 
 
-def await_snapshot(function, expected="ok"):
+def await_snapshot(function, expected="ok", *, updated_after=None):
     deadline = time.monotonic() + 2
     packet = None
     while time.monotonic() < deadline:
         packet = function()
-        if packet["status"] == expected:
+        if packet["status"] == expected and (updated_after is None or packet["updated"] > updated_after):
             return packet
         time.sleep(0.002)
     raise AssertionError(f"snapshot did not become {expected}: {packet}")
@@ -393,7 +393,7 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(call()["status"], "ok")
             self.assertEqual(len(self.fixture.calls), count)
             self.clock.advance(ttl)
-            refreshed = await_snapshot(call)
+            refreshed = await_snapshot(call, updated_after=packet["updated"])
             self.assertGreater(refreshed["updated"], packet["updated"])
         call = lambda: self.adapter.chart_snapshot("bybit", "BTCUSDT", "1")
         packet = await_snapshot(call)
@@ -401,6 +401,101 @@ class AdapterTests(unittest.TestCase):
         if int((self.clock.now - 2) // 60) * 60 > packet["candle_end"]:
             self.assertEqual(call()["status"], "pending")
             self.assertGreater(await_snapshot(call)["candle_end"], packet["candle_end"])
+
+    def test_current_chart_refresh_retains_proof_but_receipt_age_is_bounded(self):
+        call = lambda: self.adapter.chart_snapshot("bybit", "BTCUSDT", "5")
+        original = await_snapshot(call)
+        release = threading.Event()
+        def delayed(exchange, path, params):
+            if path == PATHS[exchange][2]:
+                release.wait(2)
+            return self.fixture.request(exchange, path, params)
+        self.adapter._request = delayed
+        try:
+            self.clock.advance(31)
+            current = call()
+            self.assertEqual(current["status"], "ok")
+            self.assertFalse(current["stale"])
+            self.assertTrue(current["refreshing"])
+            self.assertEqual(current["updated"], original["updated"])
+            self.assertEqual(current["candle_end"], original["candle_end"])
+            self.assertEqual(current["source_ts"], original["source_ts"])
+            self.clock.advance(45)
+            expired = call()
+            self.assertEqual(expired["status"], "pending")
+            self.assertTrue(expired["stale"])
+            self.assertEqual(expired["updated"], original["updated"])
+        finally:
+            release.set()
+
+    def test_refresh_proof_never_survives_next_close_or_failed_revalidation(self):
+        call = lambda: self.adapter.chart_snapshot("bybit", "BTCUSDT", "1")
+        original = await_snapshot(call)
+        release = threading.Event()
+        def delayed(exchange, path, params):
+            if path == PATHS[exchange][2]:
+                release.wait(2)
+            return self.fixture.request(exchange, path, params)
+        self.adapter._request = delayed
+        try:
+            self.clock.advance(31)
+            self.assertEqual(call()["status"], "ok")
+            self.clock.advance(15)  # receipt <75s, but a new bar must be proved
+            pending = call()
+            self.assertEqual(pending["status"], "pending")
+            self.assertTrue(pending["stale"])
+            self.assertEqual(pending["candle_end"], original["candle_end"])
+            self.fixture.fail = True
+        finally:
+            release.set()
+        failed = await_snapshot(call, "error")
+        self.assertTrue(failed["stale"])
+        self.assertFalse(failed["refreshing"])
+        self.assertEqual(failed["updated"], original["updated"])
+        self.fixture.fail = False
+        self.clock.advance(6)
+        recovered = await_snapshot(call)
+        self.assertGreater(recovered["candle_end"], original["candle_end"])
+
+    def test_catalog_refresh_keeps_original_proof_with_short_source_age_guard(self):
+        call = lambda: self.adapter.exchange_snapshot("bybit")
+        original = await_snapshot(call)
+        release = threading.Event()
+        def delayed(exchange, path, params):
+            if path == PATHS[exchange][1]:
+                release.wait(2)
+            return self.fixture.request(exchange, path, params)
+        self.adapter._request = delayed
+        try:
+            self.clock.advance(46)
+            refreshing = call()
+            self.assertEqual(refreshing["status"], "ok")
+            self.assertTrue(refreshing["refreshing"])
+            self.assertFalse(refreshing["stale"])
+            self.assertEqual(refreshing["source_ts"], original["source_ts"])
+            self.assertEqual(refreshing["updated"], original["updated"])
+            self.clock.advance(15)
+            self.assertEqual(call()["status"], "pending")
+        finally:
+            release.set()
+
+    def test_failed_chart_refresh_rejects_even_same_boundary_recent_proof(self):
+        call = lambda: self.adapter.chart_snapshot("bybit", "BTCUSDT", "5")
+        original = await_snapshot(call)
+        self.clock.advance(31)
+        self.fixture.fail = True
+        failed = await_snapshot(call, "error")
+        self.assertTrue(failed["stale"])
+        self.assertEqual(failed["candle_end"], original["candle_end"])
+        self.assertEqual(failed["updated"], original["updated"])
+        self.assertLess(self.clock.now - failed["updated"], 75)
+        # Repeated polling cannot clear a failure before new verification.
+        self.assertEqual(call()["status"], "error")
+        self.fixture.fail = False
+        self.clock.advance(6)
+        recovered = await_snapshot(call)
+        self.assertGreater(recovered["updated"], original["updated"])
+        self.assertEqual(recovered["candle_end"], original["candle_end"])
 
     def test_snapshots_return_immediately_and_pool_and_queue_are_bounded(self):
         release, active = threading.Event(), threading.Event()
@@ -411,12 +506,20 @@ class AdapterTests(unittest.TestCase):
         self.adapter._request = request
         start = time.monotonic()
         packets = [self.adapter.book_snapshot("bybit", f"C{i}USDT") for i in range(20)]
+        # A density scan cannot fill the chart admission slots. Requests for
+        # visible candles are admitted while both HTTP workers are occupied.
+        packets += [self.adapter.chart_snapshot("bybit", "BTCUSDT", interval) for interval in ("1", "5")]
         self.assertLess(time.monotonic() - start, 0.2)
         self.assertTrue(all(packet["status"] == "pending" for packet in packets))
         self.assertTrue(active.wait(1))
         with self.adapter._lock:
             self.assertEqual(self.adapter._outstanding, 4)
-            self.assertEqual(sum(entry["pending"] for entry in self.adapter._cache["book"].values()), 4)
+            self.assertEqual(self.adapter._nonchart_outstanding, 2)
+            self.assertEqual(sum(entry["pending"] for entry in self.adapter._cache["book"].values()), 2)
+            self.assertEqual(sum(entry["pending"] for entry in self.adapter._cache["chart"].values()), 2)
+        self.adapter.book_snapshot("bybit", "C0USDT")
+        self.adapter.chart_snapshot("bybit", "BTCUSDT", "1")
+        self.assertEqual(self.adapter._outstanding, 4)  # pending jobs are reused
         self.assertLessEqual(len(self.adapter._pool._threads), 2)
         release.set()
 

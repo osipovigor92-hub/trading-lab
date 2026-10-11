@@ -84,7 +84,8 @@
     });
     plot.append(watermark,empty);
     let source='', period=PERIODS[String(options.interval)]||300, bars=[], byTime=new Map(), selectedTime=null;
-    let volume=null, densityLine=null, indicatorLines=[], disposed=false, confirmed=false, fingerprint='';
+    let volume=null, indicatorLines=[], disposed=false, confirmed=false, fingerprint='';
+    const priceLines=new Map();
     let initial={exchange:options.exchange||'',symbol:options.symbol||'',interval:String(options.interval||'5')};
     function getViewport() {
       const range=chart.timeScale().getVisibleLogicalRange();
@@ -140,6 +141,34 @@
       const range=chart.timeScale().getVisibleLogicalRange(); if (!range) return;
       chart.timeScale().setVisibleLogicalRange({from:range.from+delta,to:range.to+delta}); publishViewport();
     }
+    function updateLevels(settings) {
+      const wanted=new Map();
+      for (const level of (settings.levels||[]).slice(0,12)) {
+        if (!finite(level.price)||level.price<=0||!['support','resistance'].includes(level.type)) continue;
+        wanted.set('manual:'+level.id,{price:level.price,color:level.type==='support'?'#a78bcc':'#e9bc68',lineWidth:2,lineStyle:L.LineStyle.Solid,axisLabelVisible:true,title:level.type==='support'?'Подд.':'Сопр.'});
+      }
+      for (const level of (settings.densities||[]).slice(0,6)) {
+        if (!finite(level.price)||level.price<=0||!['bid','ask'].includes(level.side)) continue;
+        const amount=finite(level.notional)?Math.round(level.notional/1000)+'к':'';
+        wanted.set('density:'+level.id,{price:level.price,color:level.confirmed?(level.side==='bid'?'#59d5a1':'#f1848b'):'#a7b3be',lineWidth:1,lineStyle:L.LineStyle.Dotted,axisLabelVisible:true,title:(level.confirmed?'':'? ')+(level.side==='bid'?'Пок. ':'Прод. ')+amount});
+      }
+      for (const [key,line] of priceLines) if (!wanted.has(key)) {candles.removePriceLine(line);priceLines.delete(key);}
+      for (const [key,options] of wanted) {
+        const existing=priceLines.get(key);
+        if (!existing) priceLines.set(key,candles.createPriceLine(options));
+        else if (Object.entries(options).some(([key,value])=>existing.options()[key]!==value)) existing.applyOptions(options);
+      }
+      host.dataset.chartManualLevels=String([...wanted.keys()].filter(key=>key.startsWith('manual:')).length);
+      host.dataset.chartDensityLevels=String([...wanted.keys()].filter(key=>key.startsWith('density:')).length);
+    }
+    function fitLevels() {
+      if (disposed||!bars.length||!priceLines.size) return;
+      const range=chart.timeScale().getVisibleLogicalRange();
+      const visible=bars.filter((_,i)=>!range||i>=Math.floor(range.from)&&i<=Math.ceil(range.to));
+      const values=[...visible.flatMap(b=>[b.low,b.high]),...priceLines.values()].map(v=>typeof v==='number'?v:v.options().price);
+      const low=Math.min(...values),high=Math.max(...values),padding=Math.max(high-low,high*.001)*.1;
+      candles.priceScale().setVisibleRange({from:Math.max(low*.5,low-padding),to:high+padding});
+    }
     function setPacket(packet, settings={}) {
       if (disposed) return;
       // A dialog becomes measurable before the auto-size observer runs. Establish
@@ -188,14 +217,13 @@
       if (indicatorLines.length) {
         const all=indicatorData(bars); ['ema20','ema50','vwap60'].forEach((key,i)=>indicatorLines[i].setData(all[key]));
       }
-      if (densityLine) {candles.removePriceLine(densityLine); densityLine=null;}
-      const level=Number(settings.density?.price);
-      if (settings.density && finite(level) && level>0) densityLine=candles.createPriceLine({price:level,color:settings.density.side==='bid'?'#59d5a1':'#f1848b',lineWidth:1,lineStyle:L.LineStyle.Dotted,axisLabelVisible:true,title:'Уровень '+(settings.density.side||'')+' · проверьте'});
+      updateLevels(settings);
       empty.hidden=bars.length>0;
       empty.textContent=packet?.error?'Свечи недоступны · повторяем запрос':'Ожидаем свечи…';
       showReadout(); updateVolumeHeight(); publishViewport();
     }
     const crosshair=event=>{if(disposed)return;selectedTime=typeof event.time==='number'&&byTime.has(event.time)?event.time:null;showReadout();};
+    const click=event=>{if(disposed||!bars.length||!event.point||event.paneIndex!==0)return;const value=candles.coordinateToPrice(event.point.y);if(finite(value)&&value>0)options.onPriceClick?.(value);};
     const keydown=event=>{
       if (event.target.closest('button,a,input,select,textarea') || event.ctrlKey || event.metaKey || event.altKey) return;
       if (['+','=','Add'].includes(event.key)) zoom(.8);
@@ -208,17 +236,18 @@
     };
     const focus=event=>{if(!event.target.closest('a,button'))host.focus({preventScroll:true});};
     chart.subscribeCrosshairMove(crosshair);
+    chart.subscribeClick(click);
     chart.timeScale().subscribeVisibleLogicalRangeChange(publishViewport);
     host.addEventListener('keydown',keydown); plot.addEventListener('pointerdown',focus);
     const observer=new ResizeObserver(resize); observer.observe(plot);
     function dispose() {
       if (disposed) return;
       observer.disconnect();
-      chart.unsubscribeCrosshairMove(crosshair); chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishViewport);
+      chart.unsubscribeCrosshairMove(crosshair); chart.unsubscribeClick(click); chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishViewport);
       host.removeEventListener('keydown',keydown); plot.removeEventListener('pointerdown',focus);
       chart.remove(); disposed=true; host.replaceChildren(); delete host.labExchangeChart;
     }
-    const api={setPacket,reset,dispose,resize,zoom,pan,getViewport};
+    const api={setPacket,reset,dispose,resize,zoom,pan,getViewport,fitLevels,getLevels:()=>[...priceLines].map(([id,line])=>({id,...line.options()})),priceToCoordinate:value=>candles.priceToCoordinate(value)};
     host.labExchangeChart=api;
     host.dataset.chartEngine='lightweight-charts-'+L.version();
     setPacket(null,{confirmed:false,volume:options.volume,indicators:options.indicators});

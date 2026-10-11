@@ -34,6 +34,7 @@ PATHS = {
     "bitget": ("/api/v2/mix/market/contracts", "/api/v2/mix/market/tickers", "/api/v2/mix/market/candles", "/api/v2/mix/market/merge-depth"),
 }
 TTLS = {"catalog": 45, "chart": 30, "book": 5}
+REFRESH_PROOF_SECONDS = {"catalog": 60, "chart": 75}
 SYMBOL_RE = re.compile(r"[A-Z0-9]{1,28}USDT\Z")
 
 
@@ -107,6 +108,7 @@ class ExchangeData:
         self._instruments = {}
         self._instrument_locks = {ex: threading.Lock() for ex in EXCHANGES}
         self._outstanding = 0
+        self._nonchart_outstanding = 0
         self._closed = False
 
     def close(self):
@@ -505,6 +507,8 @@ class ExchangeData:
             with self._lock:
                 entry["pending"] = False
                 self._outstanding -= 1
+                if kind != "chart":
+                    self._nonchart_outstanding -= 1
 
     def _snapshot(self, kind, key):
         with self._lock:
@@ -523,21 +527,44 @@ class ExchangeData:
                 entries[key] = entry
             entries.move_to_end(key)
             data = entry["data"]
-            fresh = data is not None and now < entry["expires"]
+            fresh = data is not None and now < entry["expires"] and not entry["error"]
             if kind == "chart" and fresh:
                 step = int(key[2]) * 60
                 fresh = data["candle_end"] == int((self._wall() - 2) // step) * step
-            if not fresh and not entry["pending"] and now >= entry["retry"] and self._outstanding < 4 and not self._closed:
+            # Density scans share these workers. Reserve two of the existing
+            # four admission slots for visible charts, without increasing HTTP
+            # concurrency or allowing an unbounded queue.
+            admitted = self._outstanding < 4 and (kind == "chart" or self._nonchart_outstanding < 2)
+            if not fresh and not entry["pending"] and now >= entry["retry"] and admitted and not self._closed:
                 entry["pending"] = True
                 self._outstanding += 1
+                if kind != "chart":
+                    self._nonchart_outstanding += 1
                 try:
                     self._pool.submit(self._run, kind, key, entry)
                 except RuntimeError:
                     entry["pending"] = False
                     self._outstanding -= 1
+                    if kind != "chart":
+                        self._nonchart_outstanding -= 1
                     entry["error"] = "market service closed"
-            if fresh:
-                return deepcopy(data)
+            # A TTL starts revalidation; it does not erase still-current proof.
+            # Keep its original timestamps, and stop immediately on a failed
+            # refresh, a new closed-candle boundary or the bounded receipt age.
+            usable = False
+            if data is not None and kind in REFRESH_PROOF_SECONDS and not entry["error"] and not self._closed:
+                wall = self._wall()
+                limit = REFRESH_PROOF_SECONDS[kind]
+                usable = -2 <= wall - data["updated"] <= limit
+                if kind == "chart":
+                    step = int(key[2]) * 60
+                    usable = usable and data["candle_end"] == int((wall - 2) // step) * step
+                else:
+                    usable = usable and -2 <= wall - data["source_ts"] <= limit
+            if (fresh or usable) and not self._closed:
+                packet = deepcopy(data)
+                packet["refreshing"] = entry["pending"]
+                return packet
             packet = deepcopy(data) if data is not None else self._empty(kind, key)
             packet.update(status="error" if entry["error"] else "pending", stale=True, error=entry["error"],
                           refreshing=data is not None and entry["pending"] and entry["error"] is None)

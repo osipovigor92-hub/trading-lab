@@ -23,7 +23,9 @@ must use the snapshot methods. Direct fetches share the two-fetch semaphore.
 
 The service has two worker threads, at most four outstanding jobs and 48 cache
 entries per kind. Catalog TTL is 45 seconds, chart TTL 30 seconds and book TTL
-5 seconds. Instrument metadata is cached for 300 seconds; Bybit pagination is
+5 seconds. At most two outstanding jobs may be catalogs/books, reserving two
+admission slots for charts during a density scan. HTTP concurrency remains two.
+Instrument metadata is cached for 300 seconds; Bybit pagination is
 limited to four pages of 1,000 instruments. A chart job fetches only its requested
 interval. Each HTTP request has a six-second timeout and a 4 MiB response limit.
 
@@ -46,9 +48,18 @@ Unprovided trade counts are `null`. A successful catalog is ordered by decreasin
 24-hour turnover with a symbol tie-break. UI stability is handled by its consumer.
 `rejected_rows` reports unusable ticker rows; an entirely invalid catalog fails.
 
-`status: "pending"` initially contains empty data and null timestamps. An expired
-verified packet is retained with `stale: true`; `refreshing: true` identifies an
-ordinary refresh in progress with no prior error. A failed refresh returns
+`status: "pending"` initially contains empty data and null timestamps. TTL expiry
+starts background revalidation. A chart keeps `status: "ok"`, `stale: false`
+while its latest closed boundary is still the expected one and the original
+HTTP receipt is at most 75 seconds old. A catalog does the same for at most
+60 seconds of original receipt and source age. `refreshing: true` indicates an
+outstanding refresh; returned timestamps are never replaced by polling time.
+This avoids treating an unchanged closed series as unavailable every 30 seconds.
+Crossing the next closed boundary immediately invalidates chart proof, including
+when the receipt is recent. Failed revalidation also invalidates it immediately.
+
+Outside these guards, a retained packet has `stale: true`; `refreshing: true`
+identifies an ordinary refresh in progress with no prior error. A failed refresh returns
 `status: "error"`, preserves the last verified packet and retries after five
 seconds. Consumers can show that history, but must not treat it as new evidence.
 The density observer may inspect retained data during an ordinary refresh only
@@ -133,11 +144,12 @@ measurements, not entry recommendations or return predictions.
 
 ## Checks
 
-Run `python tools/test_exchange_data.py` with Python 3. The 18 offline tests
+Run `python tools/test_exchange_data.py` with Python 3. The 22 offline tests
 cover all five venues, six intervals, UTC daily alignment and long-period close
 grace, quantity conversions, unavailable counts,
 estimated turnover, malformed/stale data, rollback protection, tiny numeric
-prices, cache refresh/failure/recovery, and bounded work admission. No test
+prices, bounded proof during revalidation, immediate boundary/error invalidation,
+cache refresh/failure/recovery, and chart admission during busy density scans. No test
 contacts the internet.
 
 A separate read-only live public probe on 2026-10-11 returned eligible catalogs

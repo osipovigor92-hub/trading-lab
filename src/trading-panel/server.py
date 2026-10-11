@@ -23,6 +23,7 @@ DENSITIES = DensityMonitor(EXCHANGE_DATA, background=__name__ == '__main__')
 FILES = {
     "/lightweight-charts-5.2.1.js": ("lightweight-charts-5.2.1.js", "text/javascript; charset=utf-8"),
     "/exchange-chart.js": ("exchange-chart.js", "text/javascript; charset=utf-8"),
+    "/chart-levels.js": ("chart-levels.js", "text/javascript; charset=utf-8"),
     "/chart-grid.js": ("chart-grid.js", "text/javascript; charset=utf-8"),
     "/chart-grid.css": ("chart-grid.css", "text/css; charset=utf-8"),
     "/densities.js": ("densities.js", "text/javascript; charset=utf-8"),
