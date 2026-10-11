@@ -55,6 +55,7 @@ jobs:
       - run: node tools/test_densities_ui.cjs
       - run: node tools/test_chart_grid_ui.cjs
       - run: node tools/test_chart_levels_ui.cjs
+      - run: node tools/test_chart_stream_ui.cjs
       - run: node tools/test_fresh_alerts_ui.cjs
       - uses: actions/upload-artifact@v4
         if: always()

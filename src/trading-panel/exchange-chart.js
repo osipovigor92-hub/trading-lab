@@ -21,6 +21,20 @@
     }
     return result;
   }
+  const samePoint=(a,b)=>!!a && !!b && Object.keys(a).length===Object.keys(b).length && Object.keys(a).every(key=>a[key]===b[key]);
+  const sameBars=(raw,bars)=>Array.isArray(raw) && raw.length>0 && raw.length===bars.length && raw.every((b,i)=>b &&
+    b.t===bars[i].time && ['open','high','low','close','volume','turnover'].every(key=>b[key]===bars[i][key]));
+  // update() touches the last point only. A rolling window or historical revision
+  // needs setData(), while an unchanged snapshot needs no native data call.
+  function syncSeries(series, next, previous) {
+    if (next.length===previous.length && next.every((b,i)=>samePoint(b,previous[i]))) return false;
+    if (previous.length && next.length>=previous.length && next[previous.length-1]?.time===previous.at(-1).time &&
+        previous.slice(0,-1).every((b,i)=>samePoint(b,next[i]))) {
+      if (!samePoint(previous.at(-1),next[previous.length-1])) series.update(next[previous.length-1]);
+      for (let i=previous.length;i<next.length;i++) series.update(next[i]);
+    } else series.setData(next);
+    return true;
+  }
   function indicatorData(bars) {
     const output = {ema20:[], ema50:[], vwap60:[]};
     for (const period of [20,50]) {
@@ -56,8 +70,10 @@
     const readout=element('div','exchange-chart-readout');
     readout.setAttribute('aria-live','off');
     const sourceLabel=element('span','exchange-chart-source'), timeLabel=element('span','exchange-chart-time');
+    const quoteLabel=element('span','exchange-chart-live-quote');quoteLabel.hidden=true;
+    const liveState=element('span','exchange-chart-live-state');liveState.hidden=true;
     const values={};
-    readout.append(sourceLabel,timeLabel);
+    readout.append(liveState,quoteLabel,sourceLabel,timeLabel);
     for (const [key,label] of [['open','O'],['high','H'],['low','L'],['close','C'],['volume','V']]) {
       values[key]=element('span','exchange-chart-'+key,label+' —'); readout.append(values[key]);
     }
@@ -84,7 +100,9 @@
     });
     plot.append(watermark,empty);
     let source='', period=PERIODS[String(options.interval)]||300, bars=[], byTime=new Map(), selectedTime=null;
-    let volume=null, indicatorLines=[], disposed=false, confirmed=false, updating=false, fingerprint='';
+    let volume=null, indicatorLines=[], disposed=false, confirmed=false, updating=false;
+    let candleData=[],volumeData=[],indicatorValues={ema20:[],ema50:[],vwap60:[]},size={width:0,height:0},volumeHeight=0,precision=null;
+    let liveView=null,liveCandle=null,quoteLine=null;
     const priceLines=new Map();
     let initial={exchange:options.exchange||'',symbol:options.symbol||'',interval:String(options.interval||'5')};
     function getViewport() {
@@ -101,33 +119,86 @@
       }
     }
     function showReadout(time=selectedTime) {
-      const b=byTime.get(time)||bars.at(-1);
-      sourceLabel.textContent=(initial.exchange ? initial.exchange.toUpperCase()+' · ' : '')+initial.symbol+' · '+(LABELS[initial.interval]||initial.interval)+(confirmed?'':updating?' · обновляем закрытую свечу':' · не подтверждено');
+      const b=byTime.get(time)||((time===null||time===liveCandle?.time)?liveCandle:null)||bars.at(-1);
+      const isLive=b===liveCandle && !!b;
+      liveState.hidden=!isLive;
+      liveState.textContent=isLive?(b.closed?'закрылась · проверяем':'формируется'):'';
+      sourceLabel.textContent=(initial.exchange ? initial.exchange.toUpperCase()+' · ' : '')+initial.symbol+' · '+(LABELS[initial.interval]||initial.interval)+(confirmed?'':updating?' · обновляем закрытую свечу':' · не подтверждено')+(isLive?(b.closed?' · закрылась · проверяем':' · формируется'):'');
       host.dataset.chartConfirmed=String(confirmed);
       host.classList.toggle('is-unconfirmed',!confirmed);
-      timeLabel.textContent=b?utc(b.time):'—';
+      timeLabel.textContent=b?utc(b.time)+(isLive?' · обновление '+new Date((b.source_ts??b.received_at)*1000).toLocaleTimeString('ru-RU',{timeZone:'UTC'})+' UTC':''):'—';
       if (b) host.dataset.chartSelectedTime=String(b.time); else delete host.dataset.chartSelectedTime;
       for (const [key,label] of [['open','O'],['high','H'],['low','L'],['close','C'],['volume','V']]) {
         values[key].textContent=label+' '+(b?number(b[key]):'—');
-        if (b) host.dataset['chartSelected'+key[0].toUpperCase()+key.slice(1)]=String(b[key]);
+        if (b && finite(b[key])) host.dataset['chartSelected'+key[0].toUpperCase()+key.slice(1)]=String(b[key]);
         else delete host.dataset['chartSelected'+key[0].toUpperCase()+key.slice(1)];
       }
-      readout.title=[sourceLabel.textContent,timeLabel.textContent,...Object.values(values).map(n=>n.textContent)].join(' · ');
+      readout.title=[...(!quoteLabel.hidden?[quoteLabel.textContent]:[]),sourceLabel.textContent,timeLabel.textContent,...Object.values(values).map(n=>n.textContent)].join(' · ');
       readout.setAttribute('aria-label',readout.title);
     }
+    function freshLive(sample,age,now) {
+      if (!sample || !finite(sample.received_at) || sample.received_at<=0 || sample.received_at>now+2 || now-sample.received_at>age) return false;
+      if (sample.source_ts===null) return sample.timestamp_origin==='receipt';
+      return finite(sample.source_ts) && sample.source_ts>0 && sample.source_ts<=now+2 && now-sample.source_ts<=age;
+    }
+    function liveFrom(view,now) {
+      const b=view?.candle,last=bars.at(-1),current=Math.floor(now/period)*period;
+      if (!b || !last || !freshLive(b,75,now) || !Number.isInteger(b.t) || b.t%period!==0 || b.t!==last.time+period ||
+          !['open','high','low','close'].every(key=>finite(b[key])&&b[key]>0) || b.high<Math.max(b.open,b.close,b.low) || b.low>Math.min(b.open,b.close,b.high) ||
+          !['volume','turnover'].every(key=>b[key]===null||(finite(b[key])&&b[key]>=0)) ||
+          !(b.closed===false&&b.t===current || b.closed===true&&b.t===current-period&&now-(b.t+period)<=10)) return null;
+      return {time:b.t,open:b.open,high:b.high,low:b.low,close:b.close,volume:b.volume,turnover:b.turnover,closed:b.closed,source_ts:b.source_ts,received_at:b.received_at};
+    }
+    function liveMatches(view) {
+      return view && view.exchange===initial.exchange && view.symbol===initial.symbol && String(view.interval)===initial.interval && view.status==='connected';
+    }
+    function updateLiveState() {
+      const now=Date.now()/1000,valid=liveMatches(liveView);
+      liveCandle=valid?liveFrom(liveView,now):null;
+      const quote=valid&&freshLive(liveView.quote,10,now)&&finite(liveView.quote.price)&&liveView.quote.price>0?liveView.quote:null;
+      if (quote) {
+        const options={price:quote.price,color:'#55cee9',lineWidth:1,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true,title:'Цена сейчас'};
+        if (!quoteLine) quoteLine=candles.createPriceLine(options);
+        else if (quoteLine.options().price!==quote.price) quoteLine.applyOptions(options);
+        host.dataset.chartLivePrice=String(quote.price);
+        quoteLabel.hidden=false;
+        quoteLabel.textContent='Цена сейчас '+number(quote.price)+' · '+new Date((quote.source_ts??quote.received_at)*1000).toLocaleTimeString('ru-RU',{timeZone:'UTC'})+' UTC';
+        quoteLabel.title=(quote.source_ts===null?'Получено: ':'Данные биржи: ')+utc(quote.source_ts??quote.received_at);
+      } else {if(quoteLine)candles.removePriceLine(quoteLine);quoteLine=null;delete host.dataset.chartLivePrice;quoteLabel.hidden=true;quoteLabel.textContent='';quoteLabel.title='';}
+      host.dataset.chartLive=String(!!liveCandle);
+      host.dataset.chartLiveStatus=valid?'connected':liveView?.status==='connecting'?'connecting':'unavailable';
+    }
+    function displayCandles() {
+      const data=bars.map(({time,open,high,low,close})=>({time,open,high,low,close}));
+      if (liveCandle) {const {time,open,high,low,close}=liveCandle;data.push({time,open,high,low,close});}
+      return data;
+    }
+    function setLive(view) {
+      if (disposed) return;
+      liveView=view;updateLiveState();
+      const range=chart.timeScale().getVisibleLogicalRange(),last=candleData.length-1,next=displayCandles();
+      const atLatest=range && range.to>=last-1.5;
+      const changed=syncSeries(candles,next,candleData);candleData=next;
+      if (changed && range && atLatest && next.length-1!==last) chart.timeScale().setVisibleLogicalRange({from:range.from+next.length-1-last,to:range.to+next.length-1-last});
+      else if (changed && range) chart.timeScale().setVisibleLogicalRange(range);
+      showReadout();publishViewport();
+    }
     function updateVolumeHeight() {
-      if (volume && plot.clientHeight > 0) chart.panes()[1]?.setHeight(Math.max(42,Math.round(plot.clientHeight*.22)));
+      if (!volume || plot.clientHeight<=0) return;
+      const height=Math.max(42,Math.round(plot.clientHeight*.22));
+      if (height!==volumeHeight) {chart.panes()[1]?.setHeight(height);volumeHeight=height;}
     }
     function resize() {
       if (disposed) return;
       const width=plot.clientWidth,height=plot.clientHeight;
-      if (width>0 && height>0) chart.resize(width,height);
+      if (width>0 && height>0 && (width!==size.width || height!==size.height)) {chart.resize(width,height);size={width,height};}
       updateVolumeHeight(); publishViewport();
     }
     function reset() {
       if (disposed || !bars.length) return;
       candles.priceScale().applyOptions({autoScale:true});
-      chart.timeScale().setVisibleLogicalRange({from:Math.max(-.5,bars.length-90-.5),to:bars.length-1+3});
+      const count=candleData.length;
+      chart.timeScale().setVisibleLogicalRange({from:Math.max(-.5,count-90-.5),to:count-1+3});
       publishViewport();
     }
     function zoom(factor) {
@@ -179,51 +250,61 @@
       const changed=source!==nextSource;
       if (changed) {
         initial=identity; source=nextSource; period=PERIODS[identity.interval]||300;
-        bars=[]; byTime.clear(); selectedTime=null; fingerprint=''; candles.setData([]);
-        if (volume) volume.setData([]);
-        for (const s of indicatorLines) s.setData([]);
+        liveView=null;liveCandle=null;if(quoteLine)candles.removePriceLine(quoteLine);quoteLine=null;
+        bars=[]; byTime.clear(); selectedTime=null; candleData=[]; precision=null; candles.setData([]);
+        if (volume) volume.setData([]);volumeData=[];
+        for (const s of indicatorLines) s.setData([]);indicatorValues={ema20:[],ema50:[],vwap60:[]};
       }
       host.dataset.chartSource=source;
       host.setAttribute('aria-label','График свечей · '+identity.exchange.toUpperCase()+' · '+identity.symbol+' · '+(LABELS[identity.interval]||identity.interval)+' · плюс и минус: масштаб, стрелки: сдвиг, Home: последние свечи');
       watermark.textContent=identity.symbol.replace(/USDT$/,'')+' / USDT';
-      const parsed=Object.hasOwn(PERIODS,identity.interval)?barsFrom(packet,period):null;
+      const parsed=Object.hasOwn(PERIODS,identity.interval)?(sameBars(packet?.candles,bars)?bars:barsFrom(packet,period)):null;
       confirmed=!!parsed && settings.confirmed===true && packet.status==='ok' && !packet.stale && !packet.refresh_error;
       updating=!!parsed && !confirmed && settings.updating===true && !packet.error && !packet.refresh_error;
       const wantedVolume=settings.volume??options.volume??true;
+      let volumeCreated=false,indicatorsCreated=false;
       if (wantedVolume && !volume) {
         volume=chart.addSeries(L.HistogramSeries,{priceFormat:{type:'volume'},priceLineVisible:false,lastValueVisible:false},1);
         volume.priceScale().applyOptions({borderVisible:false,scaleMargins:{top:.1,bottom:0}});
-      } else if (!wantedVolume && volume) {chart.removeSeries(volume); volume=null;}
+        volumeCreated=true;volumeHeight=0;
+      } else if (!wantedVolume && volume) {chart.removeSeries(volume); volume=null;volumeData=[];volumeHeight=0;}
       const wantIndicators=settings.indicators??options.indicators??false;
       if (wantIndicators && !indicatorLines.length) {
         indicatorLines=['#4bd0f5','#a78bcc','#e9bc68'].map(color=>chart.addSeries(L.LineSeries,{color,lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}));
-      } else if (!wantIndicators && indicatorLines.length) {for (const s of indicatorLines) chart.removeSeries(s); indicatorLines=[];}
-      if (parsed) {
-        const nextFingerprint=JSON.stringify(parsed);
-        if (fingerprint!==nextFingerprint) {
-          const range=chart.timeScale().getVisibleLogicalRange(),first=bars[0]?.time,last=bars.length-1;
+        indicatorsCreated=true;
+      } else if (!wantIndicators && indicatorLines.length) {for (const s of indicatorLines) chart.removeSeries(s); indicatorLines=[];indicatorValues={ema20:[],ema50:[],vwap60:[]};}
+      const barsChanged=!!parsed && parsed!==bars;
+      if (barsChanged) {
+          const range=chart.timeScale().getVisibleLogicalRange(),first=bars[0]?.time,last=candleData.length-1;
           const atLatest=range && range.to>=last-1.5;
           const anchor=range && first!==undefined ? {from:first+range.from*period,to:first+range.to*period} : null;
-          bars=parsed; byTime=new Map(bars.map(b=>[b.time,b])); fingerprint=nextFingerprint;
-          candles.setData(bars.map(({time,open,high,low,close})=>({time,open,high,low,close})));
+          bars=parsed; byTime=new Map(bars.map(b=>[b.time,b]));
+          updateLiveState();
+          const nextData=displayCandles();
+          const nativeChanged=syncSeries(candles,nextData,candleData);candleData=nextData;
           const magnitude=bars.at(-1).close;
           // Display precision only; this does not claim to be an exchange order tick size.
-          candles.applyOptions({priceFormat:{type:'custom',formatter:number,minMove:Math.pow(10,Math.floor(Math.log10(magnitude))-7)}});
+          const minMove=Math.pow(10,Math.floor(Math.log10(magnitude))-7);
+          if (precision!==minMove) {candles.applyOptions({priceFormat:{type:'custom',formatter:number,minMove}});precision=minMove;}
           if (changed || !range) reset();
-          else if (atLatest) chart.timeScale().setVisibleLogicalRange({from:bars.length-1+(range.from-last),to:bars.length-1+(range.to-last)});
-          else if (anchor) chart.timeScale().setVisibleLogicalRange({from:(anchor.from-bars[0].time)/period,to:(anchor.to-bars[0].time)/period});
-        }
+          else if (nativeChanged && atLatest) chart.timeScale().setVisibleLogicalRange({from:nextData.length-1+(range.from-last),to:nextData.length-1+(range.to-last)});
+          else if (nativeChanged && anchor) chart.timeScale().setVisibleLogicalRange({from:(anchor.from-bars[0].time)/period,to:(anchor.to-bars[0].time)/period});
       }
-      if (volume) volume.setData(bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?'#26a69a80':'#ef535080'})));
-      if (indicatorLines.length) {
-        const all=indicatorData(bars); ['ema20','ema50','vwap60'].forEach((key,i)=>indicatorLines[i].setData(all[key]));
+      if (volume && (barsChanged || volumeCreated)) {
+        const next=bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?'#26a69a80':'#ef535080'}));syncSeries(volume,next,volumeData);volumeData=next;
+      }
+      if (indicatorLines.length && (barsChanged || indicatorsCreated)) {
+        const all=indicatorData(bars); ['ema20','ema50','vwap60'].forEach((key,i)=>syncSeries(indicatorLines[i],all[key],indicatorValues[key]));indicatorValues=all;
       }
       updateLevels(settings);
+      // The same REST candle window may be polled while a live sample expires.
+      // Re-evaluate its own stamps without re-submitting closed auxiliary series.
+      if (!barsChanged) setLive(liveView);
       empty.hidden=bars.length>0;
       empty.textContent=packet?.error?'Свечи недоступны · повторяем запрос':'Ожидаем свечи…';
       showReadout(); updateVolumeHeight(); publishViewport();
     }
-    const crosshair=event=>{if(disposed)return;selectedTime=typeof event.time==='number'&&byTime.has(event.time)?event.time:null;showReadout();};
+    const crosshair=event=>{if(disposed)return;selectedTime=typeof event.time==='number'&&(byTime.has(event.time)||liveCandle?.time===event.time)?event.time:null;showReadout();};
     const click=event=>{if(disposed||!bars.length||!event.point||event.paneIndex!==0)return;const value=candles.coordinateToPrice(event.point.y);if(finite(value)&&value>0)options.onPriceClick?.(value);};
     const keydown=event=>{
       if (event.target.closest('button,a,input,select,textarea') || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -248,7 +329,7 @@
       host.removeEventListener('keydown',keydown); plot.removeEventListener('pointerdown',focus);
       chart.remove(); disposed=true; host.replaceChildren(); delete host.labExchangeChart;
     }
-    const api={setPacket,reset,dispose,resize,zoom,pan,getViewport,fitLevels,getLevels:()=>[...priceLines].map(([id,line])=>({id,...line.options()})),priceToCoordinate:value=>candles.priceToCoordinate(value)};
+    const api={setPacket,setLive,reset,dispose,resize,zoom,pan,getViewport,fitLevels,getLevels:()=>[...priceLines].map(([id,line])=>({id,...line.options()})),priceToCoordinate:value=>candles.priceToCoordinate(value)};
     host.labExchangeChart=api;
     host.dataset.chartEngine='lightweight-charts-'+L.version();
     setPacket(null,{confirmed:false,volume:options.volume,indicators:options.indicators});

@@ -8,13 +8,15 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from decimal import Decimal
 from functools import wraps
+from http.client import HTTPSConnection
 import json
 import math
 import re
+from select import select
 import threading
 import time
-from urllib.parse import urlencode
-from urllib.request import Request, HTTPRedirectHandler, build_opener
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, HTTPRedirectHandler, build_opener, getproxies
 
 
 EXCHANGES = ("binance", "bybit", "okx", "gate", "bitget")
@@ -36,6 +38,7 @@ PATHS = {
 TTLS = {"catalog": 5, "chart": 30, "book": 5}
 REFRESH_PROOF_SECONDS = {"catalog": 60, "chart": 75}
 CLOSE_PUBLICATION_SECONDS = 10
+CONNECTION_IDLE_SECONDS = 30
 SYMBOL_RE = re.compile(r"[A-Z0-9]{1,28}USDT\Z")
 
 
@@ -110,6 +113,14 @@ class ExchangeData:
         self._clock = clock or time.monotonic
         self._lock = threading.RLock()
         self._fetch_slots = threading.BoundedSemaphore(2)
+        self._http_slots = threading.BoundedSemaphore(2)
+        self._connection_lock = threading.Lock()
+        self._connections = {ex: [] for ex in EXCHANGES}
+        self._active_connections = set()
+        # urllib honours configured environment/system proxies. Keep that path
+        # for proxy users; direct connections can reuse the verified TLS session.
+        proxies = getproxies()
+        self._proxy_opener = build_opener(_NoRedirect()) if proxies.get("https") or proxies.get("all") else None
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="public-market")
         self._cache = {kind: OrderedDict() for kind in TTLS}
         self._marks = {kind: OrderedDict() for kind in TTLS}
@@ -122,7 +133,61 @@ class ExchangeData:
     def close(self):
         with self._lock:
             self._closed = True
+        with self._connection_lock:
+            connections = list(self._active_connections)
+            for idle in self._connections.values():
+                connections.extend(connection for _, connection in idle)
+                idle.clear()
+        for connection in connections:
+            connection.close()
         self._pool.shutdown(wait=False, cancel_futures=True)
+
+    def _direct_json_bytes(self, exchange, target):
+        # Two active HTTP calls and at most two idle connections per fixed
+        # exchange. No redirects or internal retry can create duplicate reads.
+        with self._http_slots:
+            with self._connection_lock:
+                if self._closed:
+                    raise ValueError("market service closed")
+                idle = self._connections[exchange]
+                connection = None
+                while idle:
+                    stamp, candidate = idle.pop()
+                    try:
+                        # Readable idle sockets have closed or unexpected data.
+                        # Discard before GET, rather than retrying a failed GET.
+                        live = candidate.sock is not None and not select([candidate.sock], [], [], 0)[0]
+                    except (OSError, ValueError):
+                        live = False
+                    if live and self._clock() - stamp <= CONNECTION_IDLE_SECONDS:
+                        connection = candidate
+                        break
+                    candidate.close()
+                if connection is None:
+                    connection = HTTPSConnection(urlsplit(ROOTS[exchange]).hostname, timeout=6)
+                self._active_connections.add(connection)
+            reusable = False
+            try:
+                connection.request("GET", target, headers={"Accept": "application/json", "User-Agent": "TradingLab/1.0 public-market"})
+                response = connection.getresponse()
+                if 300 <= response.status < 400:
+                    raise ValueError("market endpoint redirect refused")
+                if not 200 <= response.status < 300:
+                    raise ValueError("public market request failed")
+                raw = response.read(4 * 1024 * 1024 + 1)
+                if len(raw) > 4 * 1024 * 1024:
+                    raise ValueError("market response too large")
+                reusable = not response.will_close
+                return raw
+            finally:
+                with self._connection_lock:
+                    self._active_connections.discard(connection)
+                    idle = self._connections[exchange]
+                    keep = reusable and not self._closed and len(idle) < 2
+                    if keep:
+                        idle.append((self._clock(), connection))
+                if not keep:
+                    connection.close()
 
     def _json(self, exchange, path, params):
         if path not in PATHS[_exchange(exchange)]:
@@ -130,13 +195,16 @@ class ExchangeData:
         if self._request is not None:
             packet = self._request(exchange, path, dict(params))
         else:
-            url = ROOTS[exchange] + path + ("?" + urlencode(params) if params else "")
-            request = Request(url, headers={"Accept": "application/json", "User-Agent": "TradingLab/1.0 public-market"})
-            with build_opener(_NoRedirect()).open(request, timeout=6) as response:
-                raw = response.read(4 * 1024 * 1024 + 1)
-                if len(raw) > 4 * 1024 * 1024:
-                    raise ValueError("market response too large")
-                packet = json.loads(raw, parse_constant=lambda value: (_ for _ in ()).throw(ValueError("non-finite JSON")))
+            target = path + ("?" + urlencode(params) if params else "")
+            if self._proxy_opener is not None:
+                request = Request(ROOTS[exchange] + target, headers={"Accept": "application/json", "User-Agent": "TradingLab/1.0 public-market"})
+                with self._proxy_opener.open(request, timeout=6) as response:
+                    raw = response.read(4 * 1024 * 1024 + 1)
+                    if len(raw) > 4 * 1024 * 1024:
+                        raise ValueError("market response too large")
+            else:
+                raw = self._direct_json_bytes(exchange, target)
+            packet = json.loads(raw, parse_constant=lambda value: (_ for _ in ()).throw(ValueError("non-finite JSON")))
         if exchange == "bybit":
             if not isinstance(packet, dict) or str(packet.get("retCode")) != "0":
                 raise ValueError("Bybit public API error")
@@ -316,7 +384,7 @@ class ExchangeData:
                     price, change = _positive(row["lastPr"]), _number(row["change24h"]) * 100
                     volume, turnover = _number(row["baseVolume"], 0), _number(row["quoteVolume"], 0)
                     self._stamp(row["ts"], 90)
-                result = {"symbol": symbol, "price": price, "change24": change, "turnover24": turnover, "volume24": volume, "trades24": count,
+                result = {"symbol": symbol, "native_symbol": instruments[symbol]["native"], "price": price, "change24": change, "turnover24": turnover, "volume24": volume, "trades24": count,
                           "turnover": turnover, "change": change, "turnover_estimated": estimated}
                 json.dumps(result, allow_nan=False)
                 rows.append(result)

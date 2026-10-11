@@ -23,6 +23,7 @@ DENSITIES = DensityMonitor(EXCHANGE_DATA, background=__name__ == '__main__')
 FILES = {
     "/lightweight-charts-5.2.1.js": ("lightweight-charts-5.2.1.js", "text/javascript; charset=utf-8"),
     "/exchange-chart.js": ("exchange-chart.js", "text/javascript; charset=utf-8"),
+    "/chart-stream.js": ("chart-stream.js", "text/javascript; charset=utf-8"),
     "/chart-levels.js": ("chart-levels.js", "text/javascript; charset=utf-8"),
     "/chart-grid.js": ("chart-grid.js", "text/javascript; charset=utf-8"),
     "/chart-grid.css": ("chart-grid.css", "text/css; charset=utf-8"),
@@ -97,6 +98,8 @@ class Handler(BaseHTTPRequestHandler):
             "img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
             if chart else
             "default-src 'self'; frame-src 'self'; frame-ancestors 'none'; "
+            "connect-src 'self' wss://stream.bybit.com wss://fstream.binance.com "
+            "wss://ws.okx.com wss://fx-ws.gateio.ws wss://ws.bitget.com; "
             "base-uri 'none'; form-action 'none'; object-src 'none'"
         )
         self.send_header("Content-Security-Policy", policy)

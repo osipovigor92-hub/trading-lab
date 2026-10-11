@@ -29,24 +29,37 @@ Instrument metadata is cached for 300 seconds; Bybit pagination is
 limited to four pages of 1,000 instruments. A chart job fetches only its requested
 interval. Each HTTP request has a six-second timeout and a 4 MiB response limit.
 
+Direct HTTPS GETs reuse at most two idle connections per fixed exchange host,
+discarding them after 30 idle seconds or when the socket has closed/unexpected
+readable data. The global active-HTTP bound remains two. `HTTPSConnection` keeps
+normal certificate verification; redirects, non-success responses and oversized
+bodies fail the read. The transport does not retry a failed GET internally: the
+existing snapshot scheduler owns retry timing and proof invalidation. Configured
+HTTPS/all proxies continue through the existing urllib proxy-aware opener rather
+than being bypassed. Closing the service closes idle and active connections.
+
 ## Packet contract
 
 Every packet includes `exchange`, `status`, `updated`, `source_ts`, `error`,
 `stale` and `refreshing`. All timestamps use Unix **seconds**. `updated` records
-local fetch completion, while `source_ts` records exchange generation time when
-available. Catalogs without such a timestamp use receipt time and explicitly
+local fetch completion, while `source_ts` records the upstream timestamp when
+available; for chart packets it is the verified closed-candle boundary, not a
+live quote timestamp. Catalogs without such a timestamp use receipt time and explicitly
 set `timestamp_origin: "receipt"`. There is no fabricated freshness timestamp
 when retained data is returned during a refresh.
 
 | Kind | Verified contents |
 | --- | --- |
-| Catalog | `rows`: symbol, price, change24 in percent, turnover24 in USDT, volume24 in base units, trades24; compatibility aliases turnover/change |
+| Catalog | `rows`: symbol, verified native_symbol, price, change24 in percent, turnover24 in USDT, volume24 in base units, trades24; compatibility aliases turnover/change |
 | Chart | symbol, native_symbol, interval, candle_end; candles with t/open/high/low/close/volume/turnover; metrics and metrics_interval; next_refresh_at |
 | Book | symbol, native_symbol; bids descending and asks ascending, `[decimal price string, base quantity number]`; midpoint price; coverage.bid_min / coverage.ask_max as exact price strings |
 
 Unprovided trade counts are `null`. A successful catalog is ordered by decreasing
 24-hour turnover with a symbol tie-break. UI stability is handled by its consumer.
 `rejected_rows` reports unusable ticker rows; an entirely invalid catalog fails.
+Each row's `native_symbol` comes from the already verified active instrument
+mapping, preserving prefixes and the venue's contract spelling. The browser can
+use that identity to subscribe before its closed chart history has loaded.
 
 `status: "pending"` initially contains empty data and null timestamps. TTL expiry
 starts background revalidation. A chart keeps `status: "ok"`, `stale: false`
@@ -159,9 +172,76 @@ one 5-minute close interval. Metrics for an unavailable timeframe are null; the
 consumer explicitly requests the required timeframe. These are descriptive
 measurements, not entry recommendations or return predictions.
 
+## Public browser chart streams
+
+`src/trading-panel/chart-stream.js` supplies display-only native candles and
+last-traded quotes. It opens public sockets directly from the browser, with no
+API key or login. REST packets remain authoritative for closed history,
+EMA20/50, VWAP60, NATR, assistant signals and alerts. A stream never rewrites a
+REST timestamp, extends a closed packet's validity, or sends a trading command.
+
+The provider accepts at most 13 validated source keys
+`exchange:symbol:interval` (12 grid charts and one expanded chart). Only needed
+venue groups connect; the provider's ceiling is six sockets, with separate OKX
+candle and ticker sockets. Ticker subscriptions deduplicate across periods of
+the same contract. Subscription diffs retain connections, are paced, and obey
+the OKX 480/hour and Bitget 240/hour request budgets. `connect-src` allows only
+same-origin reads and the five exact public WSS hosts below, without external
+scripts or a wildcard WSS permission.
+
+| Venue | Public stream and native channels |
+| --- | --- |
+| Bybit | `wss://stream.bybit.com/v5/public/linear`; `kline.{interval}.{native_symbol}` and `tickers.{native_symbol}`. Day interval is `D`. Native candle `confirm` identifies closure; ticker snapshot/delta values use `lastPrice`. Missing delta price fields are unchanged, not a new quote. |
+| Binance | `wss://fstream.binance.com/market/stream`; `{symbol lowercase}@kline_{interval}` and `@miniTicker`. Combined frames use `{stream,data}`; candle `k.x` identifies closure. The routed `/market` path is required under the current URL split. |
+| OKX | `wss://ws.okx.com/ws/v5/business` for `candle{interval}` and `/ws/v5/public` for `tickers`, with the verified `BTC-USDT-SWAP` style instrument ID. Hours use `1H`/`4H`, days `1Dutc`. Candle arrays use base volume at index 6, quote turnover at index 7, and string confirmation at index 8. |
+| Gate | `wss://fx-ws.gateio.ws/v4/ws/usdt`; `futures.candlesticks` with `[interval,native_symbol]`, and `futures.tickers`. Periods use `1h`, `4h`, `1d`, not uppercase H or `1Dutc`. Candle `w === true` identifies closure; absence is not closure evidence. Live `v` counts contracts and is deliberately exposed as unknown base volume. |
+| Bitget | `wss://ws.bitget.com/v2/ws/public`; `USDT-FUTURES` subscriptions for `candle{interval}` and `ticker`. Hours/days use `1H`, `4H`, `1Dutc`; ticker price is `lastPr`. Candle arrays supply base and quote volume without a closing flag. |
+
+Frames validate the selected native identity, period, aligned opening time,
+finite OHLC, positive prices and valid supplied volumes. Non-text or oversized
+frames above 262,144 characters are ignored. Older source timestamps cannot
+roll a sample back. Application heartbeats follow each provider's protocol;
+protocol pong frames on Binance are handled by the browser. Hidden pages close
+all streams and restart only needed subscriptions when visible again. A broken
+socket immediately drops its samples and reconnects with exponential backoff
+from 2 to 30 seconds plus jitter. A stalled handshake or protocol rejection
+also retries; repeated failures do not spin a tight connection loop.
+
+Market samples retain `received_at`, `source_ts` and `timestamp_origin` in Unix
+seconds. Quotes require both receipt/source age at most 10 seconds. Candles
+require receipt/source age at most 75 seconds and either the current open
+period or an explicitly closed prior period within its ten-second publication
+window, with a two-second future-clock tolerance. OKX candle frames contain
+opening time but no generation time: `source_ts` stays null and origin is
+`receipt`. Pongs and ordinary renders never refresh market timestamps.
+
+The renderer adds a native current candle only immediately after the matching
+last closed history bar. A missing history window cannot be filled by invented
+bars. A separate fresh quote line is labelled "Цена сейчас". Native forming or
+recently closing candles have explicit display labels and do not enter the
+closed volume/indicator series. Historic OHLCV selection, manual annotations,
+density source isolation and viewport anchors remain tied to their own data.
+Updates are coalesced over 250ms; changed latest candles use `series.update`,
+while unchanged snapshots skip native data and resize calls. The local bundled
+renderer remains TradingView Lightweight Charts 5.2.1.
+
+Official protocol references:
+[Bybit candles](https://bybit-exchange.github.io/docs/v5/websocket/public/kline),
+[Bybit tickers](https://bybit-exchange.github.io/docs/v5/websocket/public/ticker),
+[Bybit connection](https://bybit-exchange.github.io/docs/v5/ws/connect),
+[Binance URL migration](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Important-WebSocket-Change-Notice),
+[Binance stream connection](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Connect),
+[OKX candles](https://app.okx.com/docs-v5/en/#order-book-trading-market-data-ws-candlesticks-channel),
+[OKX global services](https://www.okx.com/docs-v5/),
+[Gate Futures WebSocket](https://www.gate.com/docs/developers/futures/ws/en/),
+[Bitget candles](https://www.bitget.com/docs/classic/websocket/contract/public/Candlesticks-Channel),
+[Bitget tickers](https://www.bitget.com/docs/classic/websocket/contract/public/Tickers-Channel),
+[Bitget connection](https://www.bitget.com/docs/classic/websocket/intro), and
+[Lightweight Charts incremental updates](https://tradingview.github.io/lightweight-charts/tutorials/demos/realtime-updates).
+
 ## Checks
 
-Run `python tools/test_exchange_data.py` with Python 3. The 27 offline tests
+Run `python tools/test_exchange_data.py` with Python 3. The 36 offline tests
 cover all five venues, six intervals, UTC daily alignment and long-period close
 grace, quantity conversions, unavailable counts,
 estimated turnover, malformed/stale data, rollback protection, tiny numeric
@@ -169,7 +249,39 @@ prices, bounded proof during revalidation, immediate boundary/error invalidation
 cache refresh/failure/recovery, new-boundary scheduling, bounded publication
 retry/recovery on all five venues, strict validation during that window, and
 chart admission during busy density scans. No test
-contacts the internet.
+contacts the internet. Added transport coverage exercises TLS reuse and idle
+expiry, global concurrency and pool bounds, closure, response/redirect failures,
+no hidden retry, proxy preservation and verified native catalog identities.
+
+Run `node --test tools/test_chart_stream.cjs tools/test_exchange_chart.cjs` for
+the 40 protocol/lifecycle and eight renderer regression cases. They use native
+exchange fixtures and deterministic fake sockets/timers or chart APIs; they do
+not contact exchanges. Coverage includes venue/period isolation, UTC day
+mapping, finite data, source/receipt expiry, time-bucket rollover, hourly request
+budgets, reconnects, hidden-page shutdown, batching, no-op snapshots and separate
+live/closed series. Synthetic preview sets its demo flag and disables external
+streams. These suites do not establish current browser finish review or
+exact-head CI status.
+
+Focused measurements on 2026-10-11:
+
+- With real Chromium and the shipped Lightweight Charts 5.2.1 bundle, 100
+  unchanged snapshots previously caused 100 native resize calls and 400
+  `setData` calls. The updated path caused zero of either; two native forming
+  ticks caused two candlestick `update` calls. The local loop elapsed time was
+  69.7ms before and 56.8ms after. Native call counts explain reduced renderer
+  work; elapsed time is a local sample, not exchange latency or a universal FPS
+  claim.
+- Eight synthetic HTTPS GETs with a 120ms connection/TLS cost and 40ms response
+  cost used one reused connection: the deterministic model fell from 1.28s to
+  0.44s. It still performed eight validated reads. This model isolates avoided
+  handshakes and does not predict production network timing.
+- A 20-second read-only public WebSocket probe received BTC five-minute candles
+  and quotes from all five venues over all six sockets. Observed source-to-
+  receipt delays for timestamped frames were 0.04–0.56s. OKX candle frames
+  supplied no generation timestamp and were measured only at receipt. This is
+  point-in-time availability from the probe environment, not a guarantee for
+  every browser, region, connection or VDS.
 
 A separate read-only live public probe on 2026-10-11 returned eligible catalogs
 for all five venues (520 Binance, 790 Bybit, 485 OKX, 1,010 Gate, 817 Bitget),

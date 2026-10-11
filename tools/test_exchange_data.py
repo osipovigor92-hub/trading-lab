@@ -1,14 +1,17 @@
 """Offline public-adapter contract tests; no live exchange requests."""
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import json
 import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "trading-panel"))
 from exchange_data import ExchangeData, EXCHANGES, INTERVALS, PATHS
+import exchange_data
 
 
 class Clock:
@@ -133,6 +136,195 @@ def await_idle(adapter):
     raise AssertionError("adapter worker did not finish")
 
 
+class HTTPResponseFixture:
+    def __init__(self, raw=b'{"symbols": []}', *, status=200, will_close=False, failure=None):
+        self.raw, self.status, self.will_close, self.failure = raw, status, will_close, failure
+
+    def read(self, limit):
+        if self.failure:
+            raise self.failure
+        return self.raw[:limit]
+
+
+class HTTPSFixture:
+    """Deterministic latency model: 120ms TLS setup and 40ms per GET."""
+    def __init__(self):
+        self.connections, self.responses, self.requests = [], [], []
+        self.cost = 0
+        self.lock = threading.Lock()
+
+    def connection(self, host, timeout):
+        owner = self
+        class Connection:
+            def __init__(self):
+                self.host, self.timeout, self.closed = host, timeout, False
+                self.sock = object()
+                self.connected = False
+
+            def request(self, method, target, headers):
+                with owner.lock:
+                    if not self.connected:
+                        owner.cost += .120
+                        self.connected = True
+                    owner.cost += .040
+                    owner.requests.append((self, method, target, headers))
+
+            def getresponse(self):
+                with owner.lock:
+                    return owner.responses.pop(0) if owner.responses else HTTPResponseFixture()
+
+            def close(self):
+                self.closed = True
+                self.sock = None
+        connection = Connection()
+        self.connections.append(connection)
+        return connection
+
+
+class TransportTests(unittest.TestCase):
+    def setUp(self):
+        self.http = HTTPSFixture()
+        self.clock = Clock()
+        self.proxies = patch.object(exchange_data, "getproxies", return_value={})
+        self.transport = patch.object(exchange_data, "HTTPSConnection", side_effect=self.http.connection)
+        self.socket_readiness = patch.object(exchange_data, "select", return_value=([], [], []))
+        self.proxies.start()
+        self.transport.start()
+        self.socket_readiness.start()
+        self.adapter = ExchangeData(wall_clock=lambda: self.clock.now, clock=lambda: self.clock.mono)
+
+    def tearDown(self):
+        self.adapter.close()
+        self.transport.stop()
+        self.proxies.stop()
+        self.socket_readiness.stop()
+
+    def test_chart_batch_reuses_tls_connection_with_bounded_latency_model(self):
+        for path in (PATHS["binance"][0], PATHS["binance"][1], *([PATHS["binance"][2]] * 6)):
+            self.adapter._json("binance", path, {"symbol": "BTCUSDT"} if path == PATHS["binance"][2] else {})
+        self.assertEqual(len(self.http.requests), 8)
+        self.assertEqual(len(self.http.connections), 1)
+        self.assertAlmostEqual(self.http.cost, .120 + 8 * .040)
+        old_cost = 8 * (.120 + .040)
+        self.assertLess(self.http.cost, old_cost / 2, "model removes repeated TLS setup, without fewer validated HTTP reads")
+        connection = self.http.connections[0]
+        self.assertEqual((connection.host, connection.timeout), ("fapi.binance.com", 6))
+        self.assertTrue(all(method == "GET" and target.startswith("/fapi/v1/") for _, method, target, _ in self.http.requests))
+        self.adapter.close()
+        self.assertTrue(connection.closed)
+        self.assertTrue(all(not idle for idle in self.adapter._connections.values()))
+
+    def test_upstream_close_and_failed_read_discard_without_duplicate_retry(self):
+        self.http.responses.append(HTTPResponseFixture(will_close=True))
+        self.adapter._json("binance", PATHS["binance"][0], {})
+        self.assertTrue(self.http.connections[0].closed)
+        self.adapter._json("binance", PATHS["binance"][0], {})
+        self.assertEqual(len(self.http.connections), 2)
+        self.http.responses.append(HTTPResponseFixture(failure=OSError("socket fixture failure")))
+        with self.assertRaises(OSError):
+            self.adapter._json("binance", PATHS["binance"][0], {})
+        self.assertEqual(len(self.http.requests), 3, "transport cannot internally retry a failed GET")
+        self.assertTrue(self.http.connections[1].closed)
+        self.adapter._json("binance", PATHS["binance"][0], {})
+        self.assertEqual(len(self.http.connections), 3)
+
+    def test_expired_or_peer_closed_idle_socket_reconnects_before_get(self):
+        self.adapter._json("binance", PATHS["binance"][0], {})
+        self.clock.advance(31)
+        self.adapter._json("binance", PATHS["binance"][0], {})
+        self.assertTrue(self.http.connections[0].closed)
+        with patch.object(exchange_data, "select", return_value=([self.http.connections[-1].sock], [], [])):
+            self.adapter._json("binance", PATHS["binance"][0], {})
+        self.assertTrue(self.http.connections[1].closed)
+        self.assertEqual(len(self.http.connections), 3)
+        self.assertEqual(len(self.http.requests), 3, "idle reconnection adds no duplicate HTTP request")
+
+    def test_redirect_http_error_and_oversize_are_closed(self):
+        for response, reason in ((HTTPResponseFixture(status=302), "redirect"),
+                                 (HTTPResponseFixture(status=429), "request failed"),
+                                 (HTTPResponseFixture(b"x" * (4*1024*1024+1)), "too large")):
+            self.http.responses.append(response)
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
+                self.adapter._json("binance", PATHS["binance"][0], {})
+            self.assertTrue(self.http.connections[-1].closed)
+            self.assertEqual(self.adapter._connections["binance"], [])
+        self.assertEqual(len(self.http.requests), 3)
+
+    def test_connection_pool_stays_bounded_under_concurrent_direct_calls_and_shutdown(self):
+        entered, release = threading.Barrier(3), threading.Event()
+        responses = []
+        for _ in range(2):
+            response = HTTPResponseFixture()
+            def blocked_read(limit, original=response.read):
+                entered.wait(timeout=2)
+                release.wait(2)
+                return original(limit)
+            response.read = blocked_read
+            responses.append(response)
+        self.http.responses.extend(responses)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(self.adapter._json, "binance", PATHS["binance"][0], {}) for _ in range(8)]
+            entered.wait(timeout=2)
+            self.assertEqual(len(self.http.connections), 2)
+            self.assertEqual(len(self.adapter._active_connections), 2)
+            release.set()
+            for future in futures:
+                future.result(timeout=2)
+        self.assertEqual(len(self.http.connections), 2)
+        self.assertEqual(len(self.adapter._connections["binance"]), 2)
+        self.adapter.close()
+        self.assertTrue(all(connection.closed for connection in self.http.connections))
+        with self.assertRaisesRegex(ValueError, "closed"):
+            self.adapter._json("binance", PATHS["binance"][0], {})
+        self.assertEqual(len(self.http.requests), 8)
+
+    def test_shutdown_during_active_response_does_not_return_connection_to_pool(self):
+        entered, release = threading.Event(), threading.Event()
+        response = HTTPResponseFixture()
+        def blocked_read(limit):
+            entered.set()
+            release.wait(2)
+            return response.raw
+        response.read = blocked_read
+        self.http.responses.append(response)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(self.adapter._json, "binance", PATHS["binance"][0], {})
+            self.assertTrue(entered.wait(1))
+            self.adapter.close()
+            self.assertTrue(self.http.connections[0].closed)
+            release.set()
+            future.result(timeout=2)
+        self.assertEqual(self.adapter._connections["binance"], [])
+        self.assertEqual(self.adapter._active_connections, set())
+
+    def test_configured_proxy_keeps_urllib_transport_and_request_limits(self):
+        with patch.object(exchange_data, "getproxies", return_value={"https": "http://proxy.example:3128"}), \
+                patch.object(exchange_data, "build_opener") as create_opener:
+            proxy_adapter = ExchangeData()
+        try:
+            response = create_opener.return_value.open.return_value.__enter__.return_value
+            response.read.return_value = b'{"symbols": []}'
+            self.assertEqual(proxy_adapter._json("binance", PATHS["binance"][0], {}), {"symbols": []})
+            request = create_opener.return_value.open.call_args.args[0]
+            self.assertEqual(request.full_url, "https://fapi.binance.com/fapi/v1/exchangeInfo")
+            self.assertEqual(create_opener.return_value.open.call_args.kwargs, {"timeout": 6})
+            response.read.assert_called_once_with(4*1024*1024+1)
+            self.assertEqual(self.http.connections, [])
+        finally:
+            proxy_adapter.close()
+
+    def test_no_proxy_exclusions_alone_do_not_disable_connection_reuse(self):
+        with patch.object(exchange_data, "getproxies", return_value={"no": "localhost,127.0.0.1"}):
+            adapter = ExchangeData()
+        try:
+            adapter._json("binance", PATHS["binance"][0], {})
+            adapter._json("binance", PATHS["binance"][0], {})
+            self.assertEqual(len(self.http.connections), 1)
+            self.assertIsNone(adapter._proxy_opener)
+        finally:
+            adapter.close()
+
+
 class AdapterTests(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
@@ -149,6 +341,7 @@ class AdapterTests(unittest.TestCase):
                 self.assertEqual(packet["status"], "ok")
                 row = packet["rows"][0]
                 self.assertEqual(row["symbol"], "BTCUSDT")
+                self.assertEqual(row["native_symbol"], "BTC-USDT-SWAP" if exchange == "okx" else "BTC_USDT" if exchange == "gate" else "BTCUSDT")
                 self.assertEqual(row["change24"], 25)
                 self.assertEqual(row["volume24"], 3)
                 self.assertEqual(row["turnover24"], 300 if exchange == "okx" else 270)
@@ -196,6 +389,25 @@ class AdapterTests(unittest.TestCase):
                     else:
                         self.assertTrue(all(value is None for value in packet["metrics"].values()))
                     json.dumps(packet, allow_nan=False)
+
+    def test_parallel_cold_charts_share_one_verified_instrument_request(self):
+        entered, release = threading.Event(), threading.Event()
+        def delayed_metadata(exchange, path, params):
+            if path == PATHS[exchange][0]:
+                entered.set()
+                release.wait(2)
+            return self.fixture.request(exchange, path, params)
+        self.adapter._request = delayed_metadata
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(self.adapter.fetch_chart, "bybit", "BTCUSDT", interval) for interval in ("1", "5")]
+            self.assertTrue(entered.wait(1))
+            release.set()
+            for future in futures:
+                self.assertEqual(future.result(timeout=2)["status"], "ok")
+        self.adapter.fetch_catalog("bybit")
+        self.adapter.fetch_book("bybit", "BTCUSDT")
+        reads = [call for call in self.fixture.calls if call[1] == PATHS["bybit"][0]]
+        self.assertEqual(len(reads), 1, "cold charts, catalog and density book reuse the same verified metadata")
 
     def test_long_interval_freshness_uses_closed_utc_boundary_and_close_grace(self):
         for exchange in EXCHANGES:

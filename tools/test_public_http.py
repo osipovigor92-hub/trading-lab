@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+from io import BytesIO
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -64,6 +65,29 @@ class PublicHTTPTests(unittest.TestCase):
             self.assertEqual(json.loads(body)['status'], 'error')
         finally:
             self.adapter.chart_snapshot.side_effect = None
+
+    def test_live_stream_asset_and_exact_public_hosts_are_allowed_only_on_dashboard(self):
+        self.assertEqual(self.panel.FILES['/chart-stream.js'][0], 'chart-stream.js')
+        class Headers(self.panel.Handler):
+            def send_response(self, code):
+                self.code = code
+            def send_header(self, key, value):
+                self.sent[key] = value
+            def end_headers(self):
+                pass
+        for path in ('/', '/chart.html'):
+            handler = Headers.__new__(Headers)
+            handler.path, handler.sent, handler.wfile = path, {}, BytesIO()
+            handler.send(200, b'test', 'text/html')
+            policy = handler.sent['Content-Security-Policy']
+            hosts = {'wss://stream.bybit.com', 'wss://fstream.binance.com', 'wss://ws.okx.com', 'wss://fx-ws.gateio.ws', 'wss://ws.bitget.com'}
+            if path == '/':
+                connect = next(part.strip() for part in policy.split(';') if part.strip().startswith('connect-src'))
+                self.assertEqual(set(connect.split()[2:]), hosts)
+                self.assertIn("'self'", connect)
+                self.assertNotIn('*', policy)
+            else:
+                self.assertNotIn('wss:', policy)
 
 
 if __name__ == '__main__':
