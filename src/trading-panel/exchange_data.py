@@ -33,8 +33,9 @@ PATHS = {
     "gate": ("/api/v4/futures/usdt/contracts", "/api/v4/futures/usdt/tickers", "/api/v4/futures/usdt/candlesticks", "/api/v4/futures/usdt/order_book"),
     "bitget": ("/api/v2/mix/market/contracts", "/api/v2/mix/market/tickers", "/api/v2/mix/market/candles", "/api/v2/mix/market/merge-depth"),
 }
-TTLS = {"catalog": 45, "chart": 30, "book": 5}
+TTLS = {"catalog": 5, "chart": 30, "book": 5}
 REFRESH_PROOF_SECONDS = {"catalog": 60, "chart": 75}
+CLOSE_PUBLICATION_SECONDS = 10
 SYMBOL_RE = re.compile(r"[A-Z0-9]{1,28}USDT\Z")
 
 
@@ -92,6 +93,13 @@ def _bounded_fetch(method):
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise ValueError("market endpoint redirect refused")
+
+
+class _CandlePublicationPending(ValueError):
+    """Only the expected latest close is absent during its short publication window."""
+    def __init__(self, candle_end):
+        super().__init__("waiting for newly closed candle publication")
+        self.candle_end = candle_end
 
 
 class ExchangeData:
@@ -347,6 +355,8 @@ class ExchangeData:
             self._stamp(response["requestTime"], 90)
             raw = response["data"]
         now = self._wall()
+        expected_end = int((now - 2) // step) * step
+        publication_window = 2 <= now - expected_end <= CLOSE_PUBLICATION_SECONDS
         candles, seen = [], set()
         for row in _list(raw, 300):
             if exchange == "gate":
@@ -364,7 +374,7 @@ class ExchangeData:
                     if row[8] == "0":
                         # An old unconfirmed candle is a broken series, not a
                         # reason to silently stitch its neighbours together.
-                        if t + step <= now - 2:
+                        if t + step <= now - 2 and not (publication_window and t + step == expected_end):
                             raise ValueError("historical candle is unconfirmed")
                         continue
                     volume, turnover = _number(row[6], 0), _number(row[7], 0)
@@ -390,8 +400,15 @@ class ExchangeData:
         if len(candles) < 60 or any(b["t"] - a["t"] != step for a, b in zip(candles, candles[1:])):
             raise ValueError("insufficient or discontinuous closed candles")
         end = candles[-1]["t"] + step
-        expected_end = int((now - 2) // step) * step
         if end != expected_end:
+            if publication_window and end == expected_end - step:
+                with self._lock:
+                    saved = self._marks["chart"].get((exchange, symbol, interval))
+                    cached = self._cache["chart"].get((exchange, symbol, interval))
+                    cached_end = cached["data"].get("candle_end") if cached and cached["data"] else None
+                    if max(saved or 0, cached_end or 0) > end:
+                        raise ValueError("market source moved backwards")
+                raise _CandlePublicationPending(expected_end)
             raise ValueError("closed candle series is stale")
         metrics = {"natr5_14": None, "natr1_30": None, "change5": None}
         if interval in ("1", "5"):
@@ -405,7 +422,8 @@ class ExchangeData:
             metrics["change5"] = (candles[-1]["close"] / previous - 1) * 100
         packet = {"exchange": exchange, "symbol": symbol, "native_symbol": native, "interval": interval, "status": "ok", "updated": now,
                   "source_ts": end, "timestamp_origin": "closed_candle", "candle_end": end, "candles": candles, "metrics": metrics,
-                  "metrics_interval": interval, "error": None, "stale": False, "refreshing": False}
+                  "metrics_interval": interval, "error": None, "stale": False, "refreshing": False,
+                  "next_refresh_at": min(now + TTLS["chart"], end + step + 2)}
         return self._accept("chart", (exchange, symbol, interval), packet, end)
 
     @_bounded_fetch
@@ -497,12 +515,17 @@ class ExchangeData:
             method = {"catalog": self.fetch_catalog, "chart": self.fetch_chart, "book": self.fetch_book}[kind]
             packet = method(*key)
             with self._lock:
-                entry.update(data=packet, expires=self._clock() + TTLS[kind], retry=0, error=None)
+                entry.update(data=packet, expires=self._clock() + TTLS[kind], retry=0, error=None, publication_end=None)
+        except _CandlePublicationPending as exc:
+            with self._lock:
+                # No worker sleeps or retries internally. Snapshot admission
+                # reuses a single job and enforces at least 1s between attempts.
+                entry.update(error=None, retry=self._clock() + 1, publication_end=exc.candle_end)
         except Exception as exc:
             # Never echo upstream bodies, URLs or local configuration to clients.
             message = str(exc) if isinstance(exc, ValueError) else "public market request failed"
             with self._lock:
-                entry.update(error=message[:160], retry=self._clock() + 5)
+                entry.update(error=message[:160], retry=self._clock() + 5, publication_end=None)
         finally:
             with self._lock:
                 entry["pending"] = False
@@ -523,10 +546,16 @@ class ExchangeData:
                     if victim is None:
                         return dict(self._empty(kind, key), error="market cache busy")
                     del entries[victim]
-                entry = {"data": None, "expires": 0, "retry": 0, "error": None, "pending": False}
+                entry = {"data": None, "expires": 0, "retry": 0, "error": None, "pending": False, "publication_end": None}
                 entries[key] = entry
             entries.move_to_end(key)
             data = entry["data"]
+            if (entry.get("publication_end") is not None and not entry["pending"] and
+                    self._wall() > entry["publication_end"] + CLOSE_PUBLICATION_SECONDS):
+                # Stop presenting this as ordinary publication delay, but let
+                # an already-due request verify recovery. If it is still old,
+                # the fetch fails and applies the normal 5s error backoff.
+                entry.update(error="closed candle series is stale", publication_end=None)
             fresh = data is not None and now < entry["expires"] and not entry["error"]
             if kind == "chart" and fresh:
                 step = int(key[2]) * 60
@@ -564,10 +593,20 @@ class ExchangeData:
             if (fresh or usable) and not self._closed:
                 packet = deepcopy(data)
                 packet["refreshing"] = entry["pending"]
+                if kind == "chart":
+                    packet["refresh_reason"] = "revalidation" if entry["pending"] else None
                 return packet
             packet = deepcopy(data) if data is not None else self._empty(kind, key)
             packet.update(status="error" if entry["error"] else "pending", stale=True, error=entry["error"],
                           refreshing=data is not None and entry["pending"] and entry["error"] is None)
+            if kind == "chart":
+                wall, step = self._wall(), int(key[2]) * 60
+                expected_end = int((wall - 2) // step) * step
+                awaiting_close = (not entry["error"] and 2 <= wall - expected_end <= CLOSE_PUBLICATION_SECONDS and
+                                  (entry.get("publication_end") == expected_end or
+                                   data is not None and data["candle_end"] == expected_end - step))
+                packet["refresh_reason"] = "awaiting_close" if awaiting_close else None
+                packet["retry_after_seconds"] = max(0, entry["retry"] - now)
             if self._closed:
                 packet.update(status="error", error="market service closed")
             return packet

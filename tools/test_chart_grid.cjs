@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {validChart,natr,metricValue,rankRows,formatPrice}=require('../src/trading-panel/chart-grid.js');
+const {validChart,awaitingClose,refreshDue,natr,metricValue,rankRows,formatPrice}=require('../src/trading-panel/chart-grid.js');
 test('tiny contract prices stay nonzero and distinct in chart labels',()=>{
  assert.notEqual(formatPrice(2.345e-8),formatPrice(0));assert.notEqual(formatPrice(2.345e-8),formatPrice(3.345e-8));assert.match(formatPrice(2.345e-8),/2,345E-8/);assert.equal(formatPrice(NaN),'—');
 });
@@ -28,4 +28,24 @@ test('unknown chart metrics sort after verified values without inventing a zero 
 });
 test('a new closed boundary invalidates the old series even while receipt time is fresh',()=>{
  const p=packet('1');p.updated=p.candle_end+17;assert.equal(validChart(p,'bybit','BTCUSDT','1',p.candle_end+20),true);assert.equal(validChart(p,'bybit','BTCUSDT','1',p.candle_end+65),false);
+});
+test('refresh follows the closed boundary and receipt hint before the idle cadence',()=>{
+ const p=packet('1'),boundary=p.candle_end+62,last=boundary-4;p.updated=last;p.next_refresh_at=boundary;
+ assert.equal(refreshDue(p,'bybit','BTCUSDT','1',last,boundary-1),false);
+ assert.equal(refreshDue(p,'bybit','BTCUSDT','1',last,boundary),true);
+ const stable=packet('5');stable.next_refresh_at=stable.updated+6;
+ assert.equal(refreshDue(stable,'bybit','BTCUSDT','5',stable.updated,stable.updated+5),false);
+ assert.equal(refreshDue(stable,'bybit','BTCUSDT','5',stable.updated,stable.updated+6),true);
+ assert.equal(refreshDue({...stable,next_refresh_at:stable.updated-10},'bybit','BTCUSDT','5',stable.updated,stable.updated+6),false,'invalid hint cannot force a tight poll');
+});
+test('publication retry is one second, bounded, and never confirms the old series',()=>{
+ const p=packet('1'),boundary=p.candle_end+62;p.updated=p.candle_end+59;p.status='pending';p.stale=true;p.refresh_reason='awaiting_close';p.retry_after_seconds=1;
+ assert.equal(awaitingClose(p,'bybit','BTCUSDT','1',boundary),true);
+ assert.equal(validChart(p,'bybit','BTCUSDT','1',boundary),false);
+ assert.equal(refreshDue(p,'bybit','BTCUSDT','1',boundary,boundary+.9),false);
+ assert.equal(refreshDue(p,'bybit','BTCUSDT','1',boundary,boundary+1),true);
+ for(const bad of [{...p,exchange:'binance'},{...p,error:'HTTP 429'},{...p,status:'unavailable'},{...p,status:'error'},{...p,candle_end:p.candle_end-60}])assert.equal(awaitingClose(bad,'bybit','BTCUSDT','1',boundary),false);
+ assert.equal(awaitingClose(p,'bybit','BTCUSDT','1',boundary+9),false,'publication window ends after ten seconds');
+ assert.equal(refreshDue({...p,error:'HTTP 429',retry_after_seconds:5},'bybit','BTCUSDT','1',boundary,boundary+1),false,'outages keep their backoff');
+ assert.equal(refreshDue(p,'bybit','BTCUSDT','1',boundary,boundary+1,true),false,'network failure cannot reuse the prior publication retry hint');
 });

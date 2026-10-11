@@ -20,6 +20,12 @@
 .fresh-event p{margin:6px 0}
 .fresh-event button{flex-shrink:0}
 .fresh-kind{font-size:14px;color:var(--accent)}
+.fresh-direction{font-size:15px;color:var(--buy)}
+.fresh-event[data-direction="SHORT"] .fresh-direction,.fresh-condition[data-direction="SHORT"] .fresh-condition-direction{color:var(--sell)}
+.fresh-condition-direction{font-weight:650;color:var(--buy)}
+.fresh-invalidation{font-size:12px;color:var(--text);line-height:1.6}
+.fresh-event-price{font-size:12px}
+.fresh-event-body,.fresh-condition{overflow-wrap:anywhere}
 .kind-ready{color:var(--buy)}
 .kind-momentum_up,.kind-breakout_up{color:var(--buy)}
 .kind-momentum_down,.kind-breakout_down{color:var(--sell)}
@@ -46,5 +52,7 @@
  .fresh-condition small{grid-column:1}
 }
 .fresh-event[data-live="false"] .fresh-kind{color:var(--muted)}
+.fresh-event[data-live="false"] .fresh-direction{color:var(--muted)}
+.fresh-event[data-live="false"] .fresh-invalidation{color:var(--muted)}
 .fresh-event-actions{display:flex;flex-wrap:wrap;gap:8px}
 .fresh-event-actions button[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}

@@ -183,7 +183,7 @@ class MarketAlerts:
             previous['current'] = None
             scope['assistant_states'][row['symbol']] = previous
             if rollback:
-                value.update(status='pending', score=None, signal_id=None, setup='waiting', indicators={},
+                value.update(status='pending', score=None, signal_id=None, setup='waiting', indicators={}, recommendation=None,
                              missing=value['missing'] + ['Источник старее предыдущего снимка'],
                              reasons=['Ожидаем источник без отката времени'])
             return value
@@ -204,10 +204,10 @@ class MarketAlerts:
             event_value = dict(symbol=row['symbol'], sources=value['sources'], expires=expires,
                                score=value['score'], price=value['indicators']['close'])
             self._emit(scope, event_value, setup, now, '; '.join(value['reasons']), required,
-                       observation=dict(signal_id=signal_id, interval='1', timeframe='1',
+                       observation=dict(signal_id=signal_id, interval='1', timeframe='1', exchange='bybit',
                                         candle_end=value['candle_end'], activity=value['activity'],
                                         score_note=value['note'], breakout_level=value['breakout_level'],
-                                        extension_atr=value['extension_atr']))
+                                        extension_atr=value['extension_atr'], recommendation=value['recommendation']))
             previous['last_breakout' if first_breakout else 'last_momentum'] = signal_id
         if value['eligible']:
             previous['setup'] = setup
@@ -231,6 +231,11 @@ class MarketAlerts:
                      detail=detail, score=value['score'], price=value['price'], level=level)
         if observation:
             event.update(observation)
+            if event.get('recommendation'):
+                # An event expires after 30s even when the ongoing setup still
+                # has current source proof. Never extend the original alert.
+                event['recommendation'] = dict(event['recommendation'],
+                                               expires=min(event['expires'], event['recommendation']['expires']))
         scope['events'].insert(0, event)
         scope['events'] = scope['events'][:50]
 
@@ -262,8 +267,16 @@ class MarketAlerts:
                     valid = value['state'] != 'unavailable' if event['kind'] != 'near_level' else value['near_known']
                 if valid:
                     events.append(dict(event))
+            rows = [{k: v for k, v in row.items() if k not in ('expires', 'checks')} for row in scope['rows']]
+            for row in rows:
+                assistant = row.get('assistant', {})
+                recommendation = assistant.get('recommendation')
+                if recommendation and recommendation['expires'] < now:
+                    # A scope can stop ticking when its page is closed. Retain
+                    # measured history, but do not return an expired direction.
+                    row['assistant'] = dict(assistant, recommendation=None)
             return dict(status='ok', epoch=self.epoch, scope=key, updated=now, cursor=self.sequence,
                         analyzing=list(scope['analyzing']), analysis_limit=8,
-                        rows=[{k: v for k, v in row.items() if k not in ('expires', 'checks')} for row in scope['rows']],
+                        rows=rows,
                         events=events, filters=dict(scope['filters']), search=scope['search'], watch=list(scope['watch']),
                         priority=scope['priority'])

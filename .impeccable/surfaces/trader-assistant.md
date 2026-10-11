@@ -6,11 +6,15 @@ Primary target: `src/trading-panel/index.html`.
 
 Related targets: `src/trading-panel/screener.js`, `src/trading-panel/screener.css`, `src/trading-panel/fresh-alerts.js`, `src/trading-panel/positions.js`, `src/trading-panel/layout.js`, `src/trading-panel/layout.css`, `src/trading-panel/chart-grid.js`, `src/trading-panel/chart-grid.css`, `src/trading-panel/exchange-chart.js`, `src/trading-panel/densities.js`, `src/trading-panel/densities.css`.
 
+Current bounded extension: directional captions, evidence and filtering in the existing alerts page and compact screener feed (`fresh-alerts.js`, `alerts.css`, `screener.js`), backed by the existing Bybit assistant in `selection.py` and `market_alerts.py`. Adaptive closed-candle refresh extends the existing chart request/status behavior in `chart-grid.js`. These additions retain the current page composition and visual tokens.
+
 Visitor mode: **Operate**. This brief is development documentation and is not served by the panel. The runtime context launcher was unavailable; the brief is authored directly rather than claimed to be registered by its helper.
 
 ## Task and evidence
 
 The user finds activity, pins coins, examines a selected coin and checks a manual decision. Their explicit continuity requirements are stable row order and alerts that remain trackable after freshness expires. PRODUCT.md owns source, formula and operating constraints; DESIGN.md owns the shared visual tokens.
+
+The later request asks alerts to show a LONG or SHORT recommendation. Confirmed Bybit 1m breakout/momentum direction now has a written caption, observed price, source, reason and invalidation. The recommendation derives from the existing setup gates; it does not change calculations or thresholds. Watch/pending, rollback and illiquid sources retain no recommendation. Entry, stop, target and position size remain manual.
 
 Five pages now remain: Скринер, Плотности, Алерты, Позиции, Настройки. The later screenercrypto.ru reference authorizes a chart grid within the screener and public density observations. Tests, models, journals, an independent orderbook page and Live remain absent. The compact observation feed is retained as part of following signals.
 
@@ -20,9 +24,11 @@ Five pages now remain: Скринер, Плотности, Алерты, Поз�
 
 **OWN-WORLD:** Graphite fields, flat bordered panels, compact sans typography, cyan actions and explicit green/rose direction labels. Identity follows the approved concept and the extracted DESIGN.md cascade.
 
-**STORY:** Scan activity, select or watch a symbol, inspect closed-candle evidence and reasons, then enter manual risk assumptions. History shows what happened; current labels show what remains verified.
+**STORY:** Scan activity or a fresh directional setup, select or watch a symbol, inspect its source evidence, reason and invalidation, then enter manual risk assumptions. History shows what happened; current labels show what remains verified.
 
 **FIRST VIEWPORT:** Header and exchange/search/metric controls precede the default chart grid. The Table view retains the watch/table/detail arrangement and compact observations. The density page places persisted filters above confirmed hour-old levels at left and newer/unconfirmed levels or a distance radar at right. Search, watch and refresh actions remain visible; risk is a deliberate disclosure within the activity table.
+
+The alerts viewport retains its existing heading, event/direction filters and feed. A current directional caption appears with its scenario; source and observed price precede reason and invalidation in the same row. Current conditions remain separate from captured events. The compact table feed uses the same direction, and enabled browser-notification titles include direction and coin.
 
 **CHART DETAIL:** The later reference specifies native interactive candles: dark plotting field, green/red candles, dotted horizontal grid, right price scale with last-price tag, UTC timeline, symbol watermark and crosshair OHLCV. Grid and dialog share a self-hosted Lightweight Charts 5.2.1 renderer. The dialog exposes six periods from 1m to 1d, local zoom/pan/reset, an optional separate volume pane and EMA20/50 plus VWAP60. Historical viewport anchors survive refresh; unconfirmed sources remain explicitly historical. This extends the chart form while preserving the approved shell and manual PAPER boundary.
 
@@ -41,6 +47,10 @@ Its visual composition is binding; prices, example scores and status wording are
 The activity table preserves the three reading columns. The chart view uses a responsive multi-chart grid; the density view separates confirmed long observations from newer and unconfirmed levels. Intermediate widths move the detail below the left workspace. Mobile uses stacked panels, a locally scrollable table and five fixed bottom navigation items. Selected/watch states remain explicit.
 
 Pending, stale, source-error, empty-watch and absent-PAPER states explain the next available action. Missing score and indicator values remain dashes. Historical events keep their coin action and time. The user decides when to re-sort; watch order does not follow score movement.
+
+Directional events remain current for at most their original 30-second event lifetime and source expiry. Continuing current-row recommendations independently require the original quote/chart/closed-candle proof to remain within 45/75/120 seconds, with matching coin, source, candle and signal identity. Archived copies immediately carry a muted history label and neutral saved-observation proof; they do not assert that a still-current event ended. Expiry or an outage removes current confirmation while preserving the observation.
+
+Chart refresh checks the catalog every five seconds and advances toward the next closed boundary with a two-second grace. During the bounded seconds 2–10 publication wait, a continuous series exactly one bar behind is checked at most once per second per source and described as updating the closed candle. The old bars remain historical for metrics. Actual failures retain explicit error wording and a five-second retry. Forming bars are not shown, and original timestamps are not rewritten.
 
 ## Verification record
 
@@ -65,3 +75,13 @@ The new native renderer receives functional browser checks for source-bound hist
 The expanded chart now includes selected-source density overlays and browser-local support/resistance annotations, entered by price or native plot click. Functional checks passed at 1280/390/320px for request deduplication, visible-chart priority, independent candle proof, annotation source isolation, storage/reload/deletion, native price lines and fit, expired-density labels, confirmed removal, and modal/table polling coordination. The same synthetic 1.2-second response delay produced six visible plots in 6,233ms before the scheduling change and 3,732ms after it. This is a local scheduling comparison, not a live upstream benchmark.
 
 **Chart-level finish verdict: passed.** Root reviewed `artifacts/chart-levels-{1280,390,320}.png`, completed one grouped correction and one confirmation batch, and found no page/dialog overflow or browser errors. Gold resistance and violet support use the existing graphite control hierarchy; density freshness is written beside the color cue. No further visual polish loop was run. The captures are isolated synthetic evidence and no raster ships.
+
+## Directional-alert and adaptive-refresh verification
+
+The initial directional-alert functional batch passed at 1280/390/320px, including the new direction/evidence controls and the retained alerts workflow. The independent finish review requested one bounded correction: the immediate archive copy said that a recommendation had ended while its event could still be current. Its proof now says “история — сохранённое наблюдение”; the muted history badge and absent current recommendation remain. One confirmation batch completed at all three widths; it resumed at 320px after an intermittent navigation interruption using the unchanged locator and timeout. All functional checks passed, with no browser errors or POST commands.
+
+**Directional-alert finish verdict: passed; disposition: ship for the scoped archive-copy fix.** The independent final review found neutral archived LONG/SHORT counterparts while the current event stayed active, no regression in current labels, reasons, invalidation or responsive layout, and no remaining issue. This verdict is scoped to the reviewed correction and is not inherited from earlier extension verdicts. No further visual polish loop was run.
+
+Adaptive automatic boundary refresh, bounded publication retry and recovery passed browser checks at 1280/390/320px, as did the existing chart-level regression suite. The exchange-data backend suite passed 27 tests and the chart scheduler suite passed eight. These functional checks cover the refresh extension separately; they do not expand the independent visual verdict beyond its scored copy fix.
+
+The current captures are `artifacts/recommendation-alerts-{1280,390,320}.png`, generated from isolated synthetic fixtures. They establish interface/state evidence only. No raster ships. The DESIGN.md frontmatter and incumbent identity are preserved; the schemaVersion 2 sidecar is retained unchanged. Its older four-page narrative and navigation sample are pre-existing documentation drift, outside this bounded extension.

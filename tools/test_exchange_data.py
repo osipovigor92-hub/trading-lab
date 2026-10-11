@@ -123,6 +123,16 @@ def await_snapshot(function, expected="ok", *, updated_after=None):
     raise AssertionError(f"snapshot did not become {expected}: {packet}")
 
 
+def await_idle(adapter):
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        with adapter._lock:
+            if not adapter._outstanding:
+                return
+        time.sleep(0.002)
+    raise AssertionError("adapter worker did not finish")
+
+
 class AdapterTests(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
@@ -171,6 +181,8 @@ class AdapterTests(unittest.TestCase):
                     self.assertEqual(packet["candles"][-1]["turnover"], 123)
                     self.assertLess(packet["candle_end"], self.clock.now)
                     self.assertEqual(packet["candle_end"], packet["candles"][-1]["t"] + int(interval) * 60)
+                    self.assertEqual(packet["next_refresh_at"],
+                                     min(self.clock.now+30, packet["candle_end"]+int(interval)*60+2))
                     query = [call[2] for call in self.fixture.calls if call[1] == PATHS[exchange][2]][-1]
                     native = query.get("interval", query.get("bar", query.get("granularity")))
                     if interval in ("240", "1440"):
@@ -385,7 +397,7 @@ class AdapterTests(unittest.TestCase):
         self.assertGreater(latest["source_ts"], original["source_ts"])
 
     def test_catalog_and_chart_ttls_and_new_close_invalidate_cache(self):
-        for kind, ttl, call in (("catalog", 45, lambda: self.adapter.exchange_snapshot("binance")),
+        for kind, ttl, call in (("catalog", 5, lambda: self.adapter.exchange_snapshot("binance")),
                                 ("chart", 30, lambda: self.adapter.chart_snapshot("bybit", "BTCUSDT", "1"))):
             packet = await_snapshot(call)
             count = len(self.fixture.calls)
@@ -401,6 +413,166 @@ class AdapterTests(unittest.TestCase):
         if int((self.clock.now - 2) // 60) * 60 > packet["candle_end"]:
             self.assertEqual(call()["status"], "pending")
             self.assertGreater(await_snapshot(call)["candle_end"], packet["candle_end"])
+
+    def test_next_boundary_refreshes_before_chart_ttl_and_preserves_original_pending_stamps(self):
+        boundary = int(self.clock.now//60)*60
+        self.clock.now = boundary+59
+        call = lambda: self.adapter.chart_snapshot("bybit", "BTCUSDT", "1")
+        original = await_snapshot(call)
+        self.assertEqual(original["next_refresh_at"], boundary+62)
+        release = threading.Event()
+        def delayed(exchange, path, params):
+            if path == PATHS[exchange][2]:
+                release.wait(2)
+            return self.fixture.request(exchange, path, params)
+        self.adapter._request = delayed
+        try:
+            self.clock.advance(4)
+            pending = call()
+            self.assertEqual(pending["status"], "pending")
+            self.assertEqual(pending["refresh_reason"], "awaiting_close")
+            self.assertEqual(pending["updated"], original["updated"])
+            self.assertEqual(pending["source_ts"], original["source_ts"])
+            self.assertEqual(pending["candle_end"], original["candle_end"])
+        finally:
+            release.set()
+        current = await_snapshot(call)
+        self.assertEqual(current["candle_end"], original["candle_end"]+60)
+
+    def test_all_venues_short_publication_delay_retries_only_once_per_second_then_recovers(self):
+        for exchange in EXCHANGES:
+            with self.subTest(exchange=exchange):
+                boundary = int(self.clock.now//60)*60
+                self.clock.now = boundary+59
+                call = lambda: self.adapter.chart_snapshot(exchange, "BTCUSDT", "1")
+                original = await_snapshot(call)
+                def unpublished(venue, kind, packet):
+                    if kind != 2:
+                        return packet
+                    rows = packet if venue in ("binance", "gate") else packet["result"]["list"] if venue == "bybit" else packet["data"]
+                    for index, row in enumerate(rows):
+                        opening = row['t'] if venue == "gate" else float(row[0])/1000
+                        if opening == boundary:
+                            if venue == "okx":
+                                row[8] = "0"  # newest expected close still unconfirmed
+                            else:
+                                del rows[index]
+                            break
+                    return packet
+                self.fixture.mutate = unpublished
+                self.clock.advance(4)
+                call()
+                await_idle(self.adapter)
+                pending = call()
+                self.assertEqual(pending["status"], "pending")
+                self.assertTrue(pending["stale"])
+                self.assertIsNone(pending["error"])
+                self.assertEqual(pending["refresh_reason"], "awaiting_close")
+                self.assertEqual(pending["retry_after_seconds"], 1)
+                self.assertEqual(pending["updated"], original["updated"])
+                self.assertEqual(pending["candle_end"], original["candle_end"])
+                reads = lambda: len([c for c in self.fixture.calls if c[0] == exchange and c[1] == PATHS[exchange][2]])
+                count = reads()
+                for _ in range(20):
+                    call()
+                self.clock.advance(.5)
+                call()
+                self.assertEqual(reads(), count, 'polls cannot bypass the publication retry bound')
+                self.clock.advance(.5)
+                call()
+                await_idle(self.adapter)
+                self.assertEqual(reads(), count+1)
+                self.fixture.mutate = None
+                self.clock.advance(1)
+                latest = await_snapshot(call)
+                self.assertEqual(latest["candle_end"], original["candle_end"]+60)
+                self.assertTrue(all(c["t"]+60 <= latest["candle_end"] for c in latest["candles"]))
+
+    def test_publication_delay_does_not_hide_older_gaps_rollbacks_or_prolonged_missing_close(self):
+        boundary = int(self.clock.now//60)*60
+        self.clock.now = boundary+59
+        call = lambda: self.adapter.chart_snapshot("binance", "BTCUSDT", "1")
+        original = await_snapshot(call)
+        self.fixture.mutate = lambda ex, kind, packet: packet[:-2] if kind == 2 else packet
+        self.clock.advance(4)
+        call()
+        await_idle(self.adapter)
+        self.assertEqual(call()["refresh_reason"], "awaiting_close")
+        self.clock.advance(8)
+        call()
+        await_idle(self.adapter)
+        stale = call()
+        self.assertEqual(stale["status"], "error")
+        self.assertIsNone(stale["refresh_reason"])
+        self.assertEqual(stale["retry_after_seconds"], 5)
+        self.assertEqual(stale["updated"], original["updated"])
+
+        self.fixture.mutate = None
+        self.clock.now = boundary+63
+        current = self.adapter.fetch_chart("bybit", "BTCUSDT", "1")
+        def older(ex, kind, packet):
+            if kind == 2:
+                packet['result']['list'] = packet['result']['list'][2:]
+            return packet
+        self.fixture.mutate = older
+        with self.assertRaisesRegex(ValueError, "backwards"):
+            self.adapter.fetch_chart("bybit", "BTCUSDT", "1")
+        self.assertEqual(current["candle_end"], boundary+60)
+        self.fixture.mutate = lambda ex, kind, packet: packet[:-3] if kind == 2 else packet
+        with self.assertRaisesRegex(ValueError, "stale"):
+            self.adapter.fetch_chart("binance", "BTCUSDT", "1")
+
+    def test_close_published_after_short_window_is_verified_without_extra_artificial_backoff(self):
+        boundary = int(self.clock.now//60)*60
+        self.clock.now = boundary+59
+        call = lambda: self.adapter.chart_snapshot('binance', 'BTCUSDT', '1')
+        original = await_snapshot(call)
+        self.fixture.mutate = lambda ex, kind, packet: packet[:-2] if kind == 2 else packet
+        self.clock.advance(4)
+        call()
+        await_idle(self.adapter)
+        self.assertEqual(call()['refresh_reason'], 'awaiting_close')
+        self.fixture.mutate = None
+        self.clock.advance(8)
+        latest = await_snapshot(call)
+        self.assertEqual(latest['candle_end'], original['candle_end']+60)
+        self.assertGreater(latest['updated'], original['updated'])
+
+    def test_new_close_publication_window_does_not_relax_other_series_validation(self):
+        self.clock.now = int(self.clock.now//60)*60+3
+        for mutation in ('gap', 'duplicate', 'nan', 'future'):
+            self.clock.now = int(self.clock.now//60)*60+3
+            def broken(ex, kind, packet):
+                if kind != 2:
+                    return packet
+                del packet[-2]  # expected newest close missing, within grace
+                if mutation == 'gap':
+                    del packet[30]
+                elif mutation == 'duplicate':
+                    packet[30] = deepcopy(packet[31])
+                elif mutation == 'nan':
+                    packet[30][5] = 'NaN'
+                else:
+                    packet[-1][0] += 600_000
+                return packet
+            self.fixture.mutate = broken
+            call = lambda: self.adapter.chart_snapshot('binance', 'BTCUSDT', '1')
+            with self.subTest(mutation=mutation):
+                call()
+                await_idle(self.adapter)
+                failed = call()
+                self.assertEqual(failed['status'], 'error')
+                self.assertIsNone(failed['refresh_reason'])
+                self.assertGreater(failed['retry_after_seconds'], 1)
+                self.clock.advance(6)
+        self.clock.now = int(self.clock.now//60)*60+3
+        def old_unconfirmed(ex, kind, packet):
+            if kind == 2:
+                packet['data'][30][8] = '0'
+            return packet
+        self.fixture.mutate = old_unconfirmed
+        with self.assertRaisesRegex(ValueError, 'historical candle is unconfirmed'):
+            self.adapter.fetch_chart('okx', 'BTCUSDT', '1')
 
     def test_current_chart_refresh_retains_proof_but_receipt_age_is_bounded(self):
         call = lambda: self.adapter.chart_snapshot("bybit", "BTCUSDT", "5")

@@ -84,7 +84,7 @@
     });
     plot.append(watermark,empty);
     let source='', period=PERIODS[String(options.interval)]||300, bars=[], byTime=new Map(), selectedTime=null;
-    let volume=null, indicatorLines=[], disposed=false, confirmed=false, fingerprint='';
+    let volume=null, indicatorLines=[], disposed=false, confirmed=false, updating=false, fingerprint='';
     const priceLines=new Map();
     let initial={exchange:options.exchange||'',symbol:options.symbol||'',interval:String(options.interval||'5')};
     function getViewport() {
@@ -102,7 +102,7 @@
     }
     function showReadout(time=selectedTime) {
       const b=byTime.get(time)||bars.at(-1);
-      sourceLabel.textContent=(initial.exchange ? initial.exchange.toUpperCase()+' · ' : '')+initial.symbol+' · '+(LABELS[initial.interval]||initial.interval)+(confirmed?'':' · не подтверждено');
+      sourceLabel.textContent=(initial.exchange ? initial.exchange.toUpperCase()+' · ' : '')+initial.symbol+' · '+(LABELS[initial.interval]||initial.interval)+(confirmed?'':updating?' · обновляем закрытую свечу':' · не подтверждено');
       host.dataset.chartConfirmed=String(confirmed);
       host.classList.toggle('is-unconfirmed',!confirmed);
       timeLabel.textContent=b?utc(b.time):'—';
@@ -188,6 +188,7 @@
       watermark.textContent=identity.symbol.replace(/USDT$/,'')+' / USDT';
       const parsed=Object.hasOwn(PERIODS,identity.interval)?barsFrom(packet,period):null;
       confirmed=!!parsed && settings.confirmed===true && packet.status==='ok' && !packet.stale && !packet.refresh_error;
+      updating=!!parsed && !confirmed && settings.updating===true && !packet.error && !packet.refresh_error;
       const wantedVolume=settings.volume??options.volume??true;
       if (wantedVolume && !volume) {
         volume=chart.addSeries(L.HistogramSeries,{priceFormat:{type:'volume'},priceLineVisible:false,lastValueVisible:false},1);

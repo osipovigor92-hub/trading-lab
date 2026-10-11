@@ -80,11 +80,13 @@ class IndicatorTests(unittest.TestCase):
         self.assertTrue(result['eligible'])
         self.assertLessEqual(result['extension_atr'], 1.5)
         self.assertEqual(result['signal_id'], 'BTCUSDT:breakout_up:1:10800')
+        self.assertEqual(result['recommendation']['direction'], 'LONG')
         self.assertEqual(sum(part['points'] for part in result['score_components']), result['score'])
         self.assertEqual(sum(part['max'] for part in result['score_components']), 100)
         values[-1].update(open=104, close=104, high=104.2, low=103.8, turnover=2080)
         result = selection.assistant(quote(), stamp, packet(values), stamp)
         self.assertEqual(result['setup'], 'watch')
+        self.assertIsNone(result['recommendation'])
         self.assertTrue(any('не догонять' in reason for reason in result['reasons']))
         values[-2].update(open=100.5, close=100.5, high=100.7, low=100.3, turnover=2010)
         values[-1].update(open=101, close=101, high=101.2, low=100.8, turnover=2020)
@@ -101,8 +103,10 @@ class IndicatorTests(unittest.TestCase):
             self.assertIsNone(value['score'])
             self.assertIsNone(value['signal_id'])
             self.assertEqual(value['indicators'], {})
+            self.assertIsNone(value['recommendation'])
         value = selection.assistant(quote(), stamp, chart, stamp, quote_available=False)
         self.assertEqual(value['status'], 'pending')
+        self.assertIsNone(value['recommendation'])
         zero = bars([100] * 60)
         for bar in zero: bar['volume'] = bar['turnover'] = 0
         chart = packet(zero)
@@ -117,6 +121,43 @@ class IndicatorTests(unittest.TestCase):
             self.assertEqual(value['status'], 'ok')
             self.assertFalse(value['eligible'])
             self.assertEqual(value['setup'], 'watch')
+            self.assertIsNone(value['recommendation'])
+
+    def test_recommendations_match_real_closed_setups_and_disclose_only_observed_direction(self):
+        for setup, direction in (('breakout_up', 'LONG'), ('breakout_down', 'SHORT'),
+                                 ('momentum_up', 'LONG'), ('momentum_down', 'SHORT')):
+            with self.subTest(setup=setup):
+                upward = direction == 'LONG'
+                values = bars()
+                if setup.startswith('breakout_'):
+                    closing = 100.5 if upward else 99.5
+                    values[-1].update(open=closing, close=closing, high=closing+.2, low=closing-.2, turnover=closing*20)
+                else:
+                    values = bars([100+index if upward else 300-index for index in range(180)])
+                    for bar in values:
+                        bar['high'] = bar['close'] + (2 if upward else .2)
+                        bar['low'] = bar['close'] - (.2 if upward else 2)
+                chart = packet(values)
+                value = selection.assistant(quote(), chart['updated'], chart, chart['updated'])
+                self.assertEqual(value['setup'], setup)
+                recommendation = value['recommendation']
+                self.assertEqual(recommendation['direction'], direction)
+                self.assertEqual(recommendation['setup'], setup)
+                self.assertEqual(recommendation['exchange'], 'bybit')
+                self.assertEqual(recommendation['timeframe'], '1')
+                self.assertEqual(recommendation['signal_id'], value['signal_id'])
+                self.assertEqual(recommendation['candle_end'], chart['candle_end'])
+                self.assertEqual(recommendation['expires'], chart['updated']+45)
+                self.assertIn('RVOL', recommendation['reason'])
+                self.assertIn('1,5', recommendation['invalidation'])
+                self.assertIn('спред', recommendation['invalidation'])
+                self.assertTrue({'entry', 'stop', 'target', 'take_profit', 'stop_loss'}.isdisjoint(recommendation))
+                if setup.startswith('breakout_'):
+                    self.assertIn(format(value['breakout_level'], '.8g'), recommendation['invalidation'])
+                else:
+                    self.assertIn('EMA20', recommendation['invalidation'])
+                    self.assertIn('VWAP60', recommendation['invalidation'])
+                    self.assertIn('0,2%', recommendation['invalidation'])
 
     def test_direction_is_separate_from_score_and_rsi_is_context(self):
         for direction in ('up', 'down'):
@@ -266,11 +307,21 @@ class AssistantAlertTests(unittest.TestCase):
         self.assertEqual(event['timeframe'], '1')
         self.assertEqual(event['candle_end'], 10800)
         self.assertEqual(event['expires'], self.now + 30)
+        self.assertEqual(event['exchange'], 'bybit')
+        self.assertEqual(event['recommendation']['direction'], 'LONG')
+        self.assertEqual(event['recommendation']['setup'], event['kind'])
+        self.assertEqual(event['recommendation']['expires'], event['expires'])
+        self.assertEqual(event['recommendation']['signal_id'], event['signal_id'])
         for index in range(1, 5):
             self.assertEqual(self.update(now=self.now+index)['cursor'], 1)
         self.assertEqual(self.update(dict(self.chart, refresh_error='outage'))['events'], [])
         self.assertEqual(self.update()['cursor'], 1)
-        self.assertEqual(self.update(now=self.now+31)['events'], [])
+        after_event = self.update(now=self.now+31)
+        self.assertEqual(after_event['events'], [])
+        self.assertEqual(after_event['rows'][0]['assistant']['recommendation']['direction'], 'LONG',
+                         'ongoing proof survives the event notification without repeating it')
+        expired = self.alerts.snapshot(self.key, self.now+46)
+        self.assertIsNone(expired['rows'][0]['assistant']['recommendation'])
         archived = self.alerts.scopes[self.key]['events'][0]
         self.assertEqual(archived['time'], self.now, 'freshness never rewrites the original event time')
 
@@ -287,14 +338,34 @@ class AssistantAlertTests(unittest.TestCase):
         chart['indicators']['window_end'] += 60
         self.assertEqual(self.update(chart)['cursor'], 1)
         self.assertEqual(self.update(chart)['events'], [])
+        self.assertEqual(self.update(chart)['rows'][0]['assistant']['recommendation']['direction'], 'LONG')
 
     def test_partial_chart_and_source_rollback_do_not_restart_episode(self):
         self.assertEqual(self.update()['cursor'], 1)
         self.assertEqual(self.update(dict(self.chart, indicators=None))['events'], [])
         self.assertEqual(self.update()['cursor'], 1)
         old = dict(self.chart, updated=self.now-1)
-        self.assertEqual(self.update(old)['events'], [])
+        rollback = self.update(old)
+        self.assertEqual(rollback['events'], [])
+        self.assertEqual(rollback['rows'], [], 'older generations cannot become current rows')
+        rejected = self.alerts._update_assistant(self.alerts.scopes[self.key], quote(), self.tickers,
+                                                old, self.filters, self.now)
+        self.assertEqual(rejected['status'], 'pending')
+        self.assertIsNone(rejected['recommendation'])
         self.assertEqual(self.update()['cursor'], 1)
+
+    def test_recommendation_expiry_uses_old_quote_proof_and_liquidity_loss_removes_direction(self):
+        self.tickers['updated'] = self.now-44
+        result = self.update()
+        event = result['events'][0]
+        self.assertEqual(event['recommendation']['expires'], self.now+1)
+        self.assertEqual(event['expires'], self.now+1)
+        self.tickers['updated'] = self.now
+        self.tickers['rows'][0]['spread'] = .04
+        result = self.update()
+        self.assertEqual(result['events'], [])
+        self.assertEqual(result['rows'][0]['assistant']['setup'], 'watch')
+        self.assertIsNone(result['rows'][0]['assistant']['recommendation'])
 
     def test_breakout_is_inside_a_continuing_momentum_episode(self):
         momentum = copy.deepcopy(self.chart)

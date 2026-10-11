@@ -22,7 +22,7 @@ packets or raise. They are for workers, diagnostics and fixtures; request handle
 must use the snapshot methods. Direct fetches share the two-fetch semaphore.
 
 The service has two worker threads, at most four outstanding jobs and 48 cache
-entries per kind. Catalog TTL is 45 seconds, chart TTL 30 seconds and book TTL
+entries per kind. Catalog TTL is 5 seconds, chart TTL 30 seconds and book TTL
 5 seconds. At most two outstanding jobs may be catalogs/books, reserving two
 admission slots for charts during a density scan. HTTP concurrency remains two.
 Instrument metadata is cached for 300 seconds; Bybit pagination is
@@ -41,7 +41,7 @@ when retained data is returned during a refresh.
 | Kind | Verified contents |
 | --- | --- |
 | Catalog | `rows`: symbol, price, change24 in percent, turnover24 in USDT, volume24 in base units, trades24; compatibility aliases turnover/change |
-| Chart | symbol, native_symbol, interval, candle_end; candles with t/open/high/low/close/volume/turnover; metrics and metrics_interval |
+| Chart | symbol, native_symbol, interval, candle_end; candles with t/open/high/low/close/volume/turnover; metrics and metrics_interval; next_refresh_at |
 | Book | symbol, native_symbol; bids descending and asks ascending, `[decimal price string, base quantity number]`; midpoint price; coverage.bid_min / coverage.ask_max as exact price strings |
 
 Unprovided trade counts are `null`. A successful catalog is ordered by decreasing
@@ -65,6 +65,23 @@ seconds. Consumers can show that history, but must not treat it as new evidence.
 The density observer may inspect retained data during an ordinary refresh only
 within its own actual-source-age guard; repeated source timestamps never provide
 a second observation. Closing the service stops new work.
+
+Chart `next_refresh_at` is the earlier of receipt + 30 seconds and the next
+closed boundary + the two-second grace. It is a suggested verification time,
+not an exchange timestamp or proof of a new candle. On every snapshot a new
+expected boundary immediately triggers revalidation even before the TTL.
+
+A continuous response exactly one closed bar behind during seconds 2–10 of a
+new boundary is a bounded publication wait. For OKX, only the expected newest
+close may still have `confirm=0` in that window; it is excluded, never promoted
+to a completed candle. The snapshot stays `pending`, `stale: true`, and reports
+`refresh_reason: "awaiting_close"` and `retry_after_seconds`. Retry admission is
+at most once per second per key, only when a consumer requests a snapshot;
+workers do not loop or sleep. Existing timestamps and candles remain unchanged.
+After the ten-second window the absent close is an error; an already-due
+request may verify recovery immediately. A continued absence applies the usual
+five-second retry. Missing older bars, invalid values, source rollback and HTTP
+failures never receive this publication-wait exemption.
 
 ## Units and upstream endpoints
 
@@ -144,12 +161,14 @@ measurements, not entry recommendations or return predictions.
 
 ## Checks
 
-Run `python tools/test_exchange_data.py` with Python 3. The 22 offline tests
+Run `python tools/test_exchange_data.py` with Python 3. The 27 offline tests
 cover all five venues, six intervals, UTC daily alignment and long-period close
 grace, quantity conversions, unavailable counts,
 estimated turnover, malformed/stale data, rollback protection, tiny numeric
 prices, bounded proof during revalidation, immediate boundary/error invalidation,
-cache refresh/failure/recovery, and chart admission during busy density scans. No test
+cache refresh/failure/recovery, new-boundary scheduling, bounded publication
+retry/recovery on all five venues, strict validation during that window, and
+chart admission during busy density scans. No test
 contacts the internet.
 
 A separate read-only live public probe on 2026-10-11 returned eligible catalogs

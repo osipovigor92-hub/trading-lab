@@ -1,7 +1,26 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {observationFeed,currentEvents,consume,archive}=require('../src/trading-panel/fresh-alerts.js');
+const {observationFeed,currentEvents,consume,archive,signalDirection,recommendation,currentRecommendation,eventTitle}=require('../src/trading-panel/fresh-alerts.js');
 const event=(sequence=1)=>({id:'epoch:'+sequence,sequence,symbol:'BTCUSDT',kind:'ready',label:'Кандидат готов',detail:'Все проверки',time:1000,expires:1008,sources:{quote:1000,chart:1000,candle:980,book:1000,fetched:1000}});
 const packet=(events=[event()],cursor=1)=>({status:'ok',epoch:'epoch',scope:'filters',updated:1000,cursor,events});
+const signal=(kind='momentum_up')=>({...event(),kind,exchange:'bybit',setup:kind,signal_id:'BTCUSDT:'+kind+':1:960',candle_end:960,sources:{quote:1000,chart:1000,candle:960},
+ recommendation:{direction:kind.endsWith('_up')?'LONG':'SHORT',setup:kind,exchange:'bybit',timeframe:'1',signal_id:'BTCUSDT:'+kind+':1:960',candle_end:960,expires:1008,reason:'EMA и объём подтверждены',invalidation:'Закрытие вернулось за EMA20'}});
+
+test('only confirmed directional setups carry matching source-bound recommendations',()=>{
+ for(const kind of ['breakout_up','momentum_up','breakout_down','momentum_down']){const s=signal(kind),direction=kind.endsWith('_up')?'LONG':'SHORT';assert.equal(signalDirection(kind),direction);assert.equal(recommendation(s,1000).direction,direction);assert.equal(eventTitle(s,true,1000),'Рекомендация '+direction);assert.equal(eventTitle(s,false,1000),direction+' · история');}
+ for(const kind of ['ready','near_level','watch','waiting','entry'])assert.equal(recommendation({...signal(),kind},1000),null);
+ const s=signal();for(const change of [{direction:'SHORT'},{setup:'momentum_down'},{exchange:'binance'},{timeframe:'5'},{signal_id:'other'},{candle_end:900},{reason:''},{invalidation:''},{expires:999}])assert.equal(recommendation({...s,recommendation:{...s.recommendation,...change}},1000),null);
+ assert.equal(recommendation({...s,exchange:'okx'},1000),null);assert.equal(eventTitle({...s,recommendation:null},true,1000),'LONG · сценарий');
+ assert.equal(recommendation({...s,symbol:'ETHUSDT'},1000),null);assert.equal(recommendation({...s,sources:{...s.sources,candle:980}},1000),null);
+ for(const source of ['quote','chart','candle'])assert.equal(recommendation({...s,sources:{...s.sources,[source]:800}},1000),null);
+});
+
+test('current recommendation survives event expiry only with independently fresh assistant proof',()=>{
+ const s=signal(),row={symbol:'BTCUSDT',assistant:{...s,kind:undefined,status:'ok',eligible:true,recommendation:{...s.recommendation,expires:1045}}};
+ assert.equal(currentRecommendation(row,1009).direction,'LONG');assert.deepEqual(currentEvents(packet([s]),1009),[],'expired event is historical');
+ for(const change of [{status:'pending'},{eligible:false},{setup:'watch'},{recommendation:null}])assert.equal(currentRecommendation({...row,assistant:{...row.assistant,...change}},1000),null);
+ assert.equal(currentRecommendation({...row,symbol:'ETHUSDT'},1000),null);
+ assert.equal(currentRecommendation(row,1046),null);assert.equal(currentRecommendation({...row,assistant:{...row.assistant,sources:{...s.sources,quote:900}}},1000),null);
+});
 test('visible observations survive expiry and connection loss without claiming freshness',()=>{
  const history=archive([], [event()],1000);
  assert.equal(observationFeed(history,packet(),1000)[0].live,true);
