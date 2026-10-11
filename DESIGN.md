@@ -83,7 +83,7 @@ components:
 
 # Design System: Trading Lab
 
-<!-- Extracted from the final CSS cascade and synthetic preview captures on 2026-10-10. Root's bounded visual review passed at 1280, 390 and 320px on all four pages. -->
+<!-- Shared identity extracted from the CSS cascade and synthetic previews. The five-page chart/density extension passed its bounded review; native interactive charts receive a separate verification record below. -->
 
 ## Overview
 
@@ -107,6 +107,8 @@ The frontmatter records the final cascade: `screener.css` overrides the global p
 
 Primary cyan identifies actions, focus and activity emphasis. Rising green and falling rose express observed direction. They do not grade safety or profitability. Graphite background, panel, control and border tones establish containment; near-white text and muted text establish reading priority. The chart uses its own fast EMA, slow EMA and VWAP colors, named in the legend.
 
+Native exchange plots use a near-black `#101214` field, green `#26a69a` rising candles and red `#ef5350` falling candles. Dotted horizontal grid lines, a right price scale, a colored last-price tag and a restrained symbol watermark follow the requested chart reference. These plot-specific colors preserve the graphite shell and cyan controls.
+
 **The Direction Rule.** Use direction color with a signed value or an explicit setup label; color alone does not explain the observation.
 
 ## Typography
@@ -127,7 +129,7 @@ The default screener view now uses a responsive chart grid within the same marke
 
 ## Elevation & Depth
 
-Depth comes from tonal layering and borders. Panels, selected rows and navigation states have no decorative box shadow. The chart rests on a darker field inside its panel. Focus uses a two-pixel cyan outline with three-pixel offset; this is an interaction cue, not ambient glow. Navigation transitions take 150ms and are disabled with reduced-motion preferences.
+Depth comes from tonal layering and borders. Panels, selected rows and navigation states have no decorative box shadow. The chart rests on a darker field inside its panel. Focus uses a two-pixel cyan outline with three-pixel offset; this is an interaction cue, not ambient glow. Active navigation colors update immediately with the visible page.
 
 ## Shapes
 
@@ -157,6 +159,12 @@ The selected detail groups a price/chart area, current 1m setup, trend, volume/m
 
 Compact filter fields and exchange checkboxes retain their labels. Table, radar and refresh controls expose selected/disabled states. Stable levels are flat rows with dividers; the current table and missing-history disclosure retain source identities. Bid/ask colors always accompany side labels. Unavailable and out-of-depth rows use text status and muted colors; they do not inherit current confirmation. The radar uses authored geometry, a central reference line and keyboard-focusable markers, without decorative effects.
 
+### Interactive exchange charts
+
+Grid tiles and the expanded dialog share the locally served Lightweight Charts renderer. The native plot carries candles, crosshair, right price scale and UTC timeline; its compact readout exposes the hovered candle's OHLC and base volume. The plot preserves room for controls and its visible TradingView attribution. Native tables inside the plot use zero cell padding and neutral backgrounds, so application table styling cannot distort the axes.
+
+The dialog keeps all six periods, zoom/reset controls and optional volume and EMA/VWAP toggles outside the plot. Volume uses a separate pane. A focused chart supports keyboard zoom, pan and latest-candle reset; pointer and touch gestures act within the plot. Historical viewport anchors remain stable across refresh. Unconfirmed sources keep dimmed historical candles and a written status; source or period changes clear the old series while the next packet is pending. Narrow layouts retain locally contained plots and wrapped controls.
+
 ### Observations and PAPER
 
 Observation rows show coin, time and event text. Current versus historical status is written explicitly; historical labels use muted text while the row and coin action remain. PAPER actions use existing button conventions and explicit virtual-position language. Missing server state and pending calculations show an explanation instead of a fabricated result.
@@ -179,3 +187,5 @@ Observation rows show coin, time and event text. Current versus historical statu
 - Don't reintroduce models, journals, Live or execution controls into the five-page navigation.
 
 The chart-grid and densities extension preserves the documented palette and components. The bounded visual review passed after one grouped fix batch and one confirmation batch: 18 synthetic captures cover the chart grid, table, densities and three retained pages at 1280, 390 and 320px, with no page overflow or browser errors. Root inspected the chart grid and densities at desktop/mobile widths and representative retained-page captures. A navigation color transition found in the confirmation batch was corrected and checked through focused functional assertions. These captures establish layout and state presentation, not live market availability.
+
+The subsequent native-chart update passed its own bounded review: 21 synthetic captures cover the five pages, table and expanded chart at 1280/390/320px. Root inspected the default grid and expanded charts at desktop/mobile widths, corrected the hidden-dialog initial width and selected-period accessibility in one grouped fix batch, then completed one confirmation batch. No page/dialog overflow or browser errors remained. Functional browser checks passed for historical OHLCV crosshair, zoom/pan/reset without market requests, the separate volume pane, six periods, source/watch isolation, stale history and UTC viewport preservation across rolling candle windows. No further visual polish loop was run; captures remain synthetic evidence. No raster ships.

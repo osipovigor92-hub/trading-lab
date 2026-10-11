@@ -30,6 +30,18 @@ async function navigate(page,key,width){
     await page.screenshot({path:path.join(root,'artifacts',`assistant-${key}-${width}.png`),fullPage:true});
     evidence.push({width,page:key,overflow:await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)});
     if(key==='market'){
+     await page.locator('.chart-tile').first().getByRole('button',{name:'Развернуть',exact:true}).click();
+     const detail=page.locator('.exchange-chart-dialog');await detail.waitFor({state:'visible'});
+     await detail.locator('.exchange-chart-host[data-chart-confirmed="true"][data-chart-source^="bybit:"]').waitFor();
+     await detail.getByRole('button',{name:'Объём',exact:true}).click();await detail.getByRole('button',{name:'EMA / VWAP',exact:true}).click();
+     await detail.locator('.exchange-chart-host[data-chart-panes="2"]').waitFor();
+     assert.equal(await detail.getByRole('button',{name:'Объём',exact:true}).getAttribute('aria-pressed'),'true');
+     assert.equal(await detail.getByRole('button',{name:'EMA / VWAP',exact:true}).getAttribute('aria-pressed'),'true');
+     assert.equal(await detail.getAttribute('data-exchange'),'bybit');
+     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'horizontal overflow expanded chart at '+width);
+     assert.equal(await detail.evaluate(node=>node.scrollWidth>node.clientWidth),false,'horizontal overflow inside expanded chart at '+width);
+     await page.screenshot({path:path.join(root,'artifacts',`assistant-expanded-chart-${width}.png`),fullPage:true});
+     evidence.push({width,page:'expanded-chart',overflow:false});await detail.getByRole('button',{name:'Закрыть',exact:true}).click();
      await page.locator('#page-market').getByRole('button',{name:'Таблица',exact:true}).click();
      await page.locator('.screener-chart-note[data-status="ok"]').waitFor();
      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'horizontal overflow table at '+width);
@@ -41,6 +53,6 @@ async function navigate(page,key,width){
    assert.deepEqual(errors,[]);await page.close();
   }
   fs.writeFileSync(path.join(root,'artifacts','assistant-visual.json'),JSON.stringify(evidence,null,2));
-  console.log('Visual assistant check passed: five pages at 1280/390/320 px, no overflow or browser errors.');
+  console.log('Visual assistant check passed: 21 synthetic captures of five pages, table and expanded chart at 1280/390/320 px, no overflow or browser errors.');
  }catch(error){console.error(log);throw error;}finally{if(browser)await browser.close();server.kill('SIGTERM');}
 })().catch(error=>{console.error(error);process.exitCode=1;});

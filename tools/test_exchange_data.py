@@ -68,7 +68,8 @@ class Fixture:
                 packet = {"code": "0" if exchange == "okx" else "00000", "requestTime": stamp, "data": rows}
         elif kind == 2:
             raw_unit = params.get("interval", params.get("bar", params.get("granularity")))
-            minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "1H": 60, "1": 1, "5": 5, "15": 15, "60": 60}[raw_unit]
+            minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "1H": 60, "4h": 240, "4H": 240,
+                       "1d": 1440, "1Dutc": 1440, "1": 1, "5": 5, "15": 15, "60": 60, "240": 240, "D": 1440}[raw_unit]
             step = minutes * 60
             boundary = int(self.clock.now // step) * step
             rows = []
@@ -170,6 +171,12 @@ class AdapterTests(unittest.TestCase):
                     self.assertEqual(packet["candles"][-1]["turnover"], 123)
                     self.assertLess(packet["candle_end"], self.clock.now)
                     self.assertEqual(packet["candle_end"], packet["candles"][-1]["t"] + int(interval) * 60)
+                    query = [call[2] for call in self.fixture.calls if call[1] == PATHS[exchange][2]][-1]
+                    native = query.get("interval", query.get("bar", query.get("granularity")))
+                    if interval in ("240", "1440"):
+                        expected = {"binance": ("4h", "1d"), "gate": ("4h", "1d"),
+                                    "bybit": ("240", "D"), "okx": ("4H", "1Dutc"), "bitget": ("4H", "1Dutc")}
+                        self.assertEqual(native, expected[exchange][interval == "1440"])
                     metric = "natr1_30" if interval == "1" else "natr5_14" if interval == "5" else None
                     if metric:
                         self.assertEqual(packet["metrics"][metric], 4)
@@ -177,6 +184,42 @@ class AdapterTests(unittest.TestCase):
                     else:
                         self.assertTrue(all(value is None for value in packet["metrics"].values()))
                     json.dumps(packet, allow_nan=False)
+
+    def test_long_interval_freshness_uses_closed_utc_boundary_and_close_grace(self):
+        for exchange in EXCHANGES:
+            for interval in ("240", "1440"):
+                with self.subTest(exchange=exchange, interval=interval):
+                    step = int(interval)*60
+                    boundary = int(self.clock.now//step)*step
+                    self.clock.now = boundary+step-1
+                    before = self.adapter.fetch_chart(exchange, "BTCUSDT", interval)
+                    self.assertEqual(before["candle_end"], boundary)
+                    # A current daily series can have a day-old last closed bar.
+                    # Freshness follows its expected boundary, not quote age.
+                    self.assertGreater(self.clock.now-before["source_ts"], 90)
+                    self.clock.now = boundary+step+1
+                    grace = self.adapter.fetch_chart(exchange, "BTCUSDT", interval)
+                    self.assertEqual(grace["candle_end"], boundary)
+                    self.clock.now += 2
+                    closed = self.adapter.fetch_chart(exchange, "BTCUSDT", interval)
+                    self.assertEqual(closed["candle_end"], boundary+step)
+
+                    def old_series(venue, kind, packet):
+                        if kind != 2:
+                            return packet
+                        rows = packet if venue in ("binance", "gate") else packet["result"]["list"] if venue == "bybit" else packet["data"]
+                        for row in rows:
+                            if venue == "gate":
+                                row["t"] -= 2*step
+                            else:
+                                row[0] = str(int(row[0])-2*step*1000)
+                        return packet
+                    self.fixture.mutate = old_series
+                    try:
+                        with self.assertRaises(ValueError):
+                            self.adapter.fetch_chart(exchange, "BTCUSDT", interval)
+                    finally:
+                        self.fixture.mutate = None
 
     def test_input_and_endpoint_allowlists_before_http(self):
         for method, args in ((self.adapter.fetch_catalog, ("https://evil.test",)),

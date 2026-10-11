@@ -18,7 +18,7 @@ from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 
 EXCHANGES = ("binance", "bybit", "okx", "gate", "bitget")
-INTERVALS = ("1", "5", "15", "60")
+INTERVALS = ("1", "5", "15", "60", "240", "1440")
 ROOTS = {
     "binance": "https://fapi.binance.com",
     "bybit": "https://api.bybit.com",
@@ -327,19 +327,21 @@ class ExchangeData:
         instrument = self._instrument(exchange, symbol)
         native, factor = instrument["native"], instrument["factor"]
         step = int(interval) * 60
-        unit = {"1": "1m", "5": "5m", "15": "15m", "60": "1h"}[interval]
+        unit = {"1": "1m", "5": "5m", "15": "15m", "60": "1h", "240": "4h", "1440": "1d"}[interval]
+        # UTC daily bars keep every venue aligned to the same 86,400-second boundary.
+        uppercase_unit = {"60": "1H", "240": "4H", "1440": "1Dutc"}.get(interval, unit)
         if exchange == "binance":
             raw = self._json(exchange, PATHS[exchange][2], {"symbol": native, "interval": unit, "limit": 181})
         elif exchange == "bybit":
-            response = self._json(exchange, PATHS[exchange][2], {"category": "linear", "symbol": native, "interval": interval, "limit": 181})
+            response = self._json(exchange, PATHS[exchange][2], {"category": "linear", "symbol": native, "interval": "D" if interval == "1440" else interval, "limit": 181})
             self._stamp(response["time"], 90)
             raw = response["result"]["list"]
         elif exchange == "okx":
-            raw = self._json(exchange, PATHS[exchange][2], {"instId": native, "bar": "1H" if interval == "60" else unit, "limit": 181})["data"]
+            raw = self._json(exchange, PATHS[exchange][2], {"instId": native, "bar": uppercase_unit, "limit": 181})["data"]
         elif exchange == "gate":
             raw = self._json(exchange, PATHS[exchange][2], {"contract": native, "interval": unit, "limit": 181})
         else:
-            response = self._json(exchange, PATHS[exchange][2], {"symbol": native, "productType": "USDT-FUTURES", "granularity": "1H" if interval == "60" else unit, "limit": 181, "kLineType": "MARKET"})
+            response = self._json(exchange, PATHS[exchange][2], {"symbol": native, "productType": "USDT-FUTURES", "granularity": uppercase_unit, "limit": 181, "kLineType": "MARKET"})
             self._stamp(response["requestTime"], 90)
             raw = response["data"]
         now = self._wall()

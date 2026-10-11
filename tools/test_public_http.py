@@ -46,8 +46,10 @@ class PublicHTTPTests(unittest.TestCase):
     def test_exchange_identity_and_interval_are_forwarded(self):
         self.assertEqual(self.request('/api/exchange-screener?exchange=gate')[0], 200)
         self.adapter.exchange_snapshot.assert_called_with('gate')
-        self.assertEqual(self.request('/api/exchange-chart?exchange=okx&symbol=BTCUSDT&interval=15')[0], 200)
-        self.adapter.chart_snapshot.assert_called_with('okx', 'BTCUSDT', '15')
+        for interval in ('1', '5', '15', '60', '240', '1440'):
+            with self.subTest(interval=interval):
+                self.assertEqual(self.request('/api/exchange-chart?exchange=okx&symbol=BTCUSDT&interval='+interval)[0], 200)
+                self.adapter.chart_snapshot.assert_called_with('okx', 'BTCUSDT', interval)
 
     def test_duplicate_unknown_oversize_queries_and_invalid_host_are_rejected(self):
         for path in ('/api/densities?watch=A&watch=B', '/api/exchange-chart?exchange=bybit&unknown=x', '/api/exchange-screener?symbol=BTCUSDT', '/api/densities?symbols='+'A'*3001):

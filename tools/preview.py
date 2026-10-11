@@ -18,6 +18,7 @@ import selection
 from market_alerts import ASSISTANT_KINDS, MarketAlerts
 from manual_paper import ManualPaper
 from densities import EXCHANGES, density_id
+from exchange_data import INTERVALS as EXCHANGE_INTERVALS
 spec = importlib.util.spec_from_file_location('lab_report', ROOT/'src/trading-report/report.py')
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
@@ -172,8 +173,18 @@ def exchange_fixture(path, query):
                      turnover_estimated=False, funding_rate=row.get('funding'), quote_volume=row['turnover']) for row in rows]
         return dict(packet,exchange=exchange,rows=rows,demo=True,source='Synthetic preview',
                     source_ts=packet['updated'],timestamp_origin='demo',stale=False)
-    chart = market_fixture('/api/market-chart', query)
     interval = query.get('interval', ['5'])[0]
+    symbol = query.get('symbol', ['BTCUSDT'])[0]
+    quote = next((row['price'] for row in packet['rows'] if row['symbol'] == symbol), None)
+    if interval not in EXCHANGE_INTERVALS or quote is None:
+        return dict(status='error',exchange=exchange,symbol=symbol,interval=interval,updated=now,
+                    error='Invalid demo symbol or interval',demo=True)
+    if interval in market.INTERVALS:
+        chart = market_fixture('/api/market-chart', query)
+    else:
+        bars = demo_candles(symbol,quote,interval,now)
+        chart = dict(status='ok',symbol=symbol,interval=interval,updated=now,
+                     candle_end=bars[-1]['time']+int(interval)*60,candles=bars)
     metrics = dict(natr5_14=None, natr1_30=None, change5=None)
     if chart.get('status') == 'ok' and interval in ('1', '5'):
         bars = chart['candles']
@@ -188,6 +199,51 @@ def exchange_fixture(path, query):
                 candles=[dict(bar,t=bar['time']) for bar in chart.get('candles',[])],
                 metrics=metrics,metrics_interval=interval,demo=True,source='Synthetic preview',
                 source_ts=chart.get('candle_end'),timestamp_origin='demo',stale=False)
+
+
+def demo_candles(symbol, price, interval, now):
+    """Deterministic, invented OHLC paths for visual checks, never market history."""
+    # Distinct regimes make chart scales, pullbacks and volume bars testable.
+    profiles = {
+        'BTCUSDT': ((-.024,-.013,-.020,.008,.018,.011,.023,.018,.029), .0021, 4, ((62,1.8),(121,1.1))),
+        'ETHUSDT': ((.038,.028,.037,.008,-.005,.003,-.018,-.004,0), .0030, 95, ((76,1.3),(139,1.7))),
+        'SOLUSDT': ((-.033,-.025,-.031,-.027,-.018,.004,.019,.008,.021), .0040, 3000, ((110,2.5),(146,1.2))),
+        'ONDOUSDT': ((.001,-.018,.007,.052,.072,.043,.006,-.028,-.009), .0062, 330000, ((74,2.8),(124,1.8))),
+        'LINKUSDT': ((.006,-.009,.009,-.007,.005,-.010,.006,-.004,.001), .0019, 58000, ((42,.9),(153,1.1))),
+        'AVAXUSDT': ((.058,.048,.058,.027,.039,.019,-.012,.009,.016), .0045, 41000, ((123,2.1),(153,1.5))),
+    }
+    anchors, noise, minute_volume, bursts = profiles[symbol]
+    step = int(interval)*60
+    end = (now-2)//step*step
+    phase = sum((i+1)*ord(char) for i,char in enumerate(symbol))*.013
+    scale = min(4., max(.65, (step/300.)**.35))
+    paths = []
+    for i in range(180):
+        position = i*(len(anchors)-1)/179
+        index = min(len(anchors)-2, int(position))
+        fraction = position-index
+        trend = anchors[index]*(1-fraction)+anchors[index+1]*fraction
+        jitter = noise*(.38*math.sin(i*.27+phase)+.21*math.sin(i*.79+phase)
+                        +.14*math.sin(i*1.61+phase)+.09*math.cos(i*2.37+phase))
+        paths.append((trend+jitter)*scale)
+    # Final synthetic close agrees with the synthetic screener quote.
+    closes = [price*math.exp(value-paths[-1]) for value in paths]
+    previous = closes[0]*(1-.0004*math.sin(phase))
+    bars = []
+    for i,close in enumerate(closes):
+        opening = previous
+        move = abs(math.log(close/opening))
+        wick = noise*scale*(.13+.17*abs(math.sin(i*1.37+phase)))
+        high = max(opening,close)*(1+wick*(.65+.5*abs(math.sin(i*.93+phase))))
+        low = min(opening,close)*(1-wick*(.65+.5*abs(math.cos(i*1.17+phase))))
+        burst = sum(strength*math.exp(-((i-center)/4.)**2) for center,strength in bursts)
+        activity = .68+.55*abs(math.sin(i*.71+phase))+.28*math.sin(i*1.43+phase)
+        activity += .4*min(3.5,move/(noise*scale))+burst
+        volume = minute_volume*(step/60)*max(.25,activity)
+        bars.append(dict(time=end-(180-i)*step,open=opening,close=close,high=high,low=low,
+                         volume=volume,turnover=volume*(opening+close+high+low)/4))
+        previous = close
+    return bars
 
 
 def market_fixture(path, query):
@@ -229,12 +285,7 @@ def market_fixture(path, query):
         return dict(status='error',updated=now,error='Invalid demo symbol')
     price=prices[symbol]
     if path=='/api/market-chart':
-        step=market.INTERVALS[interval];end=now//step*step;bars=[]
-        for i in range(180):
-            center=price*(1+.006*math.sin(i*.35)+.001*math.cos(i*.81))
-            o=center*(1+.0005*math.sin(i));c=center*(1-.0005*math.sin(i))
-            bars.append(dict(time=end-(180-i)*step,open=o,close=c,high=max(o,c)*1.0008,
-                             low=min(o,c)*.9992,volume=1000,turnover=price*1000*(1+.2*math.sin(i))))
+        bars=demo_candles(symbol,price,interval,now)
         return market.chart_analysis(symbol,interval,bars,now)
     bids=[[str(price*(1-.00005-i*.00002)),str((30+i%5)*100/price)] for i in range(80)]
     asks=[[str(price*(1+.00005+i*.00002)),str((35+i%5)*100/price)] for i in range(80)]

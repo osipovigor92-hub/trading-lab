@@ -11,7 +11,8 @@ Use the shared `get_exchange_data()` instance. Its immediate, nonblocking method
 are `exchange_snapshot(exchange)`, `chart_snapshot(exchange, symbol, interval)`
 and `book_snapshot(exchange, symbol)`. Symbols are canonical uppercase names such
 as `BTCUSDT`; `1000` prefixes are retained as part of the exchange instrument
-name. Only string intervals `1`, `5`, `15`, `60` are accepted. A syntactically
+name. Only string intervals `1`, `5`, `15`, `60`, `240`, `1440` are accepted
+(1 minute, 5 minutes, 15 minutes, 1 hour, 4 hours, 1 day). A syntactically
 valid symbol must also occur in the verified active instrument metadata before
 HTTP is sent to its chart or book endpoint.
 
@@ -102,6 +103,16 @@ the most recent interval boundary outside the grace window; crossing a new
 boundary invalidates the cache even before its TTL. Charts are trade-price
 candles rather than mark/index candles.
 
+Daily candles use UTC boundaries on every venue. Binance/Gate receive `1d`,
+Bybit receives `D`, and OKX/Bitget receive `1Dutc` (rather than their local-day
+variant). Four-hour requests use `4h`, `240`, or `4H` according to the venue.
+The two-second grace and expected-boundary check apply to every period; a
+current daily series may have a last closed candle nearly one day old, while
+its HTTP completion is recent. This is different from quote/book freshness.
+See the official [Bybit intervals](https://bybit-exchange.github.io/docs/v5/market/kline),
+[OKX candle periods](https://app.okx.com/docs-v5/en/#rest-api-market-data-get-candlesticks),
+and [Bitget contract candles](https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market).
+
 Book source time must be no more than 15 seconds old; timestamped catalogs have
 a 90-second source guard. Future timestamps beyond three seconds are rejected.
 Older source timestamps cannot replace a previously verified packet. Equal
@@ -122,8 +133,9 @@ measurements, not entry recommendations or return predictions.
 
 ## Checks
 
-Run `python tools/test_exchange_data.py` with Python 3. The 17 offline tests
-cover all five venues, four intervals, quantity conversions, unavailable counts,
+Run `python tools/test_exchange_data.py` with Python 3. The 18 offline tests
+cover all five venues, six intervals, UTC daily alignment and long-period close
+grace, quantity conversions, unavailable counts,
 estimated turnover, malformed/stale data, rollback protection, tiny numeric
 prices, cache refresh/failure/recovery, and bounded work admission. No test
 contacts the internet.
