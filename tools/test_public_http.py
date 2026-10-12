@@ -44,6 +44,11 @@ class PublicHTTPTests(unittest.TestCase):
         self.monitor.request.assert_called_with(exchanges='bybit,okx', symbols='BTCUSDT', watch='okx:BTCUSDT')
         self.assertEqual(self.request('/api/densities?exchanges=bybit&refresh=1')[0], 400)
 
+    def test_overlay_does_not_replace_density_page_scope(self):
+        self.assertEqual(self.request('/api/densities?exchanges=binance&symbols=ETHUSDT&overlay=1')[0], 200)
+        self.monitor.request.assert_called_with(exchanges='binance', symbols='ETHUSDT', overlay=True)
+        self.assertEqual(self.request('/api/densities?overlay=bad')[0], 400)
+
     def test_exchange_identity_and_interval_are_forwarded(self):
         self.assertEqual(self.request('/api/exchange-screener?exchange=gate')[0], 200)
         self.adapter.exchange_snapshot.assert_called_with('gate')
