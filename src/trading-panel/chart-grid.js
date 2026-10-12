@@ -24,6 +24,13 @@
   const hint=finite(p.next_refresh_at)&&p.next_refresh_at>=p.updated&&p.next_refresh_at<=p.updated+30?p.next_refresh_at:boundary;
   return now>=Math.max(last+1,Math.min(last+15,boundary,hint));
  }
+ function fallbackLive(packet,wire,e,s,i,now=Date.now()/1000){
+  const match=packet?.exchange===e&&packet.symbol===s&&packet.interval===i;
+  const b=match&&!packet.error&&!packet.refresh_error?packet.current_candle:null;
+  const usable=b&&fresh(b.received_at,now,10)&&b.timestamp_origin==='receipt'&&b.source_ts===null&&b.closed===false&&b.t===Math.floor(now/PERIODS[i])*PERIODS[i]&&['open','high','low','close'].every(k=>finite(b[k])&&b[k]>0)&&b.low<=Math.min(b.open,b.close)&&b.high>=Math.max(b.open,b.close)&&b.high>=b.low;
+  const candle=wire?.candle||(usable?b:null),quote=wire?.quote||(usable?{price:b.close,received_at:b.received_at,source_ts:null,timestamp_origin:'receipt'}:null);
+  return {exchange:e,symbol:s,interval:i,status:candle||quote?'connected':wire?.status||'unavailable',candle,quote,transport:wire?.candle||wire?.quote?'stream':usable?'rest':null};
+ }
  function natr(bars,period){
   if(!Array.isArray(bars)||bars.length<period+1)return null;
   const tr=bars.slice(1).map((b,i)=>Math.max(b.high-b.low,Math.abs(b.high-bars[i].close),Math.abs(b.low-bars[i].close)));
@@ -42,7 +49,7 @@
  }
  function rankRows(rows,key,packets,exchange,now){return rows.slice().sort((a,b)=>{const x=metricValue(a,key,packets,exchange,now),y=metricValue(b,key,packets,exchange,now);return (x===null)-(y===null)||(y??0)-(x??0)||(b.turnover24||0)-(a.turnover24||0)||a.symbol.localeCompare(b.symbol);});}
  function formatPrice(n){if(!finite(n))return '—';return Math.abs(n)<.00001&&n!==0?n.toLocaleString('ru-RU',{notation:'scientific',maximumSignificantDigits:6}):n.toLocaleString('ru-RU',{maximumFractionDigits:n<1?7:n<100?4:2,minimumFractionDigits:n<1?7:n<100?4:2});}
- const api={validChart,awaitingClose,refreshDue,natr,metricValue,rankRows,formatPrice};if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;scope.LabChartGrid=api;
+ const api={validChart,awaitingClose,refreshDue,fallbackLive,natr,metricValue,rankRows,formatPrice};if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;scope.LabChartGrid=api;
  document.addEventListener('DOMContentLoaded',()=>{
   const page=document.getElementById('page-market');if(!page)return;
   const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;},button=(text,handler,cls='screener-order')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',handler);return b;};
@@ -102,9 +109,9 @@
   }
   async function requestChart(e,s,i){
    const key=e+':'+s+':'+i;if(inFlight.has(key))return;inFlight.add(key);attempts.set(key,Date.now());chartsBusy++;
-   try{let p=await scope.labJson('/api/exchange-chart?'+new URLSearchParams({exchange:e,symbol:s,interval:i}),{fresh:forced.delete(key)},'Свечи');
+   try{let p=await scope.labJson('/api/exchange-chart?'+new URLSearchParams({exchange:e,symbol:s,interval:i,live:needsFallback(e,s,i)?'1':'0'}),{fresh:forced.delete(key)},'Свечи');
     if(p.exchange!==e||p.symbol!==s||p.interval!==i)throw Error('Ответ другой монеты или биржи');
-    failures.delete(key);const prior=packets.get(key);if(!validChart(p,e,s,i)&&prior?.candles?.length)p={...prior,status:p.status==='pending'?'pending':'unavailable',stale:true,pending:p.pending,refreshing:p.refreshing,error:p.error||p.refresh_error||'',refresh_error:p.refresh_error,refresh_reason:p.refresh_reason,retry_after_seconds:p.retry_after_seconds,next_refresh_at:p.next_refresh_at};
+    failures.delete(key);const prior=packets.get(key);if(!validChart(p,e,s,i)&&prior?.candles?.length)p={...prior,status:p.status==='pending'?'pending':'unavailable',stale:true,pending:p.pending,refreshing:p.refreshing,error:p.error||p.refresh_error||'',refresh_error:p.refresh_error,refresh_reason:p.refresh_reason,retry_after_seconds:p.retry_after_seconds,next_refresh_at:p.next_refresh_at,current_candle:p.current_candle};
     packets.delete(key);packets.set(key,p);while(packets.size>60)packets.delete(packets.keys().next().value);
    }catch(error){failures.set(key,error.message||'Биржа не ответила');const p=packets.get(key);if(p)packets.set(key,{...p,status:'unavailable'});}
    finally{chartsBusy--;inFlight.delete(key);if(visible())render();if(dialog.open)renderDialog();pump();}
@@ -112,7 +119,7 @@
   function pump(){
    if(document.hidden)return;
    const jobs=new Map(),now=Date.now();
-   const add=(e,s,i,priority)=>{const key=e+':'+s+':'+i,p=packets.get(key);if(inFlight.has(key))return;const valid=validChart(p,e,s,i);if(!forced.has(key)&&!refreshDue(p,e,s,i,(attempts.get(key)||0)/1000,now/1000,failures.has(key)))return;const rank=priority+(valid?3:0);if(!jobs.has(key)||rank<jobs.get(key).priority)jobs.set(key,{e,s,i,priority:rank,last:attempts.get(key)||0});};
+   const add=(e,s,i,priority)=>{const key=e+':'+s+':'+i,p=packets.get(key);if(inFlight.has(key))return;const valid=validChart(p,e,s,i);const fallback=priority<2&&needsFallback(e,s,i)&&now-(attempts.get(key)||0)>=2000;if(!forced.has(key)&&!fallback&&!refreshDue(p,e,s,i,(attempts.get(key)||0)/1000,now/1000,failures.has(key)))return;const rank=priority+(valid?3:0);if(!jobs.has(key)||rank<jobs.get(key).priority)jobs.set(key,{e,s,i,priority:rank,last:attempts.get(key)||0});};
    if(dialog.open&&detail)add(detail.exchange,detail.symbol,detail.interval,0);
    if(visible()){
     const selected=selectedRows();for(const r of selected)add(exchange,r.symbol,interval,1);
@@ -129,6 +136,8 @@
   dialogTitle.id='exchange-chart-title';dialog.setAttribute('aria-labelledby',dialogTitle.id);dialogHead.append(dialogTitle,close);dialog.append(dialogHead,dialogFrames,dialogTools,dialogHost,dialogNote,tableLink);document.body.append(dialog);
   let detail=null,returnFocus=null;const dialogWidget=scope.LabExchangeChart.create(dialogHost,{symbol:'BTCUSDT',exchange:'bybit',interval:'5',volume:false,indicators:false,onPriceClick:value=>levelTools.placePrice(value)});const levelTools=scope.LabChartLevels.create({tools:dialogTools,after:dialogHost,widget:dialogHost,onChange:renderDialog});
   const streamDisabled=document.body.dataset.demo==='true',stream=scope.LabChartStream.create({disabled:streamDisabled,onUpdate:renderLive});let streamIdentity='';
+  function needsFallback(e,s,i){return !streamDisabled&&!stream.get({exchange:e,symbol:s,interval:i})?.candle;}
+  function displayLive(e,s,i){return fallbackLive(packets.get(e+':'+s+':'+i),stream.get({exchange:e,symbol:s,interval:i}),e,s,i);}
   function syncStreams(){
    const wanted=[];
    const add=(e,s,i,row)=>{const packet=packets.get(e+':'+s+':'+i),native=row?.native_symbol||packet?.native_symbol,source={exchange:e,symbol:s,interval:i,native_symbol:native};if(scope.LabChartStream.validSource(source))wanted.push(source);};
@@ -136,9 +145,9 @@
    const identity=wanted.map(s=>scope.LabChartStream.keyOf(s)).sort().join('|');if(identity===streamIdentity)return;streamIdentity=identity;stream.setSources(wanted);
   }
   function renderLive(){
-   const note=(p,e,s,i,live)=>{const text=chartStatus(p,e,s,i);if(streamDisabled||!live)return text;const sample=live.quote||live.candle;return text+' · '+(sample?'Поток '+new Date((sample.source_ts??sample.received_at)*1000).toLocaleTimeString('ru-RU'):live.status==='connecting'?'Подключаем поток…':'Поток недоступен · проверяем через API');};
-   for(const [symbol,n]of nodes){const live=visible()?stream.get({exchange,symbol,interval}):null;n.widget.setLive(live);n.box.dataset.stream=streamDisabled?'disabled':live?.status||'unavailable';n.note.textContent=note(packets.get(exchange+':'+symbol+':'+interval),exchange,symbol,interval,live);}
-   if(dialog.open&&detail){const live=document.hidden?null:stream.get(detail);dialogWidget.setLive(live);dialogNote.textContent=note(packets.get(detail.exchange+':'+detail.symbol+':'+detail.interval),detail.exchange,detail.symbol,detail.interval,live);}
+   const note=(p,e,s,i,live)=>{const text=chartStatus(p,e,s,i);if(streamDisabled||!live)return text;const sample=live.quote||live.candle;return text+' · '+(sample?(live.transport==='rest'?'API · ':'Поток ')+new Date((sample.source_ts??sample.received_at)*1000).toLocaleTimeString('ru-RU'):live.status==='connecting'?'Подключаем поток…':'Поток недоступен · проверяем через API');};
+   for(const [symbol,n]of nodes){const live=visible()?displayLive(exchange,symbol,interval):null;n.widget.setLive(live);n.box.dataset.stream=streamDisabled?'disabled':live?.status||'unavailable';n.note.textContent=note(packets.get(exchange+':'+symbol+':'+interval),exchange,symbol,interval,live);}
+   if(dialog.open&&detail){const live=document.hidden?null:displayLive(detail.exchange,detail.symbol,detail.interval);dialogWidget.setLive(live);dialogNote.textContent=note(packets.get(detail.exchange+':'+detail.symbol+':'+detail.interval),detail.exchange,detail.symbol,detail.interval,live);}
   }
   for(const [i,label]of [['1','1м'],['5','5м'],['15','15м'],['60','1ч'],['240','4ч'],['1440','1д']]){const b=button(label,()=>{detail.interval=i;renderDialog();syncStreams();renderLive();pump();});b.dataset.interval=i;dialogFrames.append(b);}
   function openChart(d){if(!d||!Object.hasOwn(EXCHANGES,d.exchange)||!symbolOK(d.symbol))return;detail={exchange:d.exchange,symbol:d.symbol,interval:Object.hasOwn(PERIODS,d.interval)?d.interval:'5',density:d.density};returnFocus=document.activeElement;if(!dialog.open)dialog.showModal();document.dispatchEvent(new CustomEvent('lab-chart-overlay',{detail:{open:true}}));levelTools.open({...detail,isOpen:()=>dialog.open});renderDialog();pump();syncStreams();}

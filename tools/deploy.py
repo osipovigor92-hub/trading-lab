@@ -14,7 +14,7 @@ from urllib.request import urlopen
 
 REPO=Path(__file__).resolve().parents[1]
 TRACK=Path('/var/lib/trading-lab-deploy')
-ALLOWED={'trading-panel','trading-report','trading-signals'}
+ALLOWED={'trading-panel','trading-report','trading-signals','trading-live'}
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
@@ -91,6 +91,9 @@ def apply(expected,target,changed,revision):
     services=[]
     if any('/trading-panel/' in p for p in changed):services.append('trading-panel.service')
     if any('/trading-signals/' in p for p in changed):services.append('trading-signals.service')
+    # Restore the observer source after the superseded release without activating it.
+    if any('/trading-live/' in p for p in changed) and active('trading-live.service'):
+        services.append('trading-live.service')
     reports=any('/trading-report/' in p for p in changed)
     for unit in services:
         if not active(unit):raise RuntimeError('Service is not active: '+unit)

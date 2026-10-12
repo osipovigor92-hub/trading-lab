@@ -49,3 +49,16 @@ test('publication retry is one second, bounded, and never confirms the old serie
  assert.equal(refreshDue({...p,error:'HTTP 429',retry_after_seconds:5},'bybit','BTCUSDT','1',boundary,boundary+1),false,'outages keep their backoff');
  assert.equal(refreshDue(p,'bybit','BTCUSDT','1',boundary,boundary+1,true),false,'network failure cannot reuse the prior publication retry hint');
 });
+
+
+test('API fallback updates forming display without inventing closed proof or crossing sources',()=>{
+ const {fallbackLive}=require('../src/trading-panel/chart-grid.js'),now=1800000134,t=Math.floor(now/300)*300;
+ const p={exchange:'bybit',symbol:'BTCUSDT',interval:'5',current_candle:{t,open:100,high:104,low:99,close:103,volume:2,turnover:205,closed:false,source_ts:null,received_at:now,timestamp_origin:'receipt'}};
+ const get=(packet=p,wire=null,clock=now)=>fallbackLive(packet,wire,'bybit','BTCUSDT','5',clock);
+ assert.equal(get().candle.close,103);assert.equal(get().quote.price,103);assert.equal(get().transport,'rest');
+ assert.equal(get(p,null,now+11).candle,null);assert.equal(get({...p,exchange:'binance'}).candle,null);assert.equal(get({...p,error:'failed'}).candle,null);
+ assert.equal(get({...p,current_candle:{...p.current_candle,t:t-300}}).candle,null);
+ const wire={candle:{...p.current_candle,close:104},quote:{price:104.5},status:'connected'};
+ assert.equal(get(p,wire).candle.close,104);assert.equal(get(p,wire).quote.price,104.5);assert.equal(get(p,wire).transport,'stream');
+ assert.equal(p.candles,undefined,'fallback does not construct analytical history');
+});
