@@ -214,6 +214,15 @@ class TransportTests(unittest.TestCase):
         self.assertTrue(connection.closed)
         self.assertTrue(all(not idle for idle in self.adapter._connections.values()))
 
+    def test_caller_can_preserve_stricter_public_response_limit(self):
+        self.http.responses.append(HTTPResponseFixture(b'x' * 101))
+        with self.assertRaisesRegex(ValueError, 'too large'):
+            self.adapter._json('binance', PATHS['binance'][1], {}, max_bytes=100)
+        self.assertTrue(self.http.connections[-1].closed)
+        for limit in (0, -1, True, 4 * 1024 * 1024 + 1):
+            with self.assertRaisesRegex(ValueError, 'response limit'):
+                self.adapter._json('binance', PATHS['binance'][1], {}, max_bytes=limit)
+
     def test_upstream_close_and_failed_read_discard_without_duplicate_retry(self):
         self.http.responses.append(HTTPResponseFixture(will_close=True))
         self.adapter._json("binance", PATHS["binance"][0], {})
@@ -333,6 +342,27 @@ class AdapterTests(unittest.TestCase):
 
     def tearDown(self):
         self.adapter.close()
+
+    def test_book_peek_does_not_allocate_admit_or_renew_cached_proof(self):
+        cold = self.adapter.peek_book_snapshot('bybit', 'BTCUSDT')
+        self.assertEqual(cold['status'], 'pending')
+        self.assertFalse(cold['queued'])
+        self.assertEqual(len(self.adapter._cache['book']), 0)
+        self.assertEqual(self.fixture.calls, [])
+        packet = await_snapshot(lambda: self.adapter.book_snapshot('bybit', 'BTCUSDT'))
+        calls = len(self.fixture.calls)
+        peek = self.adapter.peek_book_snapshot('bybit', 'BTCUSDT')
+        self.assertEqual(peek['updated'], packet['updated'])
+        self.assertEqual(peek['source_ts'], packet['source_ts'])
+        peek['bids'].clear()
+        self.assertTrue(self.adapter.peek_book_snapshot('bybit', 'BTCUSDT')['bids'])
+        self.clock.advance(6)
+        expired = self.adapter.peek_book_snapshot('bybit', 'BTCUSDT')
+        self.assertEqual(expired['status'], 'pending')
+        self.assertEqual(expired['updated'], packet['updated'])
+        self.assertFalse(expired['queued'])
+        self.assertEqual(len(self.fixture.calls), calls)
+        self.assertEqual(self.adapter._outstanding, 0)
 
     def test_all_catalog_units_percentages_and_unavailable_counts(self):
         for exchange in EXCHANGES:

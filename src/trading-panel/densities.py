@@ -20,6 +20,8 @@ HISTORY_LIMIT = 200
 FRESH_SECONDS = 25
 MAX_OBSERVATION_GAP = 30
 STABLE_SECONDS = 3600
+SCAN_SECONDS = 1
+CATALOG_SECONDS = 30
 
 
 def finite(value):
@@ -81,9 +83,9 @@ def parse_pairs(value=None):
 class DensityMonitor:
     """Shares the adapter's bounded cache/workers; creates no network worker pool.
 
-    One scheduler visits two contracts per second in round-robin order. A full
-    20-contract scan normally takes ten seconds; latency and exchange limits can
-    leave an observation unavailable, rather than extending its lifetime.
+    One scheduler asks for at most two book refreshes per second. Read-only cache
+    drains observe completed jobs each second and on an HTTP snapshot, without
+    waiting for the next ten-second refresh round or creating network work.
     """
     def __init__(self, adapter, clock=time.time, state_path=None, background=False):
         self.adapter, self.clock = adapter, clock
@@ -95,13 +97,18 @@ class DensityMonitor:
         self.selected = list(EXCHANGES)
         self.symbols, self.watch = [], []
         self.targets = []
-        self.cursor = 0
+        self.scan_queue = OrderedDict()
+        self.priorities = ()
+        self.priority_retries = {}
+        self.catalog_attempts = {}
+        self.next_scan_at = float('-inf')
         self.sequence = 0
         self.epoch = uuid.uuid4().hex
         self.state_path = Path(state_path) if state_path is not None else None
         self.persistence_error = ''
         self.last_saved = float('-inf')
         self.stop_event = threading.Event()
+        self.wake_event = threading.Event()
         self.thread = None
         self._restore()
         if background:
@@ -112,6 +119,7 @@ class DensityMonitor:
             return
         def run():
             while not self.stop_event.is_set():
+                self.wake_event.clear()
                 try:
                     self.tick()
                 except Exception:
@@ -119,15 +127,18 @@ class DensityMonitor:
                     # must never turn previously observed age into fresh proof.
                     with self.lock:
                         self._expire(self.clock())
-                self.stop_event.wait(1)
+                self.wake_event.wait(SCAN_SECONDS)
         self.thread = threading.Thread(target=run, name='density-cache-observer', daemon=True)
         self.thread.start()
 
     def request(self, exchanges=None, symbols=None, watch=None):
         selected, wanted, watched = parse_exchanges(exchanges), parse_pairs(symbols), parse_pairs(watch)
         with self.lock:
+            changed = (self.selected, self.symbols, self.watch) != (selected, wanted, watched)
             self.selected, self.symbols, self.watch = selected, wanted, watched
             self._targets()
+        if changed:
+            self.wake_event.set()
         return self.snapshot()
 
     def _targets(self):
@@ -138,6 +149,7 @@ class DensityMonitor:
             for candidate in ([exchange] if exchange else self.selected):
                 if candidate in self.selected and (candidate, symbol) not in targets:
                     targets.append((candidate, symbol))
+        priorities = list(targets)
         for exchange in self.selected:
             packet = self.catalogs.get(exchange, {})
             catalog_source = packet.get('source_ts', packet.get('updated'))
@@ -158,17 +170,47 @@ class DensityMonitor:
                 if pair not in targets:
                     targets.append(pair)
         self.targets = targets[:SCAN_LIMIT]
+        # Preserve rotation when rankings change, and move a newly requested
+        # explicit pair to the front once. Repeating the same HTTP filter must
+        # not continually restart the queue and starve the other contracts.
+        urgent = [pair for pair in priorities if pair in self.targets and pair not in self.priorities]
+        order = urgent + [pair for pair in self.scan_queue if pair in self.targets and pair not in urgent]
+        order.extend(pair for pair in self.targets if pair not in order)
+        self.scan_queue = OrderedDict((pair, None) for pair in order)
+        self.priorities = tuple(pair for pair in priorities if pair in self.targets)
+        self.priority_retries = {pair:value for pair, value in self.priority_retries.items()
+                                 if pair in self.priorities}
+        for pair in urgent:
+            # A cold explicit book may be refused while metadata/catalog jobs
+            # occupy the two shared slots. Retry next second, with both a three
+            # retry budget and a four-second deadline; blocked pairs then rotate.
+            self.priority_retries[pair] = [3, self.clock()+4]
         # A catalog refresh must not erase replay protection for book snapshots.
         # Keep bounded recent book state until its venue is deselected/evicted.
         self.books = {key: value for key, value in self.books.items() if key[0] in self.selected}
 
     def tick(self):
-        """Observe at most two cached books; adapter owns all REST scheduling."""
+        """Admit two book reads per second and drain already completed jobs."""
         now = self.clock()
         with self.lock:
+            if now < self.next_scan_at:
+                scan = False
+            else:
+                self.next_scan_at = now + SCAN_SECONDS
+                scan = True
             selected = list(self.selected)
+            catalogs = []
+            if scan:
+                for exchange in selected:
+                    packet = self.catalogs.get(exchange, {})
+                    delay = (CATALOG_SECONDS if packet.get('status') == 'ok' and not packet.get('stale') and
+                             not packet.get('error') and not packet.get('refresh_error') else
+                             5 if packet.get('status') == 'error' or packet.get('error') or packet.get('refresh_error') else 1)
+                    if now - self.catalog_attempts.get(exchange, float('-inf')) >= delay:
+                        self.catalog_attempts[exchange] = now
+                        catalogs.append(exchange)
         packets = {}
-        for exchange in selected:
+        for exchange in catalogs:
             try:
                 packets[exchange] = self.adapter.exchange_snapshot(exchange)
             except Exception as exc:
@@ -177,15 +219,60 @@ class DensityMonitor:
             self.catalogs.update(packets)
             self._targets()
             self._expire(now)
-            count = min(2, len(self.targets))
-            pairs = [self.targets[(self.cursor+index) % len(self.targets)] for index in range(count)]
-            self.cursor += count
+            pairs = []
+            if scan:
+                for _ in range(min(2, len(self.scan_queue))):
+                    pair, _ = self.scan_queue.popitem(last=False)
+                    self.scan_queue[pair] = None
+                    pairs.append(pair)
+        retry_first = []
         for exchange, symbol in pairs:
             try:
                 packet = self.adapter.book_snapshot(exchange, symbol)
             except Exception as exc:
                 packet = dict(status='error', updated=0, error=str(exc)[:160])
             self.observe(exchange, symbol, packet, now)
+            with self.lock:
+                pair = (exchange, symbol)
+                retry = self.priority_retries.get(pair)
+                cold_refused = (isinstance(packet, dict) and packet.get('status') == 'pending' and
+                                packet.get('queued') is False and packet.get('updated') is None and
+                                packet.get('source_ts') is None and not packet.get('error') and
+                                not packet.get('refresh_error'))
+                if retry and cold_refused and retry[0] > 0 and now < retry[1]:
+                    retry[0] -= 1
+                    retry_first.append(pair)
+                elif retry:
+                    self.priority_retries.pop(pair, None)
+        with self.lock:
+            # Reverse insertion keeps the first requested pair first.
+            for pair in reversed(retry_first):
+                if pair in self.scan_queue:
+                    self.scan_queue.move_to_end(pair, last=False)
+        self._drain_ready()
+
+    def _drain_ready(self):
+        """Read existing cache entries only; no fetch admission or fake stamps."""
+        peek = getattr(self.adapter, 'peek_book_snapshot', None)
+        if not callable(peek):
+            return
+        with self.lock:
+            pairs = list(self.targets)
+        for exchange, symbol in pairs:
+            try:
+                packet = peek(exchange, symbol)
+            except Exception:
+                # A cache-inspection failure is not a new upstream observation.
+                # Existing source age still expires normally in snapshot/tick.
+                continue
+            if (not isinstance(packet, dict) or
+                    packet.get('updated') is None and packet.get('source_ts') is None and
+                    not packet.get('error') and not packet.get('refresh_error')):
+                continue
+            with self.lock:
+                if (exchange, symbol) not in self.targets:
+                    continue
+                self.observe(exchange, symbol, packet)
 
     def _record(self, row, now, reason):
         self.sequence += 1
@@ -342,6 +429,7 @@ class DensityMonitor:
         return {key:value for key, value in row.items() if key not in ('continuous_since', 'misses', 'episode_age_seconds')}
 
     def snapshot(self, filters=None):
+        self._drain_ready()
         now = self.clock()
         with self.lock:
             self._expire(now)
@@ -367,7 +455,8 @@ class DensityMonitor:
                         history=[dict(row) for row in self.history if row['exchange'] in self.selected],
                         coverage=dict(total=sum(exchange['total'] for exchange in exchanges), scanned=scanned,
                                       limit=SCAN_LIMIT, selected=len(self.targets), min_notional=TRACK_MIN,
-                                      stable_seconds=STABLE_SECONDS, poll_seconds=10), exchanges=exchanges,
+                                      stable_seconds=STABLE_SECONDS, poll_seconds=10,
+                                      observe_seconds=SCAN_SECONDS), exchanges=exchanges,
                         error=self.persistence_error,
                         note='Периодические снимки; наблюдаемый срок не доказывает непрерывность между снимками')
 
@@ -421,6 +510,7 @@ class DensityMonitor:
 
     def close(self):
         self.stop_event.set()
+        self.wake_event.set()
         if self.thread:
             self.thread.join(timeout=2)
         with self.lock:

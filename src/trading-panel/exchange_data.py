@@ -142,7 +142,7 @@ class ExchangeData:
             connection.close()
         self._pool.shutdown(wait=False, cancel_futures=True)
 
-    def _direct_json_bytes(self, exchange, target):
+    def _direct_json_bytes(self, exchange, target, max_bytes=4 * 1024 * 1024):
         # Two active HTTP calls and at most two idle connections per fixed
         # exchange. No redirects or internal retry can create duplicate reads.
         with self._http_slots:
@@ -174,8 +174,8 @@ class ExchangeData:
                     raise ValueError("market endpoint redirect refused")
                 if not 200 <= response.status < 300:
                     raise ValueError("public market request failed")
-                raw = response.read(4 * 1024 * 1024 + 1)
-                if len(raw) > 4 * 1024 * 1024:
+                raw = response.read(max_bytes + 1)
+                if len(raw) > max_bytes:
                     raise ValueError("market response too large")
                 reusable = not response.will_close
                 return raw
@@ -189,7 +189,11 @@ class ExchangeData:
                 if not keep:
                     connection.close()
 
-    def _json(self, exchange, path, params):
+    def _json(self, exchange, path, params, *, max_bytes=4 * 1024 * 1024):
+        if self._closed:
+            raise ValueError("market service closed")
+        if type(max_bytes) is not int or not 0 < max_bytes <= 4 * 1024 * 1024:
+            raise ValueError("invalid market response limit")
         if path not in PATHS[_exchange(exchange)]:
             raise ValueError("unsupported public endpoint")
         if self._request is not None:
@@ -199,11 +203,11 @@ class ExchangeData:
             if self._proxy_opener is not None:
                 request = Request(ROOTS[exchange] + target, headers={"Accept": "application/json", "User-Agent": "TradingLab/1.0 public-market"})
                 with self._proxy_opener.open(request, timeout=6) as response:
-                    raw = response.read(4 * 1024 * 1024 + 1)
-                    if len(raw) > 4 * 1024 * 1024:
+                    raw = response.read(max_bytes + 1)
+                    if len(raw) > max_bytes:
                         raise ValueError("market response too large")
             else:
-                raw = self._direct_json_bytes(exchange, target)
+                raw = self._direct_json_bytes(exchange, target, max_bytes)
             packet = json.loads(raw, parse_constant=lambda value: (_ for _ in ()).throw(ValueError("non-finite JSON")))
         if exchange == "bybit":
             if not isinstance(packet, dict) or str(packet.get("retCode")) != "0":
@@ -567,7 +571,7 @@ class ExchangeData:
         return self._accept("book", (exchange, symbol), packet, source)
 
     def _empty(self, kind, key):
-        packet = {"exchange": key[0], "status": "pending", "updated": None, "source_ts": None, "error": None, "stale": True, "refreshing": False}
+        packet = {"exchange": key[0], "status": "pending", "updated": None, "source_ts": None, "error": None, "stale": True, "refreshing": False, "queued": False}
         if kind == "catalog":
             packet["rows"] = []
         else:
@@ -601,12 +605,17 @@ class ExchangeData:
                 if kind != "chart":
                     self._nonchart_outstanding -= 1
 
-    def _snapshot(self, kind, key):
+    def _snapshot(self, kind, key, *, refresh=True):
         with self._lock:
             now = self._clock()
             entries = self._cache[kind]
             entry = entries.get(key)
             if entry is None:
+                if not refresh:
+                    packet = self._empty(kind, key)
+                    if self._closed:
+                        packet.update(status="error", error="market service closed")
+                    return packet
                 if len(entries) >= 48:
                     # Pending entries cannot be evicted while their worker owns
                     # them. Return a bounded busy response if all are pending.
@@ -616,7 +625,8 @@ class ExchangeData:
                     del entries[victim]
                 entry = {"data": None, "expires": 0, "retry": 0, "error": None, "pending": False, "publication_end": None}
                 entries[key] = entry
-            entries.move_to_end(key)
+            if refresh:
+                entries.move_to_end(key)
             data = entry["data"]
             if (entry.get("publication_end") is not None and not entry["pending"] and
                     self._wall() > entry["publication_end"] + CLOSE_PUBLICATION_SECONDS):
@@ -632,7 +642,7 @@ class ExchangeData:
             # four admission slots for visible charts, without increasing HTTP
             # concurrency or allowing an unbounded queue.
             admitted = self._outstanding < 4 and (kind == "chart" or self._nonchart_outstanding < 2)
-            if not fresh and not entry["pending"] and now >= entry["retry"] and admitted and not self._closed:
+            if refresh and not fresh and not entry["pending"] and now >= entry["retry"] and admitted and not self._closed:
                 entry["pending"] = True
                 self._outstanding += 1
                 if kind != "chart":
@@ -661,12 +671,13 @@ class ExchangeData:
             if (fresh or usable) and not self._closed:
                 packet = deepcopy(data)
                 packet["refreshing"] = entry["pending"]
+                packet["queued"] = entry["pending"]
                 if kind == "chart":
                     packet["refresh_reason"] = "revalidation" if entry["pending"] else None
                 return packet
             packet = deepcopy(data) if data is not None else self._empty(kind, key)
             packet.update(status="error" if entry["error"] else "pending", stale=True, error=entry["error"],
-                          refreshing=data is not None and entry["pending"] and entry["error"] is None)
+                          refreshing=data is not None and entry["pending"] and entry["error"] is None, queued=entry["pending"])
             if kind == "chart":
                 wall, step = self._wall(), int(key[2]) * 60
                 expected_end = int((wall - 2) // step) * step
@@ -687,6 +698,10 @@ class ExchangeData:
 
     def book_snapshot(self, exchange, symbol):
         return self._snapshot("book", (_exchange(exchange), _symbol(symbol)))
+
+    def peek_book_snapshot(self, exchange, symbol):
+        """Read completed cache proof without admission, allocation or LRU changes."""
+        return self._snapshot("book", (_exchange(exchange), _symbol(symbol)), refresh=False)
 
 
 _shared = None

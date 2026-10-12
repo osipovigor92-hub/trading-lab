@@ -1,6 +1,10 @@
 /* Shared reads: coalesce duplicates; only the alert monitor can opt into background polling. */
 (() => {
   const pending = new Map(), cache = new Map();
+  const cacheTTL = 750, cacheLimit = 48;
+  function pruneCache(now) {
+    for (const [key, value] of cache) if (now - value.time >= cacheTTL || now < value.time) cache.delete(key);
+  }
   let visibleWait;
   async function visible() {
     if (!document.hidden) return;
@@ -48,13 +52,23 @@
     const request = () => fetch(url, {...requestOptions, cache:'no-store', signal:timeoutFor(requestOptions)});
     if (!key) return request();
     const now = performance.now();
+    pruneCache(now);
     const prior = cache.get(key);
-    if (fresh !== true && prior && now - prior.time < 750) return prior.response.clone();
+    if (fresh !== true && prior) {
+      // LRU use changes eviction order, never the response's receipt time.
+      cache.delete(key); cache.set(key, prior);
+      return prior.response.clone();
+    }
     if (!pending.has(key)) {
       // Start timeout after visibility resumes, not while Safari is suspended.
       const work = request()
         .then(response => {
-          if (response.ok) cache.set(key, {time:performance.now(), response:response.clone()});
+          if (response.ok) {
+            const received = performance.now();
+            pruneCache(received);
+            cache.delete(key); cache.set(key, {time:received, response:response.clone()});
+            while (cache.size > cacheLimit) cache.delete(cache.keys().next().value);
+          }
           return response;
         }).finally(() => pending.delete(key));
       pending.set(key, work);

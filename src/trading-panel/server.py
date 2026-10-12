@@ -11,6 +11,12 @@ from manual_paper import ManualPaper
 from exchange_data import get_exchange_data
 from densities import DensityMonitor
 
+
+class PanelHTTPServer(ThreadingHTTPServer):
+    # A reload requests the local script/style bundle concurrently. A five-
+    # connection accept backlog can drop critical scripts on Windows.
+    request_queue_size = 64
+
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
 # The public ticker cache is warmed on the server, so opening a dashboard section
@@ -251,4 +257,4 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print("Panel: http://127.0.0.1:8787", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
+    PanelHTTPServer(("127.0.0.1", 8787), Handler).serve_forever()

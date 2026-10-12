@@ -1,6 +1,23 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {filterRows,ratingScore,ratingView,coinCardView,positionView,fresh,domain,botModels,chartBars,selectionView,selectionDefaults,validateSelection}=require('../src/trading-panel/screener.js');
 const rows=[{symbol:'BTCUSDT',turnover:1e8,spread:.01,range24:2,change:4,selection:{status:'passed'},rating:{status:'ok',score:83}},{symbol:'ONDOUSDT',turnover:3e7,spread:.02,range24:8,change:-5,selection:{status:'passed'},rating:{status:'ok',score:55}},{symbol:'THINUSDT',turnover:1e6,spread:.15,range24:20,change:10,selection:{status:'rejected'},rating:{status:'ok',score:10}}];
+test('column sorts compare signed values and keep unknown metrics last in both directions',()=>{
+ const {assistantRows}=require('../src/trading-panel/screener.js'),sample=rows.map((r,i)=>({...r,price:[100,3,.2][i],assistant:{score:[null,0,90][i],indicators:{rvol5:[null,1,3][i],rsi14:[null,40,60][i]}}}));
+ assert.deepEqual(assistantRows(sample,{sort:'change',dir:'asc'}).map(r=>r.symbol),['ONDOUSDT','BTCUSDT','THINUSDT']);
+ for(const sort of ['score','rvol','rsi']){assert.deepEqual(assistantRows(sample,{sort,dir:'asc'}).map(r=>r.symbol),['ONDOUSDT','THINUSDT','BTCUSDT']);assert.deepEqual(assistantRows(sample,{sort,dir:'desc'}).map(r=>r.symbol),['THINUSDT','ONDOUSDT','BTCUSDT']);}
+ assert.deepEqual(assistantRows(sample,{sort:'price',dir:'desc'}).map(r=>r.symbol),['BTCUSDT','ONDOUSDT','THINUSDT']);
+});
+test('column ranges are inclusive, compose and never turn unknown data into zero',()=>{
+ const {assistantRows,columnBounds}=require('../src/trading-panel/screener.js'),sample=rows.map((r,i)=>({...r,price:[100,3,.2][i],assistant:{score:[null,0,90][i]}}));
+ assert.deepEqual(assistantRows(sample,{columns:{score:{min:0,max:0}}}).map(r=>r.symbol),['ONDOUSDT']);assert.deepEqual(assistantRows(sample,{columns:{change:{min:-5,max:4},price:{min:3,max:3}}}).map(r=>r.symbol),['ONDOUSDT']);
+ assert.deepEqual(columnBounds({price:{min:null,max:null}}),{});for(const value of [{price:{min:4,max:3}},{price:{min:NaN}},{price:{max:Infinity}},{price:{min:'3'}},{extra:{}},{score:[]}])assert.throws(()=>columnBounds(value));
+});
+test('atomic assistant quote adopts the exact bounded original source and refuses rollback or malformed identity',()=>{
+ const {atomicQuote}=require('../src/trading-panel/screener.js'),q={status:'ok',updated:6005,rows:rows.map(r=>({...r,price:100}))},p={status:'ok',source_time:6005,quote_snapshot:q};
+ assert.equal(atomicQuote(p,{updated:6004},6005),q);assert.equal(atomicQuote(p,{updated:6006},6006),null);
+ for(const bad of [{...p,source_time:6004},{...p,quote_snapshot:{...q,updated:6008}},{...p,quote_snapshot:{...q,refresh_error:'timeout'}},{...p,quote_snapshot:{...q,rows:[q.rows[0],q.rows[0]]}},{...p,quote_snapshot:{...q,rows:[{...q.rows[0],price:Infinity}]}},{...p,quote_snapshot:{...q,rows:Array(101).fill(q.rows[0])}}])assert.equal(atomicQuote(bad,null,6005),null);
+ assert.equal(atomicQuote(p,null,6051),null);assert.equal(atomicQuote({status:'ok',source_time:6005},null,6005),null,'older servers retain the separate snapshot flow');
+});
 test('assistant values require coherent original source times and complete component sums',()=>{
  const {assistantView}=require('../src/trading-panel/screener.js'),now=6005;
  const a={status:'ok',timeframe:'1',candle_end:6000,sources:{quote:6005,chart:6005,candle:6000},score:65,score_components:[['volume',40,30],['range',30,15],['movement',20,10],['turnover',10,10]].map(([key,max,points])=>({key,max,points})),indicators:{rsi14:55,ema20:100,ema50:99,vwap60:99.5,atr14:.2,atr14_pct:.2,rvol5:2,change5_pct:.2,range5_pct:.4}};

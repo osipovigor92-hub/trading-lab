@@ -288,3 +288,9 @@ for all five venues (520 Binance, 790 Bybit, 485 OKX, 1,010 Gate, 817 Bitget),
 valid BTC order books and 180 closed five-minute candles from each. Counts are
 a point-in-time check, not a fixed expected universe. Credentials and full
 upstream response bodies were not logged.
+
+## Bounded cache consumption and transport
+
+peek_book_snapshot returns copied original cache proof without allocation, refresh admission, LRU promotion or timestamp renewal. queued distinguishes an actually admitted job from a refused cold request. The direct transport accepts a caller response cap up to 4 MiB; MarketData keeps its existing 2 MB cap. Both direct and proxy paths reject requests after close. Density observation drains use this read-only path, preserving the shared two-worker/two-slot service and two book admissions per second.
+
+A deterministic 20-source book fixture reduced completed-response observation from tick 10 (9.8s after source time) to tick 1 (0.8s), with the same 22 book reads over eleven ticks. A request-time drain retains the original source stamp and age. A separate 2s/6s successful-job scheduler regression confirms all eight watched books remain served across repeated candle boundaries; the preceding chart-first policy starved books. These fixtures measure scheduling, not production exchange latency.

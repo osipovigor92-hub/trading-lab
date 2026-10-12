@@ -11,6 +11,10 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+
+class PreviewHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 64
+
 ROOT = Path(__file__).resolve().parents[1]
 PANEL = ROOT/'src/trading-panel'
 sys.path.insert(0, str(PANEL))
@@ -413,4 +417,4 @@ if __name__=='__main__':
     args=parser.parse_args()
     PAPER_TEST=args.paper_test
     print(f'DEMO: http://127.0.0.1:{args.port}',flush=True)
-    ThreadingHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()
+    PreviewHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()
