@@ -46,7 +46,7 @@
       status.textContent = (fresh ? (labels[s.status] || s.status) : 'ДАННЫЕ УСТАРЕЛИ')+
         ' · '+(error||s.message || '');
       const next=document.createDocumentFragment();
-      if (!fresh || s.status === 'offline') {if(body.childElementCount)status.textContent+=' · показаны прошлые наблюдения';return;}
+      if (!fresh || !['live','warming'].includes(s.status)) {if(body.childElementCount)status.textContent+=' · показаны прошлые наблюдения';return;}
 
       for (const r of s.rows || []) {
         const card = document.createElement('article');
