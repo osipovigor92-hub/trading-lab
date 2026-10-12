@@ -1,3 +1,5 @@
+from concurrent.futures import Future
+from unittest.mock import patch
 import copy
 import importlib.util
 import math
@@ -99,6 +101,52 @@ class MarketTests(unittest.TestCase):
             if mutation=='stale':bad['ts']=900000
             if mutation=='symbol':bad['s']='ETHUSDT'
             with self.assertRaises(ValueError):market.orderbook_analysis('BTCUSDT',bad,1000)
+
+    def test_analysis_fills_both_slots_with_candles_in_one_tick(self):
+        cache=market.MarketData(clock=lambda:0)
+        cache.pool.shutdown(wait=True)
+        class Queue:
+            def submit(self,*args):return Future()
+            def shutdown(self,**kwargs):pass
+        cache.pool=Queue()
+        cache.selection_watch=['BTCUSDT','ETHUSDT','SOLUSDT','LINKUSDT']
+        cache.selection_until=30
+        try:
+            cache._selection_tick()
+            running=[key for key, entry in cache.entries.items() if entry['future'] is not None]
+            self.assertEqual(running,[('chart','BTCUSDT','1'),('chart','ETHUSDT','1')])
+            self.assertEqual(len(running),2)
+        finally:cache.close()
+
+    def test_new_minute_invalidates_chart_ttl_without_waiting_25_seconds(self):
+        mono=[0];wall=[1499];calls=[]
+        cache=market.MarketData(clock=lambda:mono[0])
+        def load(kind,symbol,interval):
+            calls.append(kind)
+            return dict(status='ok',symbol=symbol,interval=interval,updated=wall[0],candle_end=int((wall[0]-2)//60)*60)
+        try:
+            with patch.object(cache,'_load',side_effect=load),patch.object(market.time,'time',side_effect=lambda:wall[0]):
+                cache.get('chart','BTCUSDT','1');cache.entries[('chart','BTCUSDT','1')]['future'].result(timeout=2)
+                self.assertEqual(cache.get('chart','BTCUSDT','1')['candle_end'],1440)
+                self.assertGreater(cache.entries[('chart','BTCUSDT','1')]['until'],20)
+                mono[0]=4;wall[0]=1503
+                cache.get('chart','BTCUSDT','1');cache.entries[('chart','BTCUSDT','1')]['future'].result(timeout=2)
+                self.assertEqual(cache.get('chart','BTCUSDT','1')['candle_end'],1500)
+                self.assertEqual(len(calls),2)
+        finally:cache.close()
+
+    def test_books_cannot_fill_both_candle_workers(self):
+        cache=market.MarketData(clock=lambda:0);cache.pool.shutdown(wait=True)
+        class Queue:
+            def submit(self,*args):return Future()
+            def shutdown(self,**kwargs):pass
+        cache.pool=Queue()
+        try:
+            cache.get('book','BTCUSDT');cache.get('book','ETHUSDT');cache.get('chart','SOLUSDT','1')
+            self.assertIsNone(cache.entries[('book','ETHUSDT','')]['future'])
+            self.assertIsNotNone(cache.entries[('chart','SOLUSDT','1')]['future'])
+            self.assertEqual(sum(entry['future'] is not None for entry in cache.entries.values()),2)
+        finally:cache.close()
 
     def test_cache_coalesces_bounds_jobs_and_harvests_other_key(self):
         release=threading.Event();calls=[];clock=[0]
