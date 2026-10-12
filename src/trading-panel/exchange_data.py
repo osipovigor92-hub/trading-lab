@@ -425,7 +425,7 @@ class ExchangeData:
         now = self._wall()
         expected_end = int((now - 2) // step) * step
         publication_window = 2 <= now - expected_end <= CLOSE_PUBLICATION_SECONDS
-        candles, seen = [], set()
+        candles, seen, current_candle = [], set(), None
         for row in _list(raw, 300):
             if exchange == "gate":
                 t = _positive(row["t"])
@@ -439,7 +439,8 @@ class ExchangeData:
                 if exchange == "okx":
                     if row[8] not in ("0", "1"):
                         raise ValueError("invalid candle confirmation")
-                    if row[8] == "0":
+                    volume, turnover = _number(row[6], 0), _number(row[7], 0)
+                    if row[8] == "0" and t != int(now // step) * step:
                         # An old unconfirmed candle is a broken series, not a
                         # reason to silently stitch its neighbours together.
                         if t + step <= now - 2 and not (publication_window and t + step == expected_end):
@@ -455,6 +456,15 @@ class ExchangeData:
             if t > now + 3:
                 raise ValueError("future candle")
             if t + step > now - 2:
+                if t == int(now // step) * step:
+                    try:
+                        opening, high, low, close = map(_positive, values)
+                        if low <= min(opening, close) and high >= max(opening, close) and high >= low:
+                            current_candle = {"t": t, "open": opening, "high": high, "low": low, "close": close,
+                                              "volume": volume, "turnover": turnover, "closed": False,
+                                              "source_ts": None, "received_at": now, "timestamp_origin": "receipt"}
+                    except ValueError:
+                        pass
                 continue
             if t in seen:
                 raise ValueError("duplicate candle timestamp")
@@ -490,7 +500,7 @@ class ExchangeData:
             metrics["change5"] = (candles[-1]["close"] / previous - 1) * 100
         packet = {"exchange": exchange, "symbol": symbol, "native_symbol": native, "interval": interval, "status": "ok", "updated": now,
                   "source_ts": end, "timestamp_origin": "closed_candle", "candle_end": end, "candles": candles, "metrics": metrics,
-                  "metrics_interval": interval, "error": None, "stale": False, "refreshing": False,
+                  "current_candle": current_candle, "metrics_interval": interval, "error": None, "stale": False, "refreshing": False,
                   "next_refresh_at": min(now + TTLS["chart"], end + step + 2)}
         return self._accept("chart", (exchange, symbol, interval), packet, end)
 
@@ -601,7 +611,7 @@ class ExchangeData:
                 if kind != "chart":
                     self._nonchart_outstanding -= 1
 
-    def _snapshot(self, kind, key):
+    def _snapshot(self, kind, key, *, live=False):
         with self._lock:
             now = self._clock()
             entries = self._cache[kind]
@@ -617,6 +627,8 @@ class ExchangeData:
                 entry = {"data": None, "expires": 0, "retry": 0, "error": None, "pending": False, "publication_end": None}
                 entries[key] = entry
             entries.move_to_end(key)
+            if live:
+                entry["live_until"] = now + 8
             data = entry["data"]
             if (entry.get("publication_end") is not None and not entry["pending"] and
                     self._wall() > entry["publication_end"] + CLOSE_PUBLICATION_SECONDS):
@@ -626,12 +638,14 @@ class ExchangeData:
                 entry.update(error="closed candle series is stale", publication_end=None)
             fresh = data is not None and now < entry["expires"] and not entry["error"]
             if kind == "chart" and fresh:
+                if entry.get("live_until", 0) > now:
+                    fresh = self._wall() - data["updated"] < 3
                 step = int(key[2]) * 60
-                fresh = data["candle_end"] == int((self._wall() - 2) // step) * step
-            # Density scans share these workers. Reserve two of the existing
+                fresh = fresh and data["candle_end"] == int((self._wall() - 2) // step) * step
+            # Density scans share these workers. Reserve one executing worker and three of the existing
             # four admission slots for visible charts, without increasing HTTP
             # concurrency or allowing an unbounded queue.
-            admitted = self._outstanding < 4 and (kind == "chart" or self._nonchart_outstanding < 2)
+            admitted = self._outstanding < 4 and (kind == "chart" or self._nonchart_outstanding < 1)
             if not fresh and not entry["pending"] and now >= entry["retry"] and admitted and not self._closed:
                 entry["pending"] = True
                 self._outstanding += 1
@@ -682,8 +696,8 @@ class ExchangeData:
     def exchange_snapshot(self, exchange):
         return self._snapshot("catalog", (_exchange(exchange),))
 
-    def chart_snapshot(self, exchange, symbol, interval):
-        return self._snapshot("chart", (_exchange(exchange), _symbol(symbol), _interval(interval)))
+    def chart_snapshot(self, exchange, symbol, interval, *, live=False):
+        return self._snapshot("chart", (_exchange(exchange), _symbol(symbol), _interval(interval)), live=live)
 
     def book_snapshot(self, exchange, symbol):
         return self._snapshot("book", (_exchange(exchange), _symbol(symbol)))

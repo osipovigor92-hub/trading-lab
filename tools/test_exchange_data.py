@@ -136,6 +136,59 @@ def await_idle(adapter):
     raise AssertionError("adapter worker did not finish")
 
 
+class LiveFallbackTests(unittest.TestCase):
+    def test_all_venues_keep_forming_candle_separate_from_closed_metrics(self):
+        for venue in EXCHANGES:
+            clock = Clock()
+            adapter = ExchangeData(Fixture(clock).request, wall_clock=lambda: clock.now, clock=lambda: clock.mono)
+            try:
+                packet = adapter.fetch_chart(venue, 'BTCUSDT', '5')
+                bar = packet['current_candle']
+                self.assertEqual(bar['t'], int(clock.now // 300) * 300)
+                self.assertFalse(bar['closed'])
+                self.assertIsNone(bar['source_ts'])
+                self.assertEqual(bar['timestamp_origin'], 'receipt')
+                self.assertEqual(len(packet['candles']), 180)
+                self.assertEqual(packet['candles'][-1]['t'] + 300, bar['t'])
+                self.assertEqual(packet['candle_end'], bar['t'])
+            finally:
+                adapter.close()
+
+    def test_slow_density_book_cannot_occupy_both_chart_workers(self):
+        clock = Clock();fixture = Fixture(clock);release = threading.Event();started = threading.Event()
+        def request(venue, path, params):
+            if path == PATHS[venue][3]:
+                started.set();release.wait(3)
+            return fixture.request(venue, path, params)
+        adapter = ExchangeData(request, wall_clock=lambda: clock.now, clock=lambda: clock.mono)
+        try:
+            adapter.fetch_catalog('bybit')
+            adapter.book_snapshot('bybit', 'BTCUSDT')
+            self.assertTrue(started.wait(1))
+            adapter.book_snapshot('bybit', 'ETHUSDT')
+            packet = await_snapshot(lambda: adapter.chart_snapshot('bybit', 'BTCUSDT', '5', live=True))
+            self.assertIsNotNone(packet['current_candle'])
+            self.assertFalse(release.is_set(),'chart completes while book remains blocked')
+        finally:
+            release.set();adapter.close()
+
+    def test_live_poll_revalidates_before_normal_history_ttl_without_duplicate_jobs(self):
+        clock = Clock()
+        fixture = Fixture(clock)
+        adapter = ExchangeData(fixture.request, wall_clock=lambda: clock.now, clock=lambda: clock.mono)
+        try:
+            read = lambda: adapter.chart_snapshot('bybit', 'BTCUSDT', '5', live=True)
+            first = await_snapshot(read)
+            clock.advance(4)
+            second = await_snapshot(read, updated_after=first['updated'])
+            self.assertGreater(second['current_candle']['received_at'], first['current_candle']['received_at'])
+            self.assertEqual(second['metrics'], first['metrics'])
+            self.assertEqual(second['candles'], first['candles'])
+            self.assertEqual(sum(path == PATHS['bybit'][2] for _, path, _ in fixture.calls), 2)
+        finally:
+            adapter.close()
+
+
 class HTTPResponseFixture:
     def __init__(self, raw=b'{"symbols": []}', *, status=200, will_close=False, failure=None):
         self.raw, self.status, self.will_close, self.failure = raw, status, will_close, failure
@@ -891,19 +944,19 @@ class AdapterTests(unittest.TestCase):
         start = time.monotonic()
         packets = [self.adapter.book_snapshot("bybit", f"C{i}USDT") for i in range(20)]
         # A density scan cannot fill the chart admission slots. Requests for
-        # visible candles are admitted while both HTTP workers are occupied.
+        # visible candles are admitted while one HTTP worker is occupied.
         packets += [self.adapter.chart_snapshot("bybit", "BTCUSDT", interval) for interval in ("1", "5")]
         self.assertLess(time.monotonic() - start, 0.2)
         self.assertTrue(all(packet["status"] == "pending" for packet in packets))
         self.assertTrue(active.wait(1))
         with self.adapter._lock:
-            self.assertEqual(self.adapter._outstanding, 4)
-            self.assertEqual(self.adapter._nonchart_outstanding, 2)
-            self.assertEqual(sum(entry["pending"] for entry in self.adapter._cache["book"].values()), 2)
+            self.assertEqual(self.adapter._outstanding, 3)
+            self.assertEqual(self.adapter._nonchart_outstanding, 1)
+            self.assertEqual(sum(entry["pending"] for entry in self.adapter._cache["book"].values()), 1)
             self.assertEqual(sum(entry["pending"] for entry in self.adapter._cache["chart"].values()), 2)
         self.adapter.book_snapshot("bybit", "C0USDT")
         self.adapter.chart_snapshot("bybit", "BTCUSDT", "1")
-        self.assertEqual(self.adapter._outstanding, 4)  # pending jobs are reused
+        self.assertEqual(self.adapter._outstanding, 3)  # pending jobs are reused
         self.assertLessEqual(len(self.adapter._pool._threads), 2)
         release.set()
 

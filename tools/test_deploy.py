@@ -17,6 +17,25 @@ class DeployTests(unittest.TestCase):
             p.write_text('local edit')
             with self.assertRaisesRegex(RuntimeError,'differs'):deploy.plan(old,{name:'new'})
             with self.assertRaisesRegex(RuntimeError,'Separate model'):deploy.plan({}, {'src/scalp-model-b/model_b.py':'new'})
+    def test_observer_source_can_be_restored_but_models_remain_protected(self):
+        name='src/trading-live/live.py';p=self.dest(name);p.write_text('old')
+        with patch.object(deploy,'destination',self.dest):
+            self.assertEqual(deploy.plan({name:deploy.digest(p)}, {name:'new'}),[name])
+            with self.assertRaisesRegex(RuntimeError,'Separate model'):
+                deploy.plan({}, {'src/scalp-paper/paper.py':'new'})
+
+    def test_restoring_observer_preserves_active_and_stopped_state(self):
+        for running in (False, True):
+            with tempfile.TemporaryDirectory() as folder:
+                root=Path(folder);repo=root/'repo';track=root/'track';track.mkdir()
+                name='src/trading-live/live.py';source=repo/name;source.parent.mkdir(parents=True);source.write_text('restored')
+                installed=root/'live.py';installed.write_text('superseded');calls=[]
+                expected={name:deploy.digest(installed)};target={name:deploy.digest(source)}
+                with patch.object(deploy,'TRACK',track),patch.object(deploy,'REPO',repo),patch.object(deploy,'destination',lambda n:installed),patch.object(deploy,'active',return_value=running),patch.object(deploy,'system',side_effect=lambda *args:calls.append(args)),patch.object(deploy,'health'):
+                    deploy.apply(expected,target,[name],'b'*40)
+                self.assertEqual(installed.read_text(),'restored')
+                self.assertEqual(calls,[('stop','trading-live.service'),('start','trading-live.service')] if running else [])
+
     def test_paths(self):
         for path in ('../state.json','src/trading-panel/../x','src/unknown/x.py','deploy/state.json'):
             with self.assertRaises(ValueError):deploy.destination(path)

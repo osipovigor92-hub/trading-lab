@@ -151,7 +151,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
             elif path in ("/api/exchange-screener", "/api/exchange-chart", "/api/densities"):
                 query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
-                allowed = {'exchanges', 'symbols', 'watch'} if path == '/api/densities' else ({'exchange'} if path == '/api/exchange-screener' else {'exchange', 'symbol', 'interval'})
+                allowed = {'exchanges', 'symbols', 'watch'} if path == '/api/densities' else ({'exchange'} if path == '/api/exchange-screener' else {'exchange', 'symbol', 'interval', 'live'})
                 if len(urlsplit(self.path).query) > 3000 or any(len(v) != 1 for v in query.values()) or set(query) - allowed:
                     self.api_error(400, 'Некорректные параметры публичных данных')
                     return
@@ -161,7 +161,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif path == '/api/exchange-screener':
                         data = EXCHANGE_DATA.exchange_snapshot(query.get('exchange', ['bybit'])[0])
                     else:
-                        data = EXCHANGE_DATA.chart_snapshot(query.get('exchange', ['bybit'])[0], query.get('symbol', [''])[0], query.get('interval', ['5'])[0])
+                        if query.get('live', ['0'])[0] not in ('0', '1'):
+                            raise ValueError('Invalid live flag')
+                        data = EXCHANGE_DATA.chart_snapshot(query.get('exchange', ['bybit'])[0], query.get('symbol', [''])[0], query.get('interval', ['5'])[0], live=query.get('live', ['0'])[0] == '1')
                 except (ValueError, TypeError) as exc:
                     self.api_error(400, str(exc))
                     return
