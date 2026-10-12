@@ -94,6 +94,7 @@ class DensityMonitor:
         self.catalogs = {}
         self.selected = list(EXCHANGES)
         self.symbols, self.watch = [], []
+        self.overlay_watch = {}
         self.targets = []
         self.cursor = 0
         self.sequence = 0
@@ -123,22 +124,31 @@ class DensityMonitor:
         self.thread = threading.Thread(target=run, name='density-cache-observer', daemon=True)
         self.thread.start()
 
-    def request(self, exchanges=None, symbols=None, watch=None):
+    def request(self, exchanges=None, symbols=None, watch=None, *, overlay=False):
         selected, wanted, watched = parse_exchanges(exchanges), parse_pairs(symbols), parse_pairs(watch)
         with self.lock:
-            self.selected, self.symbols, self.watch = selected, wanted, watched
+            if overlay:
+                pairs = [(venue, symbol) for venue, symbol in watched + wanted if venue in selected]
+                for pair in pairs[:13]:
+                    self.overlay_watch[pair] = self.clock() + 15
+                while len(self.overlay_watch) > 13:
+                    del self.overlay_watch[next(iter(self.overlay_watch))]
+            else:
+                self.selected, self.symbols, self.watch = selected, wanted, watched
             self._targets()
-        return self.snapshot()
+        return self.snapshot({'exchanges': selected} if overlay else None)
 
     def _targets(self):
+        self.overlay_watch = {pair: until for pair, until in self.overlay_watch.items() if until > self.clock()}
+        selected = list(dict.fromkeys(self.selected + [venue for venue, _ in self.overlay_watch]))
         targets = []
         # Explicit priority is bounded even while a catalog is warming up. The
         # adapter verifies contract existence before performing a public fetch.
-        for exchange, symbol in self.watch + self.symbols:
-            for candidate in ([exchange] if exchange else self.selected):
-                if candidate in self.selected and (candidate, symbol) not in targets:
+        for exchange, symbol in list(self.overlay_watch) + self.watch + self.symbols:
+            for candidate in ([exchange] if exchange else selected):
+                if candidate in selected and (candidate, symbol) not in targets:
                     targets.append((candidate, symbol))
-        for exchange in self.selected:
+        for exchange in selected:
             packet = self.catalogs.get(exchange, {})
             catalog_source = packet.get('source_ts', packet.get('updated'))
             # Cache TTL expiry does not erase its verified contract universe.
@@ -160,13 +170,13 @@ class DensityMonitor:
         self.targets = targets[:SCAN_LIMIT]
         # A catalog refresh must not erase replay protection for book snapshots.
         # Keep bounded recent book state until its venue is deselected/evicted.
-        self.books = {key: value for key, value in self.books.items() if key[0] in self.selected}
+        self.books = {key: value for key, value in self.books.items() if key[0] in selected}
 
     def tick(self):
         """Observe at most two cached books; adapter owns all REST scheduling."""
         now = self.clock()
         with self.lock:
-            selected = list(self.selected)
+            selected = list(dict.fromkeys(self.selected + [venue for venue, until in self.overlay_watch.items() if until > now]))
         packets = {}
         for exchange in selected:
             try:
@@ -345,8 +355,9 @@ class DensityMonitor:
         now = self.clock()
         with self.lock:
             self._expire(now)
+            selected = filters.get('exchanges', self.selected) if filters else self.selected
             exchanges = []
-            for exchange in self.selected:
+            for exchange in selected:
                 catalog = self.catalogs.get(exchange, {})
                 total = catalog.get('eligible', len(catalog.get('rows', [])))
                 total = total if type(total) is int and total >= 0 else 0
@@ -363,8 +374,8 @@ class DensityMonitor:
                                       error='; '.join(errors)[:160], total=total, scanned=scanned))
             scanned = sum(exchange['scanned'] for exchange in exchanges)
             return dict(status='ok' if scanned else 'error' if any(exchange['status']=='error' for exchange in exchanges) else 'pending', updated=now,
-                        rows=[self._public(row) for row in self.rows.values() if row['exchange'] in self.selected],
-                        history=[dict(row) for row in self.history if row['exchange'] in self.selected],
+                        rows=[self._public(row) for row in self.rows.values() if row['exchange'] in selected],
+                        history=[dict(row) for row in self.history if row['exchange'] in selected],
                         coverage=dict(total=sum(exchange['total'] for exchange in exchanges), scanned=scanned,
                                       limit=SCAN_LIMIT, selected=len(self.targets), min_notional=TRACK_MIN,
                                       stable_seconds=STABLE_SECONDS, poll_seconds=10), exchanges=exchanges,

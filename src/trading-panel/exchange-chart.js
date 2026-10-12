@@ -157,12 +157,12 @@
       liveCandle=valid?liveFrom(liveView,now):null;
       const quote=valid&&freshLive(liveView.quote,10,now)&&finite(liveView.quote.price)&&liveView.quote.price>0?liveView.quote:null;
       if (quote) {
-        const options={price:quote.price,color:'#55cee9',lineWidth:1,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true,title:'Цена сейчас'};
+        const options={price:quote.price,color:'#55cee9',lineWidth:1,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true,title:''};
         if (!quoteLine) quoteLine=candles.createPriceLine(options);
         else if (quoteLine.options().price!==quote.price) quoteLine.applyOptions(options);
         host.dataset.chartLivePrice=String(quote.price);
         quoteLabel.hidden=false;
-        quoteLabel.textContent='Цена сейчас '+number(quote.price)+' · '+new Date((quote.source_ts??quote.received_at)*1000).toLocaleTimeString('ru-RU',{timeZone:'UTC'})+' UTC';
+        quoteLabel.textContent=number(quote.price)+' · '+new Date((quote.source_ts??quote.received_at)*1000).toLocaleTimeString('ru-RU',{timeZone:'UTC'})+' UTC';
         quoteLabel.title=(quote.source_ts===null?'Получено: ':'Данные биржи: ')+utc(quote.source_ts??quote.received_at);
       } else {if(quoteLine)candles.removePriceLine(quoteLine);quoteLine=null;delete host.dataset.chartLivePrice;quoteLabel.hidden=true;quoteLabel.textContent='';quoteLabel.title='';}
       host.dataset.chartLive=String(!!liveCandle);

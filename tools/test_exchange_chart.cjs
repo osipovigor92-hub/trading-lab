@@ -80,7 +80,7 @@ test('forming ticks update only their own candle, keep closed indicators and his
  r.api.setLive(view);assert.equal(r.calls.setData,0);assert.equal(r.calls.update,1);assert.equal(r.series[0].data.length,81);assert.equal(r.series[1].data.length,80);assert.equal(r.series[4].data.length,21);
  assert.equal(r.host.dataset.chartLive,'true');assert.equal(r.host.dataset.chartLivePrice,String(view.quote.price));assert.equal(r.host.dataset.chartConfirmed,'true');assert.equal(Number(r.host.dataset.chartSelectedTime),p.candles[20].t);assert.equal(r.api.getViewport().timeFrom,old.timeFrom);
  assert.equal(readoutSpan(r,'exchange-chart-live-state').hidden,true,'historical crosshair has no forming label');
- const quoteSpan=readoutSpan(r,'exchange-chart-live-quote');assert.match(quoteSpan.textContent,/Цена сейчас .* UTC/);assert.equal(quoteSpan.hidden,false);assert.equal(Number(r.host.dataset.chartSelectedClose),p.candles[20].close,'latest quote leaves selected historical OHLC intact');
+ const quoteSpan=readoutSpan(r,'exchange-chart-live-quote');assert.match(quoteSpan.textContent,/ UTC/);assert.doesNotMatch(quoteSpan.textContent,/Цена сейчас/);assert.equal(quoteSpan.hidden,false);assert.equal(Number(r.host.dataset.chartSelectedClose),p.candles[20].close,'latest quote leaves selected historical OHLC intact');
  r.crosshair(view.candle.t);assert.equal(r.host.dataset.chartSelectedVolume,undefined,'unknown base volume is not fabricated');assert.match(readoutSpan(r,'exchange-chart-source').textContent,/формируется/);
  assert.equal(readoutSpan(r,'exchange-chart-live-state').hidden,false);assert.equal(readoutSpan(r,'exchange-chart-live-state').textContent,'формируется');
  r.clear();for(let i=0;i<100;i++)r.api.setLive(clone(view));assert.equal(r.calls.setData,0);assert.equal(r.calls.update,0);assert.equal(r.calls.resize,0);
@@ -110,7 +110,7 @@ test('explicit close waits briefly for REST and merges without moving UTC viewpo
 });
 test('a fresh quote is readable before history loads and disconnect hides it',()=>{
  const r=renderer(),view=live(packet());r.api.setLive(view);const span=readoutSpan(r,'exchange-chart-live-quote');
- assert.equal(span.hidden,false);assert.match(span.textContent,/Цена сейчас /);assert.equal(r.host.dataset.chartConfirmed,'false');assert.equal(r.host.dataset.chartSelectedClose,undefined);assert.equal(r.host.dataset.chartLive,'false','a quote cannot synthesize candle history');
+ assert.equal(span.hidden,false);assert.doesNotMatch(span.textContent,/Цена сейчас/);assert.equal(r.host.dataset.chartConfirmed,'false');assert.equal(r.host.dataset.chartSelectedClose,undefined);assert.equal(r.host.dataset.chartLive,'false','a quote cannot synthesize candle history');
  r.api.setLive({...view,status:'unavailable'});assert.equal(span.hidden,true);assert.equal(span.textContent,'');assert.equal(r.host.dataset.chartLivePrice,undefined);
  r.api.dispose();
 });

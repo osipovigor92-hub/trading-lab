@@ -151,13 +151,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
             elif path in ("/api/exchange-screener", "/api/exchange-chart", "/api/densities"):
                 query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
-                allowed = {'exchanges', 'symbols', 'watch'} if path == '/api/densities' else ({'exchange'} if path == '/api/exchange-screener' else {'exchange', 'symbol', 'interval', 'live'})
+                allowed = {'exchanges', 'symbols', 'watch', 'overlay'} if path == '/api/densities' else ({'exchange'} if path == '/api/exchange-screener' else {'exchange', 'symbol', 'interval', 'live'})
                 if len(urlsplit(self.path).query) > 3000 or any(len(v) != 1 for v in query.values()) or set(query) - allowed:
                     self.api_error(400, 'Некорректные параметры публичных данных')
                     return
                 try:
                     if path == '/api/densities':
-                        data = DENSITIES.request(**{k: v[0] for k, v in query.items()})
+                        if query.get('overlay', ['0'])[0] not in ('0', '1'):
+                            raise ValueError('Invalid overlay flag')
+                        options = {k: v[0] for k, v in query.items() if k != 'overlay'}
+                        if query.get('overlay', ['0'])[0] == '1':
+                            options['overlay'] = True
+                        data = DENSITIES.request(**options)
                     elif path == '/api/exchange-screener':
                         data = EXCHANGE_DATA.exchange_snapshot(query.get('exchange', ['bybit'])[0])
                     else:

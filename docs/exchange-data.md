@@ -217,7 +217,7 @@ opening time but no generation time: `source_ts` stays null and origin is
 
 The renderer adds a native current candle only immediately after the matching
 last closed history bar. A missing history window cannot be filled by invented
-bars. A separate fresh quote line is labelled "Цена сейчас". Native forming or
+bars. A separate fresh quote line has an unlabeled numeric price marker. Native forming or
 recently closing candles have explicit display labels and do not enter the
 closed volume/indicator series. Historic OHLCV selection, manual annotations,
 density source isolation and viewport anchors remain tied to their own data.
@@ -299,3 +299,10 @@ upstream response bodies were not logged.
 Запросы каталога и плотностей занимают не более одного рабочего места; второй из двух рабочих потоков остаётся доступен графикам. Общая очередь по-прежнему ограничена четырьмя заданиями, а внешние HTTP-запросы — двумя.
 
 Эта версия продолжает `24a5a04`, сохраняя новую панель. Обновление также допускает восстановление кода прежнего фонового наблюдателя `trading-live` после ошибочной версии `878f057`: перезапускается только уже активный наблюдатель; остановленный не включается. Торговые модели и их данные не изменяются.
+
+
+## Фоновое наблюдение
+
+Скринер, плотности и алерты начинают запросы при открытии панели, даже если выбран раздел «Настройки». Переключение разделов не останавливает эти мониторы. Скринер сохраняет не более 13 источников и шести WebSocket, а запросы истории остаются ограничены двумя одновременно. Скрытые графики получают данные без перерисовки; при возвращении раздел сразу показывает сохранённые свежие наблюдения.
+
+Плотности опрашиваются каждые пять секунд; серверный монитор также продолжает ограниченный обход без браузера. Запрос плотностей из графика использует `overlay=1` и добавляет не более 13 временных пар на 15 секунд внутри прежнего общего лимита 20 целей. Он не заменяет фильтры и наблюдение страницы плотностей. Исходные времена и правила подтверждения не меняются.

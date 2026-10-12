@@ -41,6 +41,21 @@ class DensityTests(unittest.TestCase):
     def row(self):
         return next(row for row in self.monitor.snapshot()['rows'] if row['id'] == self.identity)
 
+    def test_chart_overlay_adds_bounded_targets_without_replacing_monitor_scope(self):
+        self.monitor.request(exchanges='bybit', symbols='BTCUSDT', watch='bybit:BTCUSDT')
+        packet = self.monitor.request(exchanges='binance', symbols='ETHUSDT', watch='binance:ETHUSDT', overlay=True)
+        self.assertEqual(self.monitor.selected, ['bybit'])
+        self.assertEqual(self.monitor.watch, [('bybit', 'BTCUSDT')])
+        self.assertIn(('binance', 'ETHUSDT'), self.monitor.targets)
+        self.assertIn(('bybit', 'BTCUSDT'), self.monitor.targets)
+        self.monitor.tick()
+        self.assertTrue(all(row['exchange']=='binance' for row in self.monitor.snapshot({'exchanges':['binance']})['rows']))
+        self.assertTrue(all(row['exchange']=='bybit' for row in self.monitor.snapshot()['rows']))
+        self.now=16;self.monitor.tick()
+        self.assertNotIn(('binance', 'ETHUSDT'), self.monitor.targets)
+        self.assertEqual(self.monitor.selected, ['bybit'])
+        self.assertLessEqual(len(self.monitor.targets), SCAN_LIMIT)
+
     def test_base_quantity_notional_exact_price_identity_and_exchange_side(self):
         self.observe()
         self.assertEqual(self.row()['notional'], 100_000)

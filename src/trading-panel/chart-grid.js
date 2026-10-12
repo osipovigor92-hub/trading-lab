@@ -98,7 +98,7 @@
    if(!rows.length)tiles.append(el('p','chart-grid-empty',catalog?'Нет монет по этим условиям. Измените поиск или добавьте монеты в наблюдение.':'Ждём публичные данные биржи…'));syncStreams();renderLive();
   }
   let lastCatalog=0,lastCatalogExchange='';
-  async function loadCatalog(force=false){if(busy||!visible()||!force&&lastCatalogExchange===exchange&&Date.now()-lastCatalog<5000)return;busy=true;lastCatalog=Date.now();lastCatalogExchange=exchange;const e=exchange,g=requestGeneration;try{const p=await scope.labJson('/api/exchange-screener?'+new URLSearchParams({exchange:e}),{fresh:force},'Список биржи');if(e!==exchange||g!==requestGeneration)return;if(p.exchange!==e||!Array.isArray(p.rows))throw Error('Некорректный список биржи');catalog=p;catalogError=p.status==='ok'?'':'Биржа недоступна · повторяем запрос';}catch(err){if(g===requestGeneration)catalogError=err.message;}finally{busy=false;render();pump();}}
+  async function loadCatalog(force=false){if(busy||!force&&lastCatalogExchange===exchange&&Date.now()-lastCatalog<5000)return;busy=true;lastCatalog=Date.now();lastCatalogExchange=exchange;const e=exchange,g=requestGeneration;try{const p=await scope.labJson('/api/exchange-screener?'+new URLSearchParams({exchange:e}),{fresh:force,background:true},'Список биржи');if(e!==exchange||g!==requestGeneration)return;if(p.exchange!==e||!Array.isArray(p.rows))throw Error('Некорректный список биржи');catalog=p;catalogError=p.status==='ok'?'':'Биржа недоступна · повторяем запрос';}catch(err){if(g===requestGeneration)catalogError=err.message;}finally{busy=false;if(visible())render();else syncStreams();pump();}}
   function chartStatus(packet,e,s,i,ok=validChart(packet,e,s,i)){
    if(ok)return (packet.refreshing?'Проверяем обновление · ':'Свечи подтверждены · ')+new Date(packet.updated*1000).toLocaleTimeString('ru-RU');
    const key=e+':'+s+':'+i,error=failures.get(key)||packet?.refresh_error||packet?.error;
@@ -109,7 +109,7 @@
   }
   async function requestChart(e,s,i){
    const key=e+':'+s+':'+i;if(inFlight.has(key))return;inFlight.add(key);attempts.set(key,Date.now());chartsBusy++;
-   try{let p=await scope.labJson('/api/exchange-chart?'+new URLSearchParams({exchange:e,symbol:s,interval:i,live:needsFallback(e,s,i)?'1':'0'}),{fresh:forced.delete(key)},'Свечи');
+   try{let p=await scope.labJson('/api/exchange-chart?'+new URLSearchParams({exchange:e,symbol:s,interval:i,live:needsFallback(e,s,i)?'1':'0'}),{fresh:forced.delete(key),background:true},'Свечи');
     if(p.exchange!==e||p.symbol!==s||p.interval!==i)throw Error('Ответ другой монеты или биржи');
     failures.delete(key);const prior=packets.get(key);if(!validChart(p,e,s,i)&&prior?.candles?.length)p={...prior,status:p.status==='pending'?'pending':'unavailable',stale:true,pending:p.pending,refreshing:p.refreshing,error:p.error||p.refresh_error||'',refresh_error:p.refresh_error,refresh_reason:p.refresh_reason,retry_after_seconds:p.retry_after_seconds,next_refresh_at:p.next_refresh_at,current_candle:p.current_candle};
     packets.delete(key);packets.set(key,p);while(packets.size>60)packets.delete(packets.keys().next().value);
@@ -117,11 +117,10 @@
    finally{chartsBusy--;inFlight.delete(key);if(visible())render();if(dialog.open)renderDialog();pump();}
   }
   function pump(){
-   if(document.hidden)return;
    const jobs=new Map(),now=Date.now();
    const add=(e,s,i,priority)=>{const key=e+':'+s+':'+i,p=packets.get(key);if(inFlight.has(key))return;const valid=validChart(p,e,s,i);const fallback=priority<2&&needsFallback(e,s,i)&&now-(attempts.get(key)||0)>=2000;if(!forced.has(key)&&!fallback&&!refreshDue(p,e,s,i,(attempts.get(key)||0)/1000,now/1000,failures.has(key)))return;const rank=priority+(valid?3:0);if(!jobs.has(key)||rank<jobs.get(key).priority)jobs.set(key,{e,s,i,priority:rank,last:attempts.get(key)||0});};
    if(dialog.open&&detail)add(detail.exchange,detail.symbol,detail.interval,0);
-   if(visible()){
+   {
     const selected=selectedRows();for(const r of selected)add(exchange,r.symbol,interval,1);
     const m=metric==='natr5_14'?'5':(['natr1_30','change5'].includes(metric)?'1':null);if(m&&m!==interval)for(const r of selected)add(exchange,r.symbol,m,2);
    }
@@ -135,13 +134,13 @@
   zoomIn.append(scope.LabUI.icon('zoom-in'));zoomIn.setAttribute('aria-label','Приблизить график');zoomOut.append(scope.LabUI.icon('zoom-out'));zoomOut.setAttribute('aria-label','Отдалить график');dialogTools.append(volumeToggle,indicatorsToggle,zoomIn,zoomOut,reset,fitLevels);
   dialogTitle.id='exchange-chart-title';dialog.setAttribute('aria-labelledby',dialogTitle.id);dialogHead.append(dialogTitle,close);dialog.append(dialogHead,dialogFrames,dialogTools,dialogHost,dialogNote,tableLink);document.body.append(dialog);
   let detail=null,returnFocus=null;const dialogWidget=scope.LabExchangeChart.create(dialogHost,{symbol:'BTCUSDT',exchange:'bybit',interval:'5',volume:false,indicators:false,onPriceClick:value=>levelTools.placePrice(value)});const levelTools=scope.LabChartLevels.create({tools:dialogTools,after:dialogHost,widget:dialogHost,onChange:renderDialog});
-  const streamDisabled=document.body.dataset.demo==='true',stream=scope.LabChartStream.create({disabled:streamDisabled,onUpdate:renderLive});let streamIdentity='';
+  const streamDisabled=document.body.dataset.demo==='true',stream=scope.LabChartStream.create({disabled:streamDisabled,onUpdate:()=>{if(visible()||dialog.open&&!document.hidden)renderLive();}});let streamIdentity='';
   function needsFallback(e,s,i){return !streamDisabled&&!stream.get({exchange:e,symbol:s,interval:i})?.candle;}
   function displayLive(e,s,i){return fallbackLive(packets.get(e+':'+s+':'+i),stream.get({exchange:e,symbol:s,interval:i}),e,s,i);}
   function syncStreams(){
    const wanted=[];
    const add=(e,s,i,row)=>{const packet=packets.get(e+':'+s+':'+i),native=row?.native_symbol||packet?.native_symbol,source={exchange:e,symbol:s,interval:i,native_symbol:native};if(scope.LabChartStream.validSource(source))wanted.push(source);};
-   if(!document.hidden){if(visible())for(const row of selectedRows())add(exchange,row.symbol,interval,row);if(dialog.open&&detail){const row=catalog?.exchange===detail.exchange?catalog.rows?.find(r=>r.symbol===detail.symbol):null;add(detail.exchange,detail.symbol,detail.interval,row);}}
+   {for(const row of selectedRows())add(exchange,row.symbol,interval,row);if(dialog.open&&detail){const row=catalog?.exchange===detail.exchange?catalog.rows?.find(r=>r.symbol===detail.symbol):null;add(detail.exchange,detail.symbol,detail.interval,row);}}
    const identity=wanted.map(s=>scope.LabChartStream.keyOf(s)).sort().join('|');if(identity===streamIdentity)return;streamIdentity=identity;stream.setSources(wanted);
   }
   function renderLive(){
@@ -154,6 +153,6 @@
   function renderDialog(){if(!detail||!dialog.open)return;const p=packets.get(detail.exchange+':'+detail.symbol+':'+detail.interval),ok=validChart(p,detail.exchange,detail.symbol,detail.interval);dialog.dataset.exchange=detail.exchange;dialog.dataset.symbol=detail.symbol;dialogTitle.textContent=EXCHANGES[detail.exchange]+' · '+detail.symbol;dialogHost.setAttribute('aria-label','Свечи '+detail.symbol+' на '+EXCHANGES[detail.exchange]);dialogNote.textContent=chartStatus(p,detail.exchange,detail.symbol,detail.interval,ok);dialogNote.dataset.status=ok?'ok':'unavailable';tableLink.hidden=detail.exchange!=='bybit'||!/^[A-Z0-9]{2,24}USDT$/.test(detail.symbol);for(const b of dialogFrames.children){const selected=b.dataset.interval===detail.interval;b.classList.toggle('selected',selected);b.setAttribute('aria-pressed',String(selected));}volumeToggle.setAttribute('aria-pressed',String(volumeVisible));volumeToggle.classList.toggle('selected',volumeVisible);indicatorsToggle.setAttribute('aria-pressed',String(indicatorsVisible));indicatorsToggle.classList.toggle('selected',indicatorsVisible);dialogWidget.setPacket(p||{exchange:detail.exchange,symbol:detail.symbol,interval:detail.interval,candles:[]},{confirmed:ok,updating:awaitingClose(p,detail.exchange,detail.symbol,detail.interval),...levelTools.settings(),volume:volumeVisible,indicators:indicatorsVisible});}
   dialog.addEventListener('close',()=>{levelTools.close();detail=null;syncStreams();dialogWidget.setLive(null);document.dispatchEvent(new CustomEvent('lab-chart-overlay',{detail:{open:false}}));returnFocus?.focus();});window.addEventListener('lab-exchange-chart',e=>openChart(e.detail));document.addEventListener('lab-exchange-chart',e=>openChart(e.detail));
   for(const input of [exchangeInput,frameInput,metricInput,countInput])input.addEventListener('change',()=>{const e=exchangeInput.value;if(e!==exchange){exchange=e;catalog=null;catalogError='';for(const n of nodes.values())n.widget.dispose();nodes.clear();tiles.replaceChildren();requestGeneration++;}interval=frameInput.value;metric=metricInput.value;count=Number(countInput.value);order=[];save();render();loadCatalog();pump();});search.addEventListener('input',()=>{search.value=search.value.toUpperCase().replace(/[^A-Z0-9]/g,'');order=[];render();pump();});controls.addEventListener('submit',e=>{e.preventDefault();order=[];render();pump();});
-  document.addEventListener('lab-selection-changed',()=>{if(visible())render();});document.addEventListener('lab-screener-table',()=>setView('table'));document.addEventListener('lab-tab',()=>{if(visible()){render();loadCatalog();pump();}syncStreams();renderLive();});document.addEventListener('visibilitychange',()=>{if(visible()){render();loadCatalog();pump();}syncStreams();renderLive();});setInterval(()=>{if(visible()){render();loadCatalog();}if(!document.hidden&&(visible()||dialog.open))pump();if(!document.hidden&&dialog.open){levelTools.render();levelTools.poll();renderDialog();syncStreams();renderLive();}},1000);window.addEventListener('pagehide',()=>{streamIdentity='';stream.setSources([]);renderLive();});window.addEventListener('pageshow',()=>{syncStreams();renderLive();});setView(view);
+  document.addEventListener('lab-selection-changed',()=>{if(visible())render();});document.addEventListener('lab-screener-table',()=>setView('table'));document.addEventListener('lab-tab',()=>{if(visible()){render();loadCatalog();pump();}syncStreams();renderLive();});document.addEventListener('visibilitychange',()=>{if(visible()){render();loadCatalog();pump();}syncStreams();renderLive();});setInterval(()=>{loadCatalog();pump();if(visible())render();if(!document.hidden&&dialog.open){levelTools.render();levelTools.poll();renderDialog();syncStreams();renderLive();}},1000);window.addEventListener('pagehide',()=>{streamIdentity='';stream.setSources([]);renderLive();});window.addEventListener('pageshow',()=>{syncStreams();renderLive();});setView(view);loadCatalog();pump();
  });
 })(typeof window==='undefined'?globalThis:window);
