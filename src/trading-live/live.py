@@ -13,6 +13,7 @@ import websocket
 ROOT = Path("/var/lib/trading-live")
 SOURCE = Path("/var/lib/trading-scalp/scalp.json")
 URL = "wss://stream.bybit.com/v5/public/linear"
+DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']
 
 def num(value):
     value = float(value)
@@ -34,24 +35,31 @@ def publish(status, rows=None, message=""):
     return data
 
 def select_symbols():
-    s = json.loads(SOURCE.read_text())
+    # Observation must not wait forever for the old scanner to approve a trade.
+    # These liquid contracts are a watchlist, never confirmed trading candidates.
+    try:
+        s = json.loads(SOURCE.read_text())
+    except (OSError, ValueError):
+        return list(DEFAULT_SYMBOLS)
     now = time.time()
-    if s.get("status") not in ("ok", "partial"):
-        return []
-    if not 0 <= now-s.get("finished", 0) <= 180:
-        return []
+    if not isinstance(s, dict) or s.get("status") not in ("ok", "partial"):
+        return list(DEFAULT_SYMBOLS)
+    if not isinstance(s.get('finished'), (int, float)) or not 0 <= now-s.get("finished", 0) <= 180:
+        return list(DEFAULT_SYMBOLS)
     selected = []
-    for r in s.get("rows", []):
-        symbol = r["symbol"]
+    for r in s.get("rows", []) if isinstance(s.get('rows'), list) else []:
+        if not isinstance(r, dict):
+            continue
+        symbol = r.get('symbol', '')
         if (
-            r["candidate"]
-            and 0 <= now-r["sampled_at"] <= 120
-            and 0 <= now-r["candle_end"] <= 180
-            and re.fullmatch(r"[A-Z0-9]+USDT", symbol)
+            r.get('candidate') is True
+            and isinstance(r.get('sampled_at'), (int, float)) and 0 <= now-r["sampled_at"] <= 120
+            and isinstance(r.get('candle_end'), (int, float)) and 0 <= now-r["candle_end"] <= 180
+            and isinstance(symbol, str) and re.fullmatch(r"[A-Z0-9]+USDT", symbol)
             and symbol not in selected
         ):
             selected.append(symbol)
-    return selected[:3]
+    return selected[:3] or list(DEFAULT_SYMBOLS)
 
 class Market:
     def __init__(self, symbol):
@@ -67,6 +75,7 @@ class Market:
         self.previous_walls = {}
         self.events = deque(maxlen=8)
         self.started = time.time()
+        self.trade_time = None
 
     def book(self, message):
         d = message["data"]
@@ -136,6 +145,7 @@ class Market:
             bucket = self.buckets.setdefault(int(stamp), [0.0, 0.0, 0])
             bucket[0 if trade["S"] == "Buy" else 1] += p*q
             bucket[2] += 1
+            self.trade_time = max(self.trade_time or stamp, stamp)
         for second in list(self.buckets):
             if second < int(now)-60:
                 del self.buckets[second]
@@ -172,6 +182,11 @@ class Market:
         sell = sum(v[1] for v in buckets)
         age = now-self.ts
         warm = now-self.started >= 60
+        flows = {}
+        for window in (5, 15, 60):
+            values = [v for second, v in self.buckets.items() if now-window <= second <= now]
+            flows['flow'+str(window)] = dict(buy=sum(v[0] for v in values),
+                                             sell=sum(v[1] for v in values), count=sum(v[2] for v in values))
         return dict(
             symbol=self.symbol, ready=warm and 0 <= age <= 5,
             reason="Наблюдение" if warm else "Накопление 60 секунд ленты",
@@ -183,6 +198,8 @@ class Market:
             buy60=buy, sell60=sell, delta60=buy-sell,
             trades60=sum(v[2] for v in buckets),
             flow_window=min(60, max(0, now-self.started)),
+            trade_age=max(0, now-self.trade_time) if self.trade_time is not None else None,
+            **flows,
             walls=walls, events=list(self.events),
         )
 
@@ -225,7 +242,7 @@ def main():
             time.sleep(10)
 
     print("LIVE selected: "+", ".join(symbols), flush=True)
-    backoff = 3
+    backoff = 1
     cleanup_at = 0
 
     while True:
@@ -234,7 +251,7 @@ def main():
         markets = {s:Market(s) for s in symbols}
         try:
             ws = websocket.create_connection(URL, timeout=10)
-            ws.settimeout(2)
+            ws.settimeout(1)
             args = [
                 topic+"."+s for s in symbols
                 for topic in ("orderbook.200", "publicTrade")
@@ -286,9 +303,9 @@ def main():
                     ws.send(json.dumps({"op":"ping"}))
                     last_ping = mono
 
-                if mono-last_write >= 2:
+                if mono-last_write >= 1:
                     rows = [m.metrics(now) for m in markets.values()]
-                    status = "live" if subscribed and all(r["ready"] for r in rows) \
+                    status = "live" if subscribed and all(r.get('book_time') and 0 <= now-r['book_time'] <= 5 for r in rows) \
                         else "warming"
                     data = publish(status, rows, ", ".join(symbols))
                     if mono-last_history >= 10:
@@ -305,7 +322,7 @@ def main():
                         last_history = mono
                     last_write = mono
                     if status == "live":
-                        backoff = 3
+                        backoff = 1
         except Exception as exc:
             message = type(exc).__name__+": "+str(exc)[:200]
             publish("offline", message=message)
@@ -317,7 +334,7 @@ def main():
                 except Exception:
                     pass
         time.sleep(backoff)
-        backoff = min(60, backoff*2)
+        backoff = min(15, backoff*2)
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:

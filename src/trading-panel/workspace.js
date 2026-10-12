@@ -15,7 +15,13 @@
   const lo=Math.min(...values),hi=Math.max(...values),span=hi-lo||1;
   return values.map((v,i)=>`${8+i*(width-16)/Math.max(1,values.length-1)},${height-8-(hi===lo?.5:(v-lo)/span)*(height-16)}`).join(' ');
  }
- const api={numeric,fresh,bookRows,flowRows,seriesPoints};if(typeof module!=='undefined')module.exports=api;
+ function marketObservation(packet,symbol,now){
+  const book=packet?.book,near=book?.bands?.['0.001'];
+  if(book?.status!=='ok'||book.symbol!==symbol||!fresh(book.updated,now,8)||!numeric(book.mid)||book.mid<=0||!numeric(book.spread)||!near)return null;
+  const live=packet.live,row=live?.rows?.find(r=>r.symbol===symbol),stream=fresh(live?.updated,now,10)&&['live','warming'].includes(live.status)&&fresh(row?.book_time,now,5)?row:null;
+  return {symbol,time:book.updated,price:book.mid,spread:book.spread,bands:book.bands,source:'Bybit REST',ready:stream?.ready===true,trade_age:stream?stream.trade_age:null,flow_window:stream?.flow_window,flow5:stream?.flow5,flow15:stream?.flow15,flow60:stream?.flow60};
+ }
+ const api={numeric,fresh,bookRows,flowRows,seriesPoints,marketObservation};if(typeof module!=='undefined')module.exports=api;
  if(typeof document==='undefined')return;scope.LabMetrics=api;
  document.addEventListener('DOMContentLoaded',()=>{
   const overview=document.getElementById('page-overview'),live=document.getElementById('page-live'),tests=document.getElementById('page-tests');if(!overview)return;
@@ -51,10 +57,10 @@
   const external=make('a','text-link','Открыть TradingView ↗');external.target='_blank';external.rel='noopener noreferrer';
   const quote=make('div','terminal-quote');toolbar.append(label,interval,quote,external);modelSummary.after(toolbar);
   const layout=make('div','terminal-layout'),chartBox=make('section','box chart-box'),decision=make('section','box decision-box');layout.append(chartBox,decision);toolbar.after(layout);
-  heading(chartBox,'TRADINGVIEW / BYBIT PERPETUAL','График цены и объёма');
+  heading(chartBox,'BYBIT PERPETUAL','График цены и объёма');
   const chartHost=make('div','chart-host');const load=make('button','primary-button','Загрузить TradingView');load.type='button';
-  const hint=make('p','muted','Внешний график загружается по нажатию. TradingView получит IP браузера и выбранный символ; данные панели ему не передаются.');chartHost.append(hint,load);chartBox.append(chartHost);
-  line(chartBox,'График TradingView и анализ Bybit — разные источники. Индикаторы на графике не меняют правила PAPER-входа.');
+  const hint=make('p','muted','График Bybit обновляется автоматически. По кнопке можно открыть внешний TradingView: он получит IP браузера и выбранный символ.');chartBox.append(chartHost,hint,load);
+  line(chartBox,'Текущая свеча обновляется отдельно. Анализ и PAPER-план используют закрытые свечи.');
   const pulse=make('section','box');layout.after(pulse);const modelCharts=make('section','box');pulse.after(modelCharts);
   const liquidity=make('section','box liquidity-workspace');live.insertBefore(liquidity,oldLive);
   const guide=make('details','box strategy-guide');guide.append(make('summary','','Как читать аналитику · стратегии и ограничения'));
@@ -68,11 +74,11 @@
   ];for(const [title,text] of guideItems){const a=make('article');a.append(make('h3','',title),make('p','',text));guide.append(a);}
   for(const [title,url] of [['OFI · Cont, Kukanov, Stoikov','https://arxiv.org/abs/1011.6402'],['Дисбаланс очередей · Gould, Bonart','https://arxiv.org/abs/1512.03492'],['Риск подгонки бэктеста · Bailey и др.','https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf'],['Bybit · порядок snapshot / delta','https://bybit-exchange.github.io/docs/v5/websocket/public/orderbook']]){const a=make('a','research-link',title);a.href=url;a.target='_blank';a.rel='noopener noreferrer';guide.append(a);}
   line(guide,'Исследования OFI и дисбаланса выполнены преимущественно на акциях. Эффективность на этих криптоконтрактах ещё предстоит проверить.');tests.prepend(guide);
-  let b=null,a=null,report=null,journals={},selected='LINKUSDT',extraSymbol='',chartEnabled=false,sequence='',samples=new Map(),error='',lastSample=new Map();
+  let b=null,a=null,report=null,journals={},selected='LINKUSDT',extraSymbol='',chartEnabled=true,provider='bybit',sequence='',samples=new Map(),error='',lastSample=new Map(),market=null,marketError='',marketGeneration=0;
   const chooseChart=()=>{const safe=/^[A-Z0-9]{2,24}USDT$/.test(selected)?selected:'LINKUSDT';external.href='https://www.tradingview.com/chart/?symbol='+encodeURIComponent('BYBIT:'+safe+'.P');
-   if(!chartEnabled)return;chartHost.replaceChildren();const frame=make('iframe');frame.title='TradingView '+safe;frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-popups');frame.referrerPolicy='no-referrer';frame.src='/chart.html?symbol='+encodeURIComponent(safe)+'&interval='+interval.value;chartHost.append(frame);
+   if(!chartEnabled||chartBox.closest('[hidden]'))return;const src='/chart.html?symbol='+encodeURIComponent(safe)+'&interval='+interval.value+(provider==='tradingview'?'&provider=tradingview':'');if(chartHost.firstElementChild?.getAttribute('src')===src)return;chartHost.replaceChildren();const frame=make('iframe');frame.title=(provider==='tradingview'?'TradingView ':'Bybit ')+safe;frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-popups');frame.referrerPolicy='no-referrer';frame.src=src;chartHost.append(frame);
   };
-  load.addEventListener('click',()=>{chartEnabled=true;chooseChart();});select.addEventListener('change',()=>{selected=select.value;chooseChart();render();});interval.addEventListener('change',chooseChart);
+  load.addEventListener('click',()=>{provider=provider==='bybit'?'tradingview':'bybit';load.textContent=provider==='tradingview'?'Вернуться к графику Bybit':'Загрузить TradingView';chooseChart();});select.addEventListener('change',()=>{selected=select.value;marketGeneration++;market=null;chooseChart();render();pollMarket();});interval.addEventListener('change',()=>{marketGeneration++;chooseChart();pollMarket();});
   function graph(parent,values,label){const box=make('div','spark-chart');box.append(make('span','muted',label));if(values.length<2){line(box,'Накопление наблюдений…');parent.append(box);return;}
    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 600 100');svg.setAttribute('role','img');svg.setAttribute('aria-label',label);const p=document.createElementNS(svg.namespaceURI,'polyline');p.setAttribute('points',seriesPoints(values));p.setAttribute('class','spark-line');svg.append(p);box.append(svg);parent.append(box);
   }
@@ -89,29 +95,32 @@
    displayRoots.forEach((node,index)=>{if(node.className!==drafts[index].className)node.className=drafts[index].className;scope.LabUI.syncChildren(node,drafts[index]);});
   }
   function renderContent(modelSummary,quote,decision,pulse,liquidity,modelCharts){const now=Date.now()/1000;const rows=b?.observations||[];const symbols=[...new Set([...rows.map(r=>r.symbol),...(extraSymbol?[extraSymbol]:[])])];const signature=symbols.join('|');
-   if(signature!==sequence){sequence=signature;select.replaceChildren();for(const symbol of symbols){const o=make('option','',symbol);o.value=symbol;select.append(o);}if(!symbols.includes(selected))selected=symbols[0]||'LINKUSDT';select.value=selected;chooseChart();}
+   for(const row of market?.tickers?.rows||[])if(!symbols.includes(row.symbol)&&/^[A-Z0-9]{2,24}USDT$/.test(row.symbol))symbols.push(row.symbol);
+   if(!symbols.includes(selected))symbols.push(selected);
+   const allSignature=symbols.join('|');if(allSignature!==sequence){sequence=allSignature;select.replaceChildren();for(const symbol of symbols){const o=make('option','',symbol);o.value=symbol;select.append(o);}select.value=selected;chooseChart();}
    const r=rows.find(r=>r.symbol===selected);const current=b?.phase==='running'&&fresh(b.updated,now,8)&&fresh(r?.time,now,3);const view=current&&r&&scope.LabAlerts?scope.LabAlerts.classifyB(b,r,now):null;
    for(const [name,s] of [['A',a],['B',b]]){const card=make('article','model-tile');card.dataset.key=name;const active=s&&fresh(s.updated,now,10),running=active&&s.phase==='running';const status=running?'PAPER работает':active&&s.phase==='halted'?'Остановлена по защите':active?'Ожидает данные':'Нет свежих данных';
     card.append(make('small','eyebrow','МОДЕЛЬ '+name),make('h3','',status));const pnl=s&&numeric(s.equity)&&numeric(s.config?.capital)?s.equity-s.config.capital:null;
     if(!active){card.append(make('strong','muted','—'));line(card,s?'Последний снимок: '+dt(s.updated)+'. Текущий P&L не подтверждён.':'Снимок модели ещё не получен.','negative');if(pnl!==null)line(card,'Последний P&L: '+fmt(pnl,4)+' USDT.');}
     else{card.append(make('strong',pnl<0?'negative':'positive',fmt(pnl,4)+' USDT'));line(card,(running?'Текущий':'Итоговый')+' P&L модели · '+(s?.position?(running?'открытая позиция: ':'последняя позиция: ')+s.position.symbol:'нет открытой позиции'));}
     if(!active&&s?.position)line(card,'Последняя известная позиция '+s.position.symbol+' требует проверки.','muted');modelSummary.append(card);}
-   quote.replaceChildren(make('strong','',current?fmt(r.price,6):'—'),make('small',current?'positive':'negative',current?'Модельный стакан свежий · '+fmt(now-r.time,1)+' с':(error||'Модельный поток устарел')+' · решение по рынку отключено'));
+   const observation=marketObservation(market,selected,now),marketCurrent=!!observation;
+   quote.replaceChildren(make('strong','',marketCurrent?fmt(observation.price,6):'—'),make('small',marketCurrent?'positive':'negative',marketCurrent?'Рынок Bybit · '+fmt(now-observation.time,1)+' с'+(marketError?' · восстанавливаем связь':''):(marketError||'Получаем рыночные данные Bybit')));
    decision.replaceChildren();heading(decision,'РЕШЕНИЕ МОДЕЛИ B',current?(view?.label||'Ожидание условий'):'Нет свежего подтверждения');decision.className='box decision-box alert-'+(current?(view?.tone||'neutral'):'neutral');
    line(decision,current?selected+(view?' · '+view.direction:''):selected+' · сигнал скрыт до свежего снимка','decision-symbol');
    const chartFresh=current&&fresh(r.chart?.end,now,120)&&!r.chart_error;const metrics=make('div','terminal-metrics');for(const [k,v] of [['Спред',current?fmt(r.spread,4)+'%':'—'],['Расходы оборота',current?fmt(r.roundtrip_pct,3)+'%':'—'],['ATR минутный',chartFresh?fmt(r.chart?.atr_pct,3)+'%':'—'],['RVOL 5 мин',chartFresh?fmt(r.chart?.rvol5,2)+'×':'—']]){const cell=make('div');cell.append(make('span','muted',k),make('b','',v));metrics.append(cell);}decision.append(metrics);
    const reasons=current?(view?.reasons||['Нет данных модели']):['Модель B не прислала свежую оценку. Сигнал LONG / SHORT не считается действующим.',b?.updated?'Последний снимок модели: '+dt(b.updated)+'.':'Ожидаем первый снимок модели.'];for(const text of reasons.slice(0,4))line(decision,text,'condition-reason');if(reasons.length>4)line(decision,'Ещё '+(reasons.length-4)+' ограничений во вкладке «Алерты».');
    if(!reasons.length)line(decision,'Проверяйте фактическое открытие в PAPER-журнале.');
    pulse.replaceChildren();heading(pulse,'МИКРОСТРУКТУРА','Ликвидность и исполненные сделки');
-   liquidity.replaceChildren();heading(liquidity,'BYBIT / ПОТОК МОДЕЛИ B','Активность стакана · '+selected);line(liquidity,'Монета выбирается в разделе «График». Зелёный — покупатели; красный — продавцы.');
-   for(const target of [pulse,liquidity]){if(!current){line(target,'Нет свежего стакана. Объёмы и активность скрыты.','negative');continue;}
-    const grid=make('div','micro-grid'),book=make('div'),flow=make('div');book.append(make('h3','','Видимые заявки в зонах'));for(const band of bookRows(r)){meter(book,band.label,band.bid,band.ask,band.share);if(!band.covered)line(book,band.label+' — зона покрыта не полностью либо нет данных.');}
-    flow.append(make('h3','','Лента исполнений'));if(!r.ready)line(flow,'Поток ещё не готов: прогрев или нет свежих сделок.','negative');line(flow,'Возраст последней сделки: '+fmt(r.trade_age+now-b.updated,1)+' с.');for(const f of flowRows(r)){meter(flow,f.seconds+' сек. · '+fmt(f.count,0)+' сделок',f.buy,f.sell,f.share);line(flow,'Дельта '+fmt(f.delta,0)+' USDT',f.delta<0?'negative':'positive');}grid.append(book,flow);target.append(grid);
+   liquidity.replaceChildren();heading(liquidity,'BYBIT / ПУБЛИЧНЫЙ РЫНОК','Активность стакана · '+selected);line(liquidity,'Монета выбирается в разделе «График». Зелёный — покупатели; красный — продавцы.');
+   for(const target of [pulse,liquidity]){if(!marketCurrent){line(target,'Нет свежего стакана. Объёмы и активность скрыты.','negative');continue;}
+    const grid=make('div','micro-grid'),book=make('div'),flow=make('div');book.append(make('h3','','Видимые заявки в зонах'));for(const band of bookRows(observation)){meter(book,band.label,band.bid,band.ask,band.share);if(!band.covered)line(book,band.label+' — зона покрыта не полностью либо нет данных.');}
+    flow.append(make('h3','','Лента исполнений'));if(!observation.flow60)line(flow,'Для этой монеты нет свежей WebSocket-ленты. Стакан REST продолжает обновляться.','muted');else{if(!observation.ready)line(flow,'Накоплено '+fmt(observation.flow_window,0)+' из 60 секунд ленты.');line(flow,'Возраст последней сделки: '+fmt(observation.trade_age,1)+' с.');for(const f of flowRows(observation)){meter(flow,f.seconds+' сек. · '+fmt(f.count,0)+' сделок',f.buy,f.sell,f.share);line(flow,'Дельта '+fmt(f.delta,0)+' USDT',f.delta<0?'negative':'positive');}}grid.append(book,flow);target.append(grid);
     line(target,'Зоны стакана вложены друг в друга: их объёмы не складываются. Окна ленты скользящие: их дельты не являются накопленной CVD.');
    }
    if(current){line(liquidity,'OFI за 5 / 15 / 60 сек.: '+[r.ofi5,r.ofi15,r.ofi60].map(v=>fmt(v,0)).join(' / ')+' · в единицах контракта.');line(liquidity,'Заявки могут быть отменены. Уменьшение глубины не доказывает исполнение или спуфинг.');}
    const sampled=samples.get(selected)||[];graph(liquidity,sampled.map(x=>x.price),'Mid-price · до 120 снимков этой сессии, не свечи');graph(liquidity,sampled.map(x=>x.spread),'Спред, % · до 120 снимков этой сессии');
-   if(!current&&sampled.length)line(liquidity,'Графики показывают прошлые наблюдения, текущий поток недоступен.','negative');
+   if(!marketCurrent&&sampled.length)line(liquidity,'Графики показывают прошлые наблюдения, текущий поток недоступен.','negative');
    modelCharts.replaceChildren();heading(modelCharts,'РЕЗУЛЬТАТ ПОСЛЕ ИЗДЕРЖЕК','Модели и журнал');
    if(report&&fresh(report.updated,now,180)){const table=make('table'),thead=make('thead'),tr=make('tr');for(const t of ['Модель','Сделки','Net, USDT','Средняя','PF'])tr.append(make('th','',t));thead.append(tr);table.append(thead);const body=make('tbody');for(const name of ['A','B']){const s=report.models?.[name];if(!s)continue;const tr=make('tr');for(const v of [name,fmt(s.count,0),fmt(s.net,4),fmt(s.average,4),fmt(s.profit_factor,2)])tr.append(make('td','',v));body.append(tr);}table.append(body);const scroll=make('div','scroll');scroll.append(table);modelCharts.append(scroll);line(modelCharts,'Общий период: '+dt(report.start)+' — '+dt(report.end)+'.');issueNotice(modelCharts,issues(report));
    }else line(modelCharts,'Сравнительный отчёт недоступен или устарел.','negative');
@@ -119,7 +128,15 @@
   }
   async function poll(){try{const next=await getJson('/api/model-b','Поток модели B');b=next;error='';const now=Date.now()/1000;for(const r of b.observations||[]){if(b.phase!=='running'||!fresh(b.updated,now,8)||!fresh(r.time,now,3)||!numeric(r.price)||!numeric(r.spread)||lastSample.get(r.symbol)===r.time)continue;const previous=lastSample.get(r.symbol);const arr=previous&&r.time-previous>6?[]:samples.get(r.symbol)||[];arr.push({time:r.time,price:r.price,spread:r.spread});samples.set(r.symbol,arr.slice(-120));lastSample.set(r.symbol,r.time);}}catch(e){error=e?.message||'Поток модели B недоступен';}render();setTimeout(poll,2000);}
   async function slow(){const paths=[['/api/paper','PAPER-модель A'],['/api/lab-report','Сводный отчёт'],['/api/journal-a','Журнал A'],['/api/journal-b','Журнал B']];const results=await Promise.allSettled(paths.map(([p,label])=>getJson(p,label)));if(results[0].status==='fulfilled')a=results[0].value;if(results[1].status==='fulfilled')report=results[1].value;for(let i=2;i<4;i++)if(results[i].status==='fulfilled')journals[i===2?'A':'B']=results[i].value;render();setTimeout(slow,10000);}
-  document.addEventListener('lab-symbol',e=>{if((b?.observations||[]).some(r=>r.symbol===e.detail)||typeof e.detail==='string'&&/^[A-Z0-9]{2,24}USDT$/.test(e.detail)){selected=e.detail;extraSymbol=selected;render();select.value=selected;chooseChart();scope.LabNavigation.activate('chart');}});
-  setInterval(render,1000);poll();slow();chooseChart();
+  const marketFlights=new Set();
+  async function pollMarket(){
+   if(document.hidden||!['overview','chart','live'].some(id=>document.getElementById('page-'+id)?.hidden===false))return;
+   const symbol=selected,tf=interval.value,token=marketGeneration,key=symbol+':'+tf+':'+token;if(marketFlights.has(key))return;marketFlights.add(key);
+   try{const next=await getJson('/api/market-view?symbol='+encodeURIComponent(symbol)+'&interval='+tf,'Публичный рынок');if(token!==marketGeneration||symbol!==selected||tf!==interval.value)return;if(next.symbol!==symbol||next.interval!==tf)throw Error('Ответ не соответствует выбранной монете');market=next;marketError='';const row=marketObservation(market,symbol,Date.now()/1000);if(row&&lastSample.get(symbol)!==row.time){let values=samples.get(symbol)||[];if(values.length&&row.time-values.at(-1).time>12)values=[];values.push({time:row.time,price:row.price,spread:row.spread});samples.set(symbol,values.slice(-120));lastSample.set(symbol,row.time);}}
+   catch(e){if(token===marketGeneration)marketError=e.message;}finally{marketFlights.delete(key);render();}
+  }
+  document.addEventListener('lab-symbol',e=>{if((b?.observations||[]).some(r=>r.symbol===e.detail)||typeof e.detail==='string'&&/^[A-Z0-9]{2,24}USDT$/.test(e.detail)){selected=e.detail;extraSymbol=selected;marketGeneration++;market=null;render();select.value=selected;chooseChart();scope.LabNavigation.activate('chart');pollMarket();}});
+  document.addEventListener('lab-tab',()=>{chooseChart();pollMarket();chartHost.firstElementChild?.contentWindow?.postMessage('lab-chart-resume',location.origin);});document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollMarket();});
+  setInterval(render,1000);setInterval(pollMarket,1000);poll();slow();chooseChart();pollMarket();
  });
 })(typeof window==='undefined'?globalThis:window);

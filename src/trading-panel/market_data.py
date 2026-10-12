@@ -163,6 +163,24 @@ def chart_analysis(symbol, interval, bars, stamp):
                 volume_window=volume, turnover_window=sum(b["turnover"] for b in bars[-60:]))
 
 
+def current_candle(result, stamp, interval):
+    """The exchange's forming bar is display-only; never part of closed-bar analysis."""
+    step = INTERVALS[interval]
+    expected = int(stamp // step) * step
+    found = None
+    for row in result['list']:
+        if number(row[0]) / 1000 != expected:
+            continue
+        if found is not None:
+            raise ValueError('Duplicate current candle')
+        o, h, l, c, v, turnover = map(number, row[1:7])
+        if not (0 < l <= min(o, c) <= max(o, c) <= h and v >= 0 and turnover >= 0):
+            raise ValueError('Invalid current candle')
+        found = dict(time=expected, open=o, high=h, low=l, close=c,
+                     volume=v, turnover=turnover, confirmed=False)
+    return found
+
+
 def orderbook_analysis(symbol, result, stamp):
     if result.get("s") != symbol:
         raise ValueError("Wrong orderbook symbol")
@@ -211,7 +229,7 @@ def orderbook_analysis(symbol, result, stamp):
 
 
 class MarketData:
-    """Two workers, bounded cache and an optional public screener prefetcher."""
+    """Two background workers plus two reserved for the visible contract; bounded cache."""
     TTL = {"screener": 5, "chart": 25, "book": 2}
 
     def __init__(self, api=public_api, clock=time.monotonic, background=False):
@@ -219,6 +237,7 @@ class MarketData:
         self.lock = threading.Lock()
         self.entries = OrderedDict()
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="public-market")
+        self.interactive_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="selected-market")
         self.selection_lock = threading.Lock()
         self.selection_watch = []
         self.selection_until = 0
@@ -359,11 +378,13 @@ class MarketData:
             return ticker_rows(result, stamp)
         if kind == "chart":
             result, stamp = self.api("kline", symbol=symbol, interval=interval, limit=185)
-            return chart_analysis(symbol, interval, closed_candles(result, stamp, interval), stamp)
+            data = chart_analysis(symbol, interval, closed_candles(result, stamp, interval), stamp)
+            data['current_candle'] = current_candle(result, stamp, interval)
+            return data
         result, stamp = self.api("orderbook", symbol=symbol, limit=200)
         return orderbook_analysis(symbol, result, stamp)
 
-    def get(self, kind, symbol="", interval="5"):
+    def get(self, kind, symbol="", interval="5", *, priority=False):
         if kind not in ("screener", "chart", "book"):
             raise ValueError("Unknown analysis")
         if kind != "screener" and (not SYMBOL.fullmatch(symbol) or interval not in INTERVALS):
@@ -379,7 +400,9 @@ class MarketData:
                 try:
                     cached["data"] = job.result()
                     cached["error"] = ""
-                    cached["until"] = now + self.TTL[cache_key[0]]
+                    cached['loaded'] = now
+                    ttl = (3 if cache_key[0] == 'chart' else 1) if cached.get('interactive_until', 0) > now else self.TTL[cache_key[0]]
+                    cached["until"] = now + ttl
                 except Exception as exc:
                     cached["error"] = type(exc).__name__ + ": " + str(exc)[:160]
                     cached["until"] = now + 20
@@ -391,13 +414,24 @@ class MarketData:
                     if victim is None:
                         return dict(status="pending", updated=0, error="Очередь анализа заполнена")
                     del self.entries[victim]
-                entry = dict(data=None, until=0, future=None, error="")
+                entry = dict(data=None, until=0, future=None, error="", loaded=0, lane='background')
                 self.entries[key] = entry
             self.entries.move_to_end(key)
+            if priority and kind != 'screener':
+                entry['interactive_until'] = now + 12
+                if not entry['error'] and entry['data'] is not None:
+                    entry['until'] = min(entry['until'], entry['loaded'] + (3 if kind == 'chart' else 1))
+                elif entry['error']:
+                    entry['until'] = min(entry['until'], now + 3) if not entry.get('retry_set') else entry['until']
+                    entry['retry_set'] = True
             if entry["until"] <= now and entry["future"] is None:
-                pending = sum(v["future"] is not None for v in self.entries.values())
+                lane = 'interactive' if priority and kind != 'screener' else 'background'
+                pending = sum(v["future"] is not None and v.get('lane', 'background') == lane for v in self.entries.values())
                 if pending < 2:
-                    entry["future"] = self.pool.submit(self._load, kind, symbol, interval)
+                    entry['lane'] = lane
+                    entry.pop('retry_set', None)
+                    pool = self.interactive_pool if lane == 'interactive' else self.pool
+                    entry["future"] = pool.submit(self._load, kind, symbol, interval)
             data = dict(entry["data"] or dict(status="pending", updated=0))
             data["refreshing"] = entry["future"] is not None
             if entry["error"]:
@@ -409,9 +443,18 @@ class MarketData:
                     data["refresh_error"] = entry["error"]
             return data
 
+    def view_snapshot(self, symbol, interval='5'):
+        # Nonblocking, independent of every PAPER model. A cold source schedules
+        # work and reports pending; slow background analysis cannot consume these slots.
+        return dict(symbol=symbol, interval=interval, server_time=time.time(),
+                    tickers=self.get('screener'),
+                    chart=self.get('chart', symbol, interval, priority=True),
+                    book=self.get('book', symbol, priority=True))
+
     def close(self):
         if self.stop_event:
             self.stop_event.set()
         if self.prefetcher:
             self.prefetcher.join(timeout=2)
         self.pool.shutdown(wait=True)
+        self.interactive_pool.shutdown(wait=True)

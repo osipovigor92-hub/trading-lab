@@ -40,5 +40,19 @@ class DeployTests(unittest.TestCase):
         self.assertTrue(all(unit=='trading-panel.service' for call in calls for unit in call[1:]))
     def test_success(self):self.run_update()
     def test_health_failure_rolls_back(self):self.run_update(True)
+    def test_observer_can_start_but_rollback_preserves_its_previous_stopped_state(self):
+        names=['src/trading-panel/app.js','src/trading-live/live.py']
+        server=self.root/'server';repo=self.root/'repo';track=self.root/'track'
+        server.mkdir();track.mkdir();expected={};target={}
+        for name in names:
+            source=repo/name;source.parent.mkdir(parents=True,exist_ok=True);source.write_text('new')
+            dest=server/Path(name).name;dest.write_text('old');expected[name]=deploy.digest(dest);target[name]=deploy.digest(source)
+        calls=[]
+        with patch.object(deploy,'TRACK',track),patch.object(deploy,'REPO',repo),patch.object(deploy,'destination',lambda n:server/Path(n).name),patch.object(deploy,'active',side_effect=lambda u:u=='trading-panel.service'),patch.object(deploy,'system',side_effect=lambda *a:calls.append(a)),patch.object(deploy.subprocess,'run'),patch.object(deploy,'health',side_effect=RuntimeError('health failed')):
+            with self.assertRaisesRegex(RuntimeError,'health failed'):deploy.apply(expected,target,names,'b'*40)
+        self.assertEqual(calls.count(('start','trading-live.service')),1,'observer is started for verification but remains stopped after rollback')
+        self.assertEqual(calls.count(('start','trading-panel.service')),2)
+        self.assertTrue(all(unit in ('trading-live.service','trading-panel.service') for call in calls for unit in call[1:]))
+        for name in names:self.assertEqual((server/Path(name).name).read_text(),'old')
 
 if __name__=='__main__':unittest.main()

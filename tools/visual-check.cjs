@@ -31,6 +31,7 @@ async function navigate(page,key,width){
    // new candle at each minute boundary, which legitimately redraws the chart.
    const chartRoute='**/api/market-chart?symbol=ONDOUSDT&interval=1';
    const stableChart=await (await page.request.get(`http://127.0.0.1:${port}/api/market-chart?symbol=ONDOUSDT&interval=1`)).json();
+   stableChart.current_candle=null; // This case pins closed bars; live forming bars are tested separately.
    await page.route(chartRoute,route=>route.fulfill({json:{...stableChart,updated:Date.now()/1000}}));
    await page.getByRole('button',{name:'ONDOUSDT',exact:true}).click();await page.waitForSelector('#screener-candles svg');
    await page.locator('.chart-analysis>summary').click();await page.waitForSelector('#screener-levels .level-item');
@@ -39,11 +40,11 @@ async function navigate(page,key,width){
    assert.equal(await page.locator('#screener-candles .volume-bar').count(),width===390?45:90);
    await page.getByRole('button',{name:'Увеличить масштаб графика',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '125%');
    assert.equal(await page.locator('#screener-candles .volume-bar').count(),width===390?36:72);
-   await page.locator('#screener-candles svg').evaluate(el=>el.dataset.liveNode='kept');
+   await page.locator('#screener-candles svg').evaluate(el=>window.pinnedChartNode=el);
    await page.locator('#screener-table tbody tr',{hasText:'ONDOUSDT'}).evaluate(el=>el.dataset.liveNode='kept');
    await navigate(page,'alerts',width);await page.waitForTimeout(2300);await navigate(page,'market',width);
    assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '125%','chart scale survives an inactive screener tab');
-   assert.equal(await page.locator('#screener-candles svg').evaluate(el=>el.dataset.liveNode),'kept','background data does not replace an unchanged chart');
+   assert.equal(await page.locator('#screener-candles svg').evaluate(el=>el===pinnedChartNode),true,'background data does not replace an unchanged chart');
    assert.equal(await page.locator('#screener-table tbody tr',{hasText:'ONDOUSDT'}).evaluate(el=>el.dataset.liveNode),'kept','background data patches a screener row in place');
    await page.unroute(chartRoute);
    await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Сбросить масштаб графика',exact:true}).textContent(), '100%');
@@ -156,7 +157,7 @@ async function navigate(page,key,width){
    assert.equal(new Set(historyIds).size,historyIds.length,'history identities are unique');
    await page.waitForTimeout(2300);assert.equal(await alertDetails.getAttribute('open'),'');
    await page.screenshot({path:path.join(root,'artifacts',`alerts-${width}.png`),fullPage:true});
-   await page.getByLabel('Фильтр условий моделей').selectOption('entry');assert.equal(await page.locator('.alert-card').count(),2);await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.locator('.model-alert-diagnostics>summary').click();await page.waitForSelector('#page-alerts .alert-long');
+   await page.getByLabel('Фильтр условий моделей').selectOption('entry');for(let i=0;i<80&&await page.locator('.alert-card').count()!==2;i++)await page.waitForTimeout(100);assert.equal(await page.locator('.alert-card').count(),2);await page.reload();await page.waitForSelector('#page-alerts:not([hidden])');await page.locator('.model-alert-diagnostics>summary').click();await page.waitForSelector('#page-alerts .alert-long');
    const restoredIds=await page.locator('#fresh-alert-history .fresh-event').evaluateAll(rows=>rows.map(r=>r.dataset.id));for(const id of historyIds)assert.ok(restoredIds.includes(id),'history survives reload');
    const frozen=await page.evaluate(()=>Date.now());await page.evaluate(t=>{Date.now=()=>t+20000},frozen);await page.waitForTimeout(1300);
    assert.equal(await page.locator('.alert-long,.alert-short').count(),0,'expired entry remains colored');assert.equal(await page.locator('#fresh-alert-events .fresh-event').count(),0,'expired source never remains a current event');

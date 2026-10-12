@@ -163,6 +163,9 @@ def market_fixture(path, query):
     if symbol not in prices or interval not in market.INTERVALS:
         return dict(status='error',updated=now,error='Invalid demo symbol')
     price=prices[symbol]
+    if path=='/api/market-view':
+        return dict(symbol=symbol,interval=interval,server_time=now,tickers=market_fixture('/api/screener',{}),
+                    chart=market_fixture('/api/market-chart',query),book=market_fixture('/api/market-book',query),live=fixtures()['/api/live'])
     if path=='/api/market-chart':
         step=market.INTERVALS[interval];end=now//step*step;bars=[]
         for i in range(180):
@@ -170,7 +173,12 @@ def market_fixture(path, query):
             o=center*(1+.0005*math.sin(i));c=center*(1-.0005*math.sin(i))
             bars.append(dict(time=end-(180-i)*step,open=o,close=c,high=max(o,c)*1.0008,
                              low=min(o,c)*.9992,volume=1000,turnover=price*1000*(1+.2*math.sin(i))))
-        return market.chart_analysis(symbol,interval,bars,now)
+        data=market.chart_analysis(symbol,interval,bars,now)
+        # Synthetic preview of a changing forming candle; closed analytics stay fixed.
+        close=price*(1+.0005*math.sin(now))
+        data['current_candle']=dict(time=end,open=price,close=close,high=max(price,close)*1.0002,
+                                   low=min(price,close)*.9998,volume=100,turnover=price*100,confirmed=False)
+        return data
     bids=[[str(price*(1-.00005-i*.00002)),str((30+i%5)*100/price)] for i in range(80)]
     asks=[[str(price*(1+.00005+i*.00002)),str((35+i%5)*100/price)] for i in range(80)]
     return market.orderbook_analysis(symbol,dict(s=symbol,ts=now*1000,seq=int(now*1000),b=bids,a=asks),now)
@@ -239,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
         data=fixtures()
         if path == '/api/manual-paper':
             body=json.dumps(dict(MANUAL.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
-        elif path in ('/api/screener','/api/market-chart','/api/market-book','/api/market-selection','/api/market-alerts'):
+        elif path in ('/api/screener','/api/market-chart','/api/market-book','/api/market-selection','/api/market-alerts','/api/market-view'):
             body=json.dumps(market_fixture(path,parse_qs(urlsplit(self.path).query)),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in data:
             body=json.dumps(data[path],ensure_ascii=False).encode();kind='application/json; charset=utf-8'
@@ -267,9 +275,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control','no-store')
         chart = path == '/chart.html'
         self.send_header('Content-Security-Policy',
-            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-src https://www.tradingview-widget.com https://s.tradingview.com; img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+            "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; frame-src https://www.tradingview-widget.com https://s.tradingview.com; img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
             if chart else "default-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
-        self.end_headers();self.wfile.write(body)
+        self.end_headers()
+        try:self.wfile.write(body)
+        except (BrokenPipeError,ConnectionResetError):pass
 
     def do_POST(self):
         if self.path not in ('/api/models-control','/api/manual-paper'):

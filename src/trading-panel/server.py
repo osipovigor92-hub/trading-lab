@@ -80,6 +80,7 @@ class Handler(BaseHTTPRequestHandler):
         chart = urlsplit(self.path).path == "/chart.html"
         policy = (
             "default-src 'none'; script-src 'self'; "
+            "connect-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "frame-src https://www.tradingview-widget.com https://s.tradingview.com; "
             "img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
@@ -134,14 +135,22 @@ class Handler(BaseHTTPRequestHandler):
                     self.api_error(400, str(exc))
                     return
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
-            elif path in ("/api/screener", "/api/market-chart", "/api/market-book"):
+            elif path in ("/api/screener", "/api/market-chart", "/api/market-book", "/api/market-view"):
                 query = parse_qs(urlsplit(self.path).query)
                 if any(len(v) != 1 for v in query.values()) or set(query) - {"symbol", "interval"}:
                     self.api_error(400, 'Invalid query')
                     return
-                kind = {"/api/screener": "screener", "/api/market-chart": "chart", "/api/market-book": "book"}[path]
                 try:
-                    data = MARKET.get(kind, query.get("symbol", [""])[0], query.get("interval", ["5"])[0])
+                    symbol, interval = query.get('symbol', [''])[0], query.get('interval', ['5'])[0]
+                    if path == '/api/market-view':
+                        data = MARKET.view_snapshot(symbol, interval)
+                        try:
+                            data['live'] = json.loads(Path('/var/lib/trading-live/live.json').read_text())
+                        except (OSError, ValueError):
+                            data['live'] = None
+                    else:
+                        kind = {"/api/screener": "screener", "/api/market-chart": "chart", "/api/market-book": "book"}[path]
+                        data = MARKET.get(kind, symbol, interval, priority=kind != 'screener')
                 except ValueError:
                     self.api_error(400, 'Invalid symbol or timeframe')
                     return

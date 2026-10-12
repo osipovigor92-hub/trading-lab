@@ -8,8 +8,8 @@
   const note = document.createElement('p');
   note.className = 'muted';
   note.textContent =
-    'Три кандидата выбираются при запуске службы и наблюдаются до её перезапуска. ' +
-    'Данные WebSocket; панель обновляется раз в 2 секунды. ' +
+    'Наблюдение работает независимо от PAPER-моделей. Если свежих кандидатов нет, наблюдаем BTC, ETH и SOL. ' +
+    'Данные WebSocket; панель обновляется раз в секунду. ' +
     'История агрегатов: каждые 10 секунд, 48 часов. Торговых сигналов и ордеров нет.';
   const body = document.createElement('div');
   box.append(title,status,note,body);
@@ -29,30 +29,34 @@
     live:'Поток работает',
     offline:'Переподключение'
   };
+  let busy=false,timer=null,last=null,error='';
 
   async function refresh() {
+    if(busy||document.hidden||document.getElementById('page-live')?.hidden)return;
+    clearTimeout(timer);busy=true;
     try {
-      const response = await labFetch('/api/live',{
-        cache:'no-store',signal:AbortSignal.timeout(5000)
-      });
-      if (!response.ok) throw new Error('HTTP '+response.status);
-      const s = await response.json();
+      const s = await labJson('/api/live',{},'LIVE');last=s;error='';render(s);
+    } catch(e){error=e.message;if(last)render(last);else{status.className='negative';status.textContent='LIVE недоступен: '+error;}}
+    finally{busy=false;timer=setTimeout(refresh,1000);}
+  }
+  function render(s){
       const now = Date.now()/1000;
       const fresh = now-s.updated >= -3 && now-s.updated <= 10;
-      status.className = fresh && s.status === 'live' ? 'positive' : 'negative';
+      status.className = !error && fresh && s.status === 'live' ? 'positive' : 'negative';
       status.textContent = (fresh ? (labels[s.status] || s.status) : 'ДАННЫЕ УСТАРЕЛИ')+
-        ' · '+(s.message || '');
-      body.replaceChildren();
-      if (!fresh || s.status === 'offline') return;
+        ' · '+(error||s.message || '');
+      const next=document.createDocumentFragment();
+      if (!fresh || s.status === 'offline') {if(body.childElementCount)status.textContent+=' · показаны прошлые наблюдения';return;}
 
       for (const r of s.rows || []) {
         const card = document.createElement('article');
+        card.dataset.key=r.symbol;
         const heading = document.createElement('h3');
         heading.textContent = r.symbol;
         card.append(heading);
         if (!r.book_time || now-r.book_time > 5 || now-r.book_time < -3) {
           line(card,'Ожидание свежего стакана.');
-          body.append(card);
+          next.append(card);
           continue;
         }
         line(card,r.reason+' · цена '+fmt(r.price,8)+' USDT');
@@ -85,15 +89,9 @@
           'Это сравнение с предыдущим наблюдением примерно 2 секунды назад; '+
           'оно не доказывает манипуляцию. Поток сделок не сопоставлен с отдельными заявками.');
         card.append(details);
-        body.append(card);
+        next.append(card);
       }
-    } catch (error) {
-      status.className = 'negative';
-      status.textContent = 'LIVE недоступен: '+error.message;
-      body.replaceChildren();
-    } finally {
-      setTimeout(refresh,2000);
-    }
+      LabUI.syncChildren(body,next);
   }
-  refresh();
+  document.addEventListener('lab-tab',e=>{if(e.detail==='live')refresh();});document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});setInterval(()=>{if(last&&!document.hidden)render(last);},1000);refresh();
 })();

@@ -13,6 +13,10 @@ async function until(check,message){for(let i=0;i<100;i++){if(await check())retu
    const page=await browser.newPage({viewport:{width,height:900}}),errors=[],posts=[];
    let mode='ready',reads=0,generation=0,settings={capital:600,notional:100,max_loss:18},experiment='refresh-original',pending=null,audit=[],apply=false,delayLive=false;
    page.on('pageerror',e=>errors.push(e.message));
+   // This section measures DOM identity with stable C/D content. Expiring a real
+   // preview response during a slow test legitimately removes current conditions.
+   const researchFixture=await (await page.request.get(`http://127.0.0.1:${port}/api/research`)).json();
+   await page.route('**/api/research',route=>{const data=structuredClone(researchFixture),now=Date.now()/1000;data.updated=now;for(const model of Object.values(data.models)){model.last_observation=now;for(const row of model.observations||[])row.time=now;}return route.fulfill({json:data});});
    await page.route('**/api/models-control',async route=>{
     if(route.request().method()==='POST'){
      const request=route.request().postDataJSON();posts.push(request);
@@ -44,8 +48,8 @@ async function until(check,message){for(let i=0;i<100;i++){if(await check())retu
    await capital.focus();await capital.scrollIntoViewIfNeeded();
    const before=await page.evaluate(()=>{
     const selectors=['#model-controls .managed-metrics','#models-ops-overview .models-ops-grid','#research-paper-summary .research-live','#research-observations'];
-    window.refreshNodes=selectors.map(s=>document.querySelector(s).firstElementChild);window.refreshRemoved=0;
-    for(const s of selectors)new MutationObserver(records=>{for(const r of records)refreshRemoved+=[...r.removedNodes].filter(n=>n.nodeType===1).length;}).observe(document.querySelector(s),{childList:true,subtree:true});
+    window.refreshNodes=selectors.map(s=>document.querySelector(s).firstElementChild);window.refreshRemoved=0;window.refreshRemovedBy={};
+    for(const s of selectors)new MutationObserver(records=>{for(const r of records){const count=[...r.removedNodes].filter(n=>n.nodeType===1).length;refreshRemoved+=count;refreshRemovedBy[s]=(refreshRemovedBy[s]||0)+count;}}).observe(document.querySelector(s),{childList:true,subtree:true});
     return {scrollY};
    });
    const startReads=reads;await page.waitForTimeout(7400);
@@ -53,7 +57,7 @@ async function until(check,message){for(let i=0;i<100;i++){if(await check())retu
    assert.ok(reads>=startReads+2,'at least two real polling cycles');
    assert.equal(await capital.evaluate(n=>document.activeElement===n),true,'polling keeps input focus');
    const stable=await page.evaluate(()=>({removed:refreshRemoved,retained:refreshNodes.every(n=>n.isConnected),scrollY}));
-   assert.equal(stable.removed,0,'stable display elements must not be removed');assert.equal(stable.retained,true);assert.ok(Math.abs(before.scrollY-stable.scrollY)<=2,'polling keeps scroll position');
+   assert.equal(stable.removed,0,'stable display elements must not be removed: '+JSON.stringify(await page.evaluate(()=>refreshRemovedBy)));assert.equal(stable.retained,true);assert.ok(Math.abs(before.scrollY-stable.scrollY)<=2,'polling keeps scroll position');
    evidence.push({width,draft:await capital.inputValue(),polls:reads-startReads,...stable});
    await capital.fill('');await page.waitForTimeout(1200);assert.equal(await capital.inputValue(),'','an incomplete draft stays empty');
    await capital.pressSequentially('725',{delay:400});assert.equal(await capital.inputValue(),'725','slow typing survives the one-second renderer');

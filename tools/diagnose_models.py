@@ -56,10 +56,11 @@ def integrity(data):
 
 
 def unit_states():
-    result = {u: dict(load='unknown', active='unknown') for u in UNITS}
+    units = (*UNITS, 'trading-live.service')
+    result = {u: dict(load='unknown', active='unknown') for u in units}
     try:
         completed = subprocess.run(
-            ['/usr/bin/systemctl', 'show', *UNITS, '-p', 'Id', '-p', 'LoadState', '-p', 'ActiveState'],
+            ['/usr/bin/systemctl', 'show', *units, '-p', 'Id', '-p', 'LoadState', '-p', 'ActiveState'],
             capture_output=True, text=True, timeout=12,
         )
         for block in completed.stdout.strip().split('\n\n'):
@@ -120,10 +121,17 @@ def diagnose():
             alerts = sanitized_alerts(json.load(response), time.time())
     except (OSError, ValueError, TypeError):
         pass
+    live = read(Path('/var/lib/trading-live/live.json'))
+    stamp = live.get('updated')
+    now = time.time()
+    observer = dict(status=live.get('status', 'unavailable'),
+                    fresh=type(stamp) in (int, float) and math.isfinite(stamp) and -2 <= now-stamp <= 10,
+                    symbols=[r['symbol'] for r in live.get('rows', []) if isinstance(r, dict) and
+                             isinstance(r.get('symbol'), str) and re.fullmatch(r'[A-Z0-9]{2,24}USDT', r['symbol'])][:3])
     return dict(checked=time.time(), panel_revision=revision(read(TRACK)),
                 control_revision=revision(manifest), control_files_match=integrity(manifest),
                 units=unit_states(), controller=sanitized_status(raw, time.time()), manual_paper=manual,
-                market_alerts=alerts)
+                market_alerts=alerts, live_market=observer)
 
 
 def sanitized_alerts(raw, now):

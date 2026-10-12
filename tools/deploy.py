@@ -1,4 +1,4 @@
-"""Version-checked updates for panel/report/signals only. Never restarts trading models."""
+"""Version-checked updates for the panel and observers. Never restarts trading models."""
 import argparse
 import ast
 import fcntl
@@ -14,7 +14,7 @@ from urllib.request import urlopen
 
 REPO=Path(__file__).resolve().parents[1]
 TRACK=Path('/var/lib/trading-lab-deploy')
-ALLOWED={'trading-panel','trading-report','trading-signals'}
+ALLOWED={'trading-panel','trading-report','trading-signals','trading-live'}
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
@@ -73,6 +73,7 @@ def health(changed):
     paths=['/','/api/paper','/api/model-b']
     if any('/trading-report/' in p for p in changed):paths+=['/api/lab-report','/api/journal-a','/api/journal-b']
     if any('/trading-signals/' in p for p in changed):paths+=['/api/signals']
+    if any('/trading-live/' in p for p in changed):paths+=['/api/live']
     for attempt in range(20):
         try:
             for path in paths:
@@ -91,9 +92,13 @@ def apply(expected,target,changed,revision):
     services=[]
     if any('/trading-panel/' in p for p in changed):services.append('trading-panel.service')
     if any('/trading-signals/' in p for p in changed):services.append('trading-signals.service')
+    if any('/trading-live/' in p for p in changed):
+        subprocess.run(['/usr/bin/python3','-c','import websocket'],check=True,timeout=10)
+        services.append('trading-live.service')
+    was_active={unit:active(unit) for unit in services}
     reports=any('/trading-report/' in p for p in changed)
     for unit in services:
-        if not active(unit):raise RuntimeError('Service is not active: '+unit)
+        if not was_active[unit] and unit!='trading-live.service':raise RuntimeError('Service is not active: '+unit)
     if reports and not active('trading-report.timer'):raise RuntimeError('Report timer is not active')
     backup=TRACK/('backup-'+time.strftime('%Y%m%dT%H%M%S')+'-'+revision[:8])
     backup.mkdir(mode=0o700)
@@ -128,7 +133,8 @@ def apply(expected,target,changed,revision):
             p=destination(name)
             if old[name]:atomic(p,*old[name])
             elif p.exists():p.unlink()
-        for unit in stopped:system('start',unit)
+        for unit in stopped:
+            if was_active[unit]:system('start',unit)
         if report_stopped:system('start','trading-report.timer')
         print('Update failed. Previous source restored. Backup:',backup,flush=True)
         raise

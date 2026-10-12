@@ -30,6 +30,49 @@ def ticker(symbol='BTCUSDT', turnover='123000000'):
 
 
 class MarketTests(unittest.TestCase):
+    def test_forming_bar_is_visible_without_changing_closed_analysis(self):
+        result, stamp = kline_fixture()
+        cache = market.MarketData(api=lambda *a, **k: (result, stamp))
+        try:
+            initial = cache._load('chart', 'BTCUSDT', '5')
+            self.assertEqual(initial['current_candle']['time'], initial['candle_end'])
+            self.assertFalse(initial['current_candle']['confirmed'])
+            result['list'][0][2] = '301'
+            result['list'][0][4] = '300'
+            changed = cache._load('chart', 'BTCUSDT', '5')
+            self.assertEqual(changed['current_candle']['close'], 300)
+            for key in ('candles', 'levels', 'price', 'atr', 'vwap', 'rvol'):
+                self.assertEqual(initial[key], changed[key], key)
+            result['list'].append(result['list'][0])
+            with self.assertRaisesRegex(ValueError, 'Duplicate current'):
+                cache._load('chart', 'BTCUSDT', '5')
+        finally:
+            cache.close()
+
+    def test_visible_contract_is_not_starved_by_slow_background_jobs(self):
+        release = threading.Event()
+        ready = threading.Event()
+        calls = []
+        def api(endpoint, **params):
+            calls.append((endpoint, params.get('symbol')))
+            if params.get('symbol', '').startswith('BG'):
+                release.wait(2)
+                raise ValueError('background fixture')
+            ready.set()
+            return kline_fixture()
+        cache = market.MarketData(api=api)
+        try:
+            cache.get('chart', 'BG1USDT', '5')
+            cache.get('chart', 'BG2USDT', '5')
+            cache.get('chart', 'BTCUSDT', '5', priority=True)
+            self.assertTrue(ready.wait(1), 'visible contract starts while both background calls are blocked')
+            cache.entries[('chart', 'BTCUSDT', '5')]['future'].result(timeout=1)
+            self.assertEqual(cache.get('chart', 'BTCUSDT', '5', priority=True)['status'], 'ok')
+            self.assertFalse(release.is_set())
+        finally:
+            release.set()
+            cache.close()
+
     def test_tickers_units_filters_sort_and_bad_values(self):
         bad=ticker('BADUSDT');bad['bid1Price']='nan'
         future=ticker('FUTUSDT');future['deliveryTime']='1800000000000'
