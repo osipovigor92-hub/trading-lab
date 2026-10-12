@@ -16,7 +16,21 @@
   }
   return result;
  }
- const api={cleanManual,densityLevels};if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;
+ function mergeDensityPacket(prior,next,source,now=Date.now()/1000){
+  const healthy=next&&!next.error&&!next.refresh_error&&['ok','partial'].includes(next.status)&&fresh(next.updated,now,30)&&Array.isArray(next.rows)&&next.rows.length<=500;
+  const incoming=(Array.isArray(next?.rows)&&next.rows.length<=500?next.rows:[]).filter(r=>r&&r.exchange===source.exchange&&r.symbol===source.symbol&&typeof r.id==='string');
+  const returned=new Map(incoming.map(r=>[r.id,r])),visible=new Set(densityLevels(prior,source,now).map(r=>r.id)),retained=[];
+  for(const row of prior?.rows||[]){if(!visible.has(row.id)||row.exchange!==source.exchange||row.symbol!==source.symbol)continue;const replacement=returned.get(row.id);
+   // A bounded response is not a complete book or a removal proof.
+   // Old missing episodes cannot erase more recent reappearances.
+   if(healthy&&replacement&&replacement.status!=='missing'&&finite(replacement.last_seen)&&replacement.last_seen>=row.last_seen)continue;
+   if(healthy&&replacement?.status==='missing'&&finite(replacement.last_seen)&&replacement.last_seen>=row.last_seen)continue;
+   retained.push({...row,status:'unavailable',stable:false});returned.delete(row.id);
+  }
+  const rows=[...returned.values()].filter(r=>r.status!=='missing').map(r=>healthy?r:{...r,status:'unavailable',stable:false});
+  return {...next,status:healthy?next.status:'unavailable',rows:rows.concat(retained.slice(0,6))};
+ }
+ const api={cleanManual,densityLevels,mergeDensityPacket};if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;
  function create({tools,after,widget,onChange}){
   const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
   const button=(text,action)=>{const b=el('button','screener-order',text);b.type='button';b.addEventListener('click',action);return b;};
@@ -48,7 +62,7 @@
    if(!densityEnabled||!source||!source.isOpen()||document.hidden)return;render();if(inFlight||!force&&Date.now()-lastRead<5000)return;
    lastRead=Date.now();const mine=revision,identity={exchange:source.exchange,symbol:source.symbol},controller=new AbortController();inFlight=controller;
    const timer=setTimeout(()=>controller.abort(),8000);
-   try{const packet=await scope.labJson('/api/densities?'+new URLSearchParams({exchanges:identity.exchange,symbols:identity.symbol,watch:pair(identity)}),{fresh:force,signal:controller.signal},'Плотности');if(mine!==revision||!source?.isOpen())return;if(!Array.isArray(packet.rows)||!finite(packet.updated)||!['ok','partial','pending','unavailable','error'].includes(packet.status))throw Error('Некорректный ответ стакана');if(!packet.rows.length&&['unavailable','error'].includes(packet.status)&&densityPacket?.rows?.length)densityPacket={...densityPacket,status:'unavailable'};else densityPacket=packet;densityError=packet.error?String(packet.error).slice(0,180):'';}catch(error){if(mine!==revision||!source?.isOpen())return;densityError=error.name==='AbortError'?'Истёк срок запроса · повторяем':String(error.message||'Нет ответа биржи').slice(0,180);if(densityPacket)densityPacket={...densityPacket,status:'unavailable'};}finally{clearTimeout(timer);if(inFlight===controller)inFlight=null;if(mine===revision){render();onChange();}}
+   try{const packet=await scope.labJson('/api/densities?'+new URLSearchParams({exchanges:identity.exchange,symbols:identity.symbol,watch:pair(identity)}),{fresh:force,signal:controller.signal},'Плотности');if(mine!==revision||!source?.isOpen())return;if(!Array.isArray(packet.rows)||!finite(packet.updated)||!['ok','partial','pending','unavailable','error'].includes(packet.status))throw Error('Некорректный ответ стакана');densityPacket=mergeDensityPacket(densityPacket,packet,identity);densityError=packet.error?String(packet.error).slice(0,180):'';}catch(error){if(mine!==revision||!source?.isOpen())return;densityError=error.name==='AbortError'?'Истёк срок запроса · повторяем':String(error.message||'Нет ответа биржи').slice(0,180);if(densityPacket)densityPacket={...densityPacket,status:'unavailable'};}finally{clearTimeout(timer);if(inFlight===controller)inFlight=null;if(mine===revision){render();onChange();}}
   }
   function open(next){revision++;inFlight?.abort();inFlight=null;source=next;manual=cleanManual(stored.get(pair(source)));drawing=false;input.value='';lastRead=0;densityError='';densityPacket=null;if(next.density){densityEnabled=true;densityPacket={updated:next.density.last_seen,status:'partial',rows:[{...next.density,exchange:next.exchange,symbol:next.symbol}]};}render();poll(true);}
   function close(){revision++;inFlight?.abort();inFlight=null;source=null;drawing=false;widget.classList.remove('is-drawing-level');}

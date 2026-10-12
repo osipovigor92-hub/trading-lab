@@ -88,12 +88,9 @@
     const next=await scope.labJson('/api/densities?'+new URLSearchParams({exchanges:sources[0].exchange,symbols:sources.map(source=>source.symbol).join(','),watch:sources.map(source=>source.exchange+':'+source.symbol).join(',')}),{fresh:force,signal:controller.signal},'Плотности графиков');
     if(mine!==densityGeneration||identity!==densityScope)return;
     if(!Array.isArray(next.rows)||!finite(next.updated)||!['ok','partial','pending','unavailable','error'].includes(next.status))throw Error('Некорректный ответ стакана');
-    const packetOK=!next.error&&!next.refresh_error&&['ok','partial'].includes(next.status)&&fresh(next.updated,Date.now()/1000,30);
     for(const source of sources){
-     const key=source.exchange+':'+source.symbol,prior=densityPackets.get(key),incoming=next.rows.filter(row=>row&&row.exchange===source.exchange&&row.symbol===source.symbol);
-     // A failed or expired read cannot prove that an old level disappeared.
-     const rows=packetOK?incoming.filter(row=>row.status!=='missing'):[...new Map([...(prior?.rows||[]),...incoming.filter(row=>row.status!=='missing')].map(row=>[row.id,{...row,status:'unavailable'}])).values()];
-     densityPackets.delete(key);densityPackets.set(key,{...next,rows});densityErrors.delete(key);if(next.error)densityErrors.set(key,String(next.error).slice(0,120));
+     const key=source.exchange+':'+source.symbol,prior=densityPackets.get(key);
+     densityPackets.delete(key);densityPackets.set(key,scope.LabChartLevels.mergeDensityPacket(prior,next,source));densityErrors.delete(key);if(next.error)densityErrors.set(key,String(next.error).slice(0,120));
     }
     while(densityPackets.size>48){const key=densityPackets.keys().next().value;densityPackets.delete(key);densityErrors.delete(key);}
    }catch(error){if(mine!==densityGeneration||identity!==densityScope)return;for(const source of sources){const key=source.exchange+':'+source.symbol,prior=densityPackets.get(key);if(prior)densityPackets.set(key,{...prior,status:'unavailable'});densityErrors.set(key,error.name==='AbortError'?'Истёк срок запроса · повторяем':String(error.message||'Нет ответа биржи').slice(0,120));}while(densityErrors.size>48)densityErrors.delete(densityErrors.keys().next().value);}
