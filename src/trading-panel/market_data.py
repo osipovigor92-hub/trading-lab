@@ -442,9 +442,13 @@ class MarketData:
         with self.selection_lock:
             if not self.selection_watch:
                 return
-            symbol = self.selection_watch[self.selection_cursor % len(self.selection_watch)]
+            index = self.selection_cursor % len(self.selection_watch)
+            watch = self.selection_watch[index:] + self.selection_watch[:index]
+            symbol = watch[0]
             self.selection_cursor += 1
-        self.get('chart', symbol, '1')
+        # Fill available slots now; do not add a one-second delay per coin.
+        for watched in watch:
+            self.get('chart', watched, '1')
         self.get('book', symbol)
         # Completed books are harvested by the shared cache on each background tick.
         # Record all watched symbols now rather than waiting a full shortlist rotation.
@@ -514,9 +518,16 @@ class MarketData:
                 entry = dict(data=None, until=0, future=None, error="")
                 self.entries[key] = entry
             self.entries.move_to_end(key)
-            if entry["until"] <= now and entry["future"] is None:
+            if kind == 'chart' and entry['data'] and not entry['error']:
+                end = entry['data'].get('candle_end')
+                expected = int((time.time() - 2) // (int(interval) * 60)) * int(interval) * 60
+                if isinstance(end, (int, float)) and end < expected:
+                    entry['until'] = min(entry['until'], now)
+            if entry["until"] <= now and entry["future"] is None and now-entry.get('submitted', -math.inf) >= 1:
                 pending = sum(v["future"] is not None for v in self.entries.values())
-                if pending < 2:
+                nonchart = sum(v['future'] is not None for k, v in self.entries.items() if k[0] != 'chart')
+                if pending < 2 and (kind == 'chart' or nonchart < 1):
+                    entry['submitted'] = now
                     entry["future"] = self.pool.submit(self._load, kind, symbol, interval)
             data = dict(entry["data"] or dict(status="pending", updated=0))
             data["refreshing"] = entry["future"] is not None
