@@ -73,23 +73,34 @@ integrations/kronos/runtime/.venv/bin/python integrations/kronos/smoke.py --runt
 
 ## Отдельная установка на NODE-02
 
-Пример unit находится в `trading-kronos.service.example`. Он намеренно
-расположен вне `deploy/`: обычный `tools/update.sh` не выполняет миграцию
-служб. Сначала проверить Python и свободную память; затем из проверенного
-checkout выполнить отдельную установку:
+Из корня проверенного checkout выполните от root:
 
 ```sh
-sudo install -d -o tradingbot -g tradingbot -m 0750 /opt/trading-kronos
-sudo -u tradingbot python3 integrations/kronos/setup.py --runtime /opt/trading-kronos
-sudo install -m 0644 integrations/kronos/trading-kronos.service.example /etc/systemd/system/trading-kronos.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now trading-kronos.service
+bash integrations/kronos/install-service.sh
 ```
 
-Worker и панель читают один токен от пользователя `tradingbot`; их службы
-независимы. При изменении нашего worker-кода остановить только этот unit,
-повторить setup из нужного immutable checkout и запустить его. Установка не
-меняет существующие units, состояния, LIVE или торговые процессы.
+Нужен Python 3.10–3.12 с `venv`/`ensurepip` и свободная память для отдельной
+службы (пример unit ограничен 1 ГБ). Если системный Python другой версии,
+задайте абсолютный путь совместимого интерпретатора через `KRONOS_SETUP_PYTHON` (например, `/usr/bin/python3.11`).
+
+Установщик читает закрытый root checkout от root, переносит только шесть
+нужных исходных файлов в отдельный root-controlled каталог с доступом группы
+`tradingbot`, а venv/пакеты/официальные веса устанавливает от `tradingbot` в
+`/opt/trading-kronos`. Права всего checkout не меняются. Код модели не запускается
+от root; worker запускается отдельным unit от `tradingbot`.
+
+Каждый запуск сохраняет приватный журнал `/var/log/trading-kronos-install.*`.
+Ошибка Python, venv, зависимости или загрузки останавливает установку и
+выводит путь журнала. Unit создаётся только после успешной установки runtime.
+Затем установщик запускает/перезапускает только `trading-kronos.service` и
+выводит настоящий статус модели. `loading` требует дождаться загрузки;
+`active` у systemd само по себе не доказывает, что модель загрузилась.
+
+Рабочий каталог и приватный token принадлежат `tradingbot`; токен не печатается.
+При повторной установке worker временно останавливается, token сохраняется.
+Скрипт не изменяет состояние, реальные ордера или другие торговые службы.
+Обычный `tools/update.sh` не выполняет установку модели: скрипт запускается
+отдельно. Без успешно установленного unit интерфейс показывает «не подключён».
 
 ## API и привязка источника
 

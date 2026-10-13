@@ -28,6 +28,7 @@ Environment=HF_HUB_DISABLE_TELEMETRY=1
 Environment=HF_HOME=/tmp/kronos-hf
 Environment=OMP_NUM_THREADS=1
 Environment=MKL_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
 
 [Install]
 WantedBy=multi-user.target
