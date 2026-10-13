@@ -59,6 +59,7 @@ jobs:
       - run: node tools/test_data_speed_ui.cjs
       - run: node tools/test_screener_columns_ui.cjs
       - run: node tools/test_grid_density_ui.cjs
+      - run: node tools/test_kronos_ui.cjs
       - run: node tools/test_fresh_alerts_ui.cjs
       - uses: actions/upload-artifact@v4
         if: always()

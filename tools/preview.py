@@ -134,6 +134,18 @@ CONTROL = DemoControl()
 PAPER_TEST = False
 ALERTS = MarketAlerts()
 
+def demo_significance(row):
+    """Authored synthetic evidence, visibly demo; never a market measurement."""
+    stamp = row['last_seen']
+    significant = row['notional'] >= 100000 and row['distance_pct'] <= .5
+    return dict(status='significant' if row['status'] == 'active' and significant else 'inactive' if significant else 'ordinary',
+                kind='large_wall' if row['status'] == 'active' and significant else None,
+                observed_kind='large_wall' if significant else None, relative_size=8,
+                local_median_notional=row['notional']/8, neighbor_count=6,
+                visible_depth_share=.25, side_depth_notional=row['notional']*4, side_level_count=10,
+                observations=1, first_source_ts=stamp, last_source_ts=stamp, source_stamps=[stamp], pattern={})
+
+
 def exchange_fixture(path, query):
     """Five venues and densities are explicit synthetic UI fixtures, never REST."""
     now = time.time()
@@ -146,8 +158,8 @@ def exchange_fixture(path, query):
         rows, history = [], []
         examples = [('BTCUSDT', 'bid', 59730, 520000, 3900, 'active'),
                     ('ETHUSDT', 'ask', 2310, 285000, 5700, 'active'),
-                    ('SOLUSDT', 'bid', 144.1, 165000, 920, 'active'),
-                    ('LINKUSDT', 'ask', 14.28, 112000, 4400, 'unavailable'),
+                    ('SOLUSDT', 'bid', 144.5, 165000, 920, 'active'),
+                    ('LINKUSDT', 'ask', 14.26, 112000, 4400, 'unavailable'),
                     ('AVAXUSDT', 'bid', 11.04, 84000, 85, 'unobserved')]
         prices = {'BTCUSDT':60000, 'ETHUSDT':2300, 'SOLUSDT':145, 'LINKUSDT':14.2, 'AVAXUSDT':11.1}
         for index, venue in enumerate(selected):
@@ -158,11 +170,14 @@ def exchange_fixture(path, query):
                            last_seen=now if status=='active' else now-45,
                            age_seconds=age if status=='active' else 0, status=status,
                            stable=status=='active' and age>=3600, timestamp_origin='demo', demo=True)
+                row['significance'] = demo_significance(row)
                 rows.append(row)
             missing = dict(rows[-1], id=density_id(venue,'ONDOUSDT','ask','.506'),symbol='ONDOUSDT',side='ask',
                            price=.506,price_text='.506',notional=175000,distance_pct=1.2,
                            status='missing',stable=False,age_seconds=0,first_seen=now-700,last_seen=now-120,
                            observed_at=now-90,reason='ДЕМО: отсутствует в двух снимках',event_id='demo-'+venue)
+            missing['distance_pct'] = .3
+            missing['significance'] = demo_significance(missing)
             history.append(missing)
         return dict(status='ok',updated=now,rows=rows,history=history,demo=True,
                     coverage=dict(total=len(selected)*100,scanned=len(selected)*2,selected=len(selected)*2,
@@ -357,7 +372,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         data=fixtures()
-        if path == '/api/manual-paper':
+        if path in ('/api/kronos/status', '/api/kronos/forecast'):
+            from kronos_client import response as kronos_response
+            body=json.dumps(dict(kronos_response('unavailable', error='Kronos выключен в демо'),demo=True),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
+        elif path == '/api/manual-paper':
             body=json.dumps(dict(MANUAL.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in ('/api/exchange-screener','/api/exchange-chart','/api/densities'):
             body=json.dumps(exchange_fixture(path,parse_qs(urlsplit(self.path).query)),ensure_ascii=False).encode();kind='application/json; charset=utf-8'

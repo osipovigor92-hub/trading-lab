@@ -106,7 +106,7 @@
     let n=nodes.get(row.symbol);
     if(!n){
      const box=el('article','chart-tile'),head=el('div','chart-tile-head'),name=button(row.symbol,()=>openChart({exchange,symbol:row.symbol,interval}),'chart-symbol'),star=button('',()=>toggleWatch(row.symbol),'screener-star'),density=button('Плотности',()=>toggleDensity(row.symbol),'screener-order chart-tile-density'),expand=button('',()=>openChart({exchange,symbol:row.symbol,interval}),'chart-expand');
-     density.setAttribute('aria-label','Плотности '+EXCHANGES[exchange]+' '+row.symbol);density.title='Плотности этой биржи · от 100 000 USDT, до 5% от цены, до 3 на сторону';
+     density.setAttribute('aria-label','Плотности '+EXCHANGES[exchange]+' '+row.symbol);density.title='Значимые заявки этой биржи · от 100 000 USDT, до 0,5% от цены, крупнее соседних уровней; до 3 на сторону';
      name.title=row.symbol;expand.append(scope.LabUI.icon('expand'));expand.setAttribute('aria-label','Развернуть');expand.title='Развернуть график';
      const badges=el('div','chart-tile-metrics'),measurement=el('span','chart-measurement'),change=el('span','chart-change');badges.append(measurement,change);head.append(star,name,badges,density,expand);
      const host=el('div','exchange-chart-host'),note=el('p','chart-tile-note muted');host.setAttribute('aria-label','График '+row.symbol+' · '+EXCHANGES[exchange]);

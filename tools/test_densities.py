@@ -10,7 +10,8 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/trading-panel'))
-from densities import DensityMonitor, EXCHANGES, HISTORY_LIMIT, MAX_ROWS, SCAN_LIMIT, density_id
+from densities import (DensityMonitor, EVIDENCE_LIMIT, EXCHANGES, HISTORY_LIMIT, MAX_ROWS,
+                       SCAN_LIMIT, density_id)
 
 
 def book(stamp, bids=None, asks=None, exchange='bybit', symbol='BTCUSDT'):
@@ -19,6 +20,16 @@ def book(stamp, bids=None, asks=None, exchange='bybit', symbol='BTCUSDT'):
     return dict(exchange=exchange, symbol=symbol, status='ok', source_ts=stamp, updated=stamp,
                 timestamp_origin='exchange', bids=bids, asks=asks,
                 coverage=dict(bid_min=bids[-1][0], ask_max=asks[-1][0]))
+
+
+def wall_book(stamp, walls=None, exchange='bybit', symbol='BTCUSDT', best='100.05'):
+    """A dense covered ladder makes outliers and repricings observable."""
+    quantities = {price:10 for price in ('100.04','100','99.95','99.9','99.85','99.8','99.75','99.7','99.5')}
+    quantities[best] = 10
+    quantities.update(walls if walls is not None else {'99.8':2000})
+    bids = [[price, quantity] for price, quantity in sorted(quantities.items(), key=lambda value:-float(value[0]))]
+    asks = [[price,10] for price in ('100.3','100.35','100.4','100.45','100.5')]
+    return book(stamp, bids=bids, asks=asks, exchange=exchange, symbol=symbol)
 
 
 class Adapter:
@@ -63,6 +74,223 @@ class DensityTests(unittest.TestCase):
         return self.monitor.observe('bybit', 'BTCUSDT', book(self.now) if packet is None else packet)
     def row(self):
         return next(row for row in self.monitor.snapshot()['rows'] if row['id'] == self.identity)
+
+    def wall_row(self, price='99.8', exchange='bybit', symbol='BTCUSDT'):
+        identity = density_id(exchange, symbol, 'bid', price)
+        return next(row for row in self.monitor.snapshot()['rows'] if row['id'] == identity)
+
+    def repricing(self):
+        for stamp, price in ((0,'99.8'),(5,'99.85'),(10,'99.9')):
+            self.now = stamp
+            self.observe(wall_book(stamp, walls={price:2000}))
+        return self.wall_row('99.9')
+
+    def test_significance_keeps_raw_levels_but_only_selects_large_near_outlier(self):
+        self.observe(wall_book(0, walls={'99.8':2000,'99.95':800,'98':5000}))
+        rows = self.monitor.snapshot()['rows']
+        self.assertEqual(len(rows), 3, 'the raw 50K observation contract is retained')
+        significant = [row for row in rows if row['significance']['status']=='significant']
+        self.assertEqual([row['price_text'] for row in significant], ['99.8'])
+        evidence = significant[0]['significance']
+        self.assertEqual(evidence['kind'], 'large_wall')
+        self.assertEqual(evidence['confidence'], 'single_snapshot')
+        self.assertGreaterEqual(evidence['relative_size'], 5)
+        self.assertGreaterEqual(evidence['neighbor_count'], 3)
+        self.assertNotIn('repeated_repricing', evidence['reasons'])
+        self.assertAlmostEqual(evidence['visible_depth_share'], significant[0]['notional']/evidence['side_depth_notional'])
+        self.assertEqual(evidence['source_stamps'], [0])
+        self.assertEqual(evidence['last_source_ts'], significant[0]['last_seen'])
+        settings = self.monitor.snapshot()['coverage']['significance']
+        self.assertEqual(settings['min_notional'], 100_000)
+        self.assertEqual(settings['score_kind'], 'rule_priority')
+
+    def test_absolute_threshold_uniform_large_levels_and_sparse_book_are_not_outliers(self):
+        self.observe(wall_book(0, walls={'100':1000}))
+        self.assertEqual(self.wall_row('100')['significance']['status'], 'significant', '100K is inclusive')
+        self.now = 1
+        self.observe(wall_book(1, walls={'100':999}))
+        self.assertEqual(self.wall_row('100')['significance']['status'], 'ordinary', '99.9K is below the candidate threshold')
+        self.now = 2
+        uniform = {price:1200 for price in ('100.05','100.04','100','99.95','99.9','99.85','99.8','99.75','99.7','99.5')}
+        self.observe(wall_book(2, walls=uniform))
+        current = [row for row in self.monitor.snapshot()['rows'] if row['last_seen']==2]
+        self.assertTrue(current)
+        self.assertTrue(all(row['notional'] >= 100_000 for row in current))
+        self.assertTrue(all(row['significance']['status']=='ordinary' for row in current), 'ordinary deep liquidity is not every wall')
+        self.now = 3
+        self.observe(book(3,bids=[['100',2000],['99.9',10]], asks=[['100.1',10]]))
+        evidence = self.wall_row('100')['significance']
+        self.assertIsNone(evidence['relative_size'])
+        self.assertIsNone(evidence['local_median_notional'])
+        self.assertEqual(evidence['neighbor_count'], 1)
+        self.assertEqual(evidence['status'], 'ordinary', 'a shallow denominator does not qualify a lone wall')
+
+    def test_three_distinct_sources_two_actual_moves_make_only_current_wall_pattern(self):
+        row = self.repricing()
+        evidence = row['significance']
+        self.assertEqual(evidence['kind'], 'machine_pattern_suspect')
+        self.assertEqual(evidence['confidence'], 'repeated_pattern')
+        self.assertEqual(evidence['observations'], 1, 'same-price observations are separate from the moving chain')
+        self.assertEqual(evidence['source_stamps'], [10])
+        self.assertEqual(evidence['pattern']['samples'], 3)
+        self.assertEqual(evidence['pattern']['repricings'], 2)
+        self.assertEqual(evidence['pattern']['side_pressure_observations'], 3)
+        self.assertEqual([item['source_ts'] for item in evidence['pattern']['price_path']], [0,5,10])
+        self.assertEqual([item['price_text'] for item in evidence['pattern']['price_path']], ['99.8','99.85','99.9'])
+        self.assertLessEqual(evidence['score'], 100)
+        inactive = self.wall_row('99.85')['significance']
+        self.assertIsNone(inactive['kind'])
+        self.assertEqual(inactive['observed_kind'], 'large_wall')
+        for stamp in (15,20,25):
+            self.now = stamp
+            self.observe(wall_book(stamp,walls={'99.9':2000}))
+        evidence = self.wall_row('99.9')['significance']
+        self.assertEqual(evidence['last_source_ts'], 25)
+        self.assertEqual([item['price_text'] for item in evidence['pattern']['price_path']], ['99.8','99.85','99.9'],
+                         'bounded proof retains the actual moves when later samples stay at the same price')
+
+    def test_replay_rollback_error_and_expiry_cannot_supply_pattern_proof(self):
+        self.observe(wall_book(0))
+        self.now = 1
+        self.assertFalse(self.observe(wall_book(0,walls={'99.85':2000})))
+        self.assertEqual(self.wall_row()['significance']['observations'], 1)
+        self.assertNotIn(density_id('bybit','BTCUSDT','bid','99.85'), self.monitor.rows)
+        row = self.repricing()
+        self.assertEqual(row['significance']['pattern']['samples'], 3)
+        self.assertFalse(self.observe(wall_book(9,walls={'99.95':2000})))
+        inactive = self.wall_row('99.9')['significance']
+        self.assertEqual(inactive['status'], 'inactive')
+        self.assertIsNone(inactive['kind'])
+        self.assertEqual(inactive['observed_kind'], 'machine_pattern_suspect')
+        self.assertEqual(inactive['last_source_ts'], 10)
+        self.assertNotIn(('bybit','BTCUSDT'), self.monitor.evidence)
+        self.now = 15
+        self.observe(wall_book(15,walls={'99.95':2000}))
+        self.assertEqual(self.wall_row('99.95')['significance']['pattern']['samples'], 1)
+        self.observe(dict(status='error',error='upstream failure'))
+        self.assertNotIn(('bybit','BTCUSDT'), self.monitor.evidence)
+        self.now = 20
+        self.observe(wall_book(20,walls={'100':2000}))
+        self.assertEqual(self.wall_row('100')['significance']['kind'], 'large_wall')
+        self.assertEqual(self.wall_row('100')['significance']['observations'], 1)
+        self.now = 46
+        expired = self.wall_row('100')['significance']
+        self.assertEqual(expired['status'], 'inactive')
+        self.assertIsNone(expired['kind'])
+        self.assertEqual(expired['last_source_ts'], 20)
+        self.assertNotIn(('bybit','BTCUSDT'), self.monitor.evidence)
+
+    def test_static_wall_mid_motion_and_long_counts_never_become_moving_pattern(self):
+        for stamp in range(25):
+            self.now = stamp
+            packet = wall_book(stamp)
+            packet['asks'][0][0] = str(100.3-stamp*.001)
+            self.observe(packet)
+        evidence = self.wall_row()['significance']
+        self.assertEqual(evidence['kind'], 'large_wall')
+        self.assertEqual(evidence['confidence'], 'repeated_observations')
+        self.assertEqual(evidence['observations'], EVIDENCE_LIMIT)
+        self.assertEqual(evidence['source_stamps'], list(range(13,25)))
+        self.assertEqual(evidence['pattern']['samples'], EVIDENCE_LIMIT)
+        self.assertEqual(evidence['pattern']['repricings'], 0)
+        self.now = 60
+        self.observe(wall_book(60))
+        self.assertEqual(self.wall_row()['significance']['observations'], 1, 'large source gaps start new evidence')
+        self.assertEqual(self.wall_row()['significance']['pattern']['samples'], 1)
+
+    def test_pattern_never_combines_other_symbols_venues_or_sides(self):
+        for stamp, exchange, symbol, price in ((0,'bybit','BTCUSDT','99.8'),
+                                               (5,'binance','BTCUSDT','99.85'),
+                                               (10,'bybit','ETHUSDT','99.9')):
+            self.now = stamp
+            self.monitor.observe(exchange,symbol,wall_book(stamp,walls={price:2000},exchange=exchange,symbol=symbol))
+        self.assertTrue(all(row['significance']['kind']=='large_wall' for row in self.monitor.snapshot()['rows']))
+        self.assertEqual(len(self.monitor.evidence), 3)
+        for stamp, price in ((15,'99.85'),(20,'99.9')):
+            self.now = stamp
+            self.observe(wall_book(stamp,walls={price:2000}))
+        self.assertEqual(self.wall_row('99.9')['significance']['kind'], 'machine_pattern_suspect')
+        self.assertEqual(self.wall_row('99.85','binance')['significance']['kind'], 'large_wall')
+        self.assertEqual(self.wall_row('99.9',symbol='ETHUSDT')['significance']['kind'], 'large_wall')
+        self.assertEqual(self.monitor.evidence[('bybit','BTCUSDT')]['sides']['ask']['candidates'], [])
+
+    def test_ask_repricing_is_symmetric_and_pressure_context_is_required(self):
+        for stamp, price in ((0,'100.5'),(5,'100.45'),(10,'100.4')):
+            self.now = stamp
+            packet = wall_book(stamp,walls={})
+            amounts = {level:10 for level in ('100.3','100.35','100.4','100.45','100.5','100.55','100.6','100.7')}
+            amounts[price] = 2000
+            packet['asks'] = [[level, quantity] for level, quantity in sorted(amounts.items(),key=lambda value:float(value[0]))]
+            packet['coverage']['ask_max'] = '100.7'
+            self.observe(packet)
+        identity = density_id('bybit','BTCUSDT','ask','100.4')
+        evidence = self.monitor.rows[identity]['significance']
+        self.assertEqual(evidence['kind'], 'machine_pattern_suspect')
+        self.assertEqual(evidence['pattern']['repricings'], 2)
+        self.assertGreaterEqual(evidence['near_pressure_share'], .6)
+        self.monitor = DensityMonitor(self.adapter,clock=lambda:self.now)
+        for stamp, price in ((15,'99.8'),(20,'99.85'),(25,'99.9')):
+            self.now = stamp
+            packet = wall_book(stamp,walls={price:2000})
+            packet['asks'] = [[level,1000] for level in ('100.3','100.35','100.4','100.45','100.5')]
+            self.observe(packet)
+        evidence = self.wall_row('99.9')['significance']
+        self.assertEqual(evidence['kind'], 'large_wall')
+        self.assertLess(evidence['near_pressure_share'], .6)
+        self.assertEqual(evidence['pattern']['samples'], 1, 'repricings do not manufacture same-side pressure')
+
+    def test_ambiguous_replacements_added_walls_and_outside_coverage_are_not_repricing(self):
+        self.observe(wall_book(0,walls={'99.75':2000,'99.8':2000}))
+        self.now = 5
+        self.observe(wall_book(5,walls={'99.85':2000}))
+        evidence = self.wall_row('99.85')['significance']
+        self.assertTrue(evidence['pattern']['ambiguous'])
+        self.assertEqual(evidence['kind'], 'large_wall')
+        self.assertEqual(evidence['pattern']['samples'], 1)
+        self.monitor = DensityMonitor(self.adapter,clock=lambda:self.now)
+        for stamp, walls in ((10,{'99.8':2000}), (15,{'99.8':2000,'99.85':2000}),
+                              (20,{'99.8':2000,'99.85':2000,'99.9':2000})):
+            self.now = stamp
+            self.observe(wall_book(stamp,walls=walls))
+        self.assertTrue(all(row['significance']['kind']=='large_wall' for row in self.monitor.snapshot()['rows']))
+        self.assertEqual(self.wall_row('99.8')['significance']['pattern']['repricings'], 0)
+        self.monitor = DensityMonitor(self.adapter,clock=lambda:self.now)
+        for stamp, price, best in ((25,'99.8','100.05'),(30,'100.1','100.15'),(35,'100.2','100.25')):
+            self.now = stamp
+            self.observe(wall_book(stamp,walls={price:2000},best=best))
+        self.assertEqual(self.wall_row('100.2')['significance']['kind'], 'large_wall')
+        self.assertEqual(self.wall_row('100.2')['significance']['pattern']['samples'], 1,
+                         'a new level beyond the earlier returned ladder cannot be linked')
+
+    def test_significance_history_persistence_and_all_evidence_limits_remain_bounded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'density-state.json'
+            monitor = DensityMonitor(self.adapter,clock=lambda:self.now,state_path=path)
+            for index in range(175):
+                symbol = 'COIN'+str(index)+'USDT'
+                for price in ('99.8','99.85','99.9'):
+                    self.now += 1
+                    monitor.observe('bybit',symbol,wall_book(self.now,walls={price:2000},symbol=symbol))
+            self.assertLessEqual(len(monitor.rows), MAX_ROWS)
+            self.assertLessEqual(len(monitor.history), HISTORY_LIMIT)
+            self.assertLessEqual(len(monitor.evidence), SCAN_LIMIT)
+            self.assertTrue(all(len(pair['source_stamps'])<=EVIDENCE_LIMIT for pair in monitor.evidence.values()))
+            self.assertTrue(all(len(wall['chain'])<=EVIDENCE_LIMIT for pair in monitor.evidence.values()
+                                for side in pair['sides'].values() for wall in side['candidates']))
+            monitor.close()
+            self.assertLess(path.stat().st_size, 1_000_000, 'new evidence still fits the existing archive bound')
+            saved = json.loads(path.read_text(encoding='utf-8'))
+            self.assertEqual(saved['version'], 1)
+            restarted = DensityMonitor(self.adapter,clock=lambda:self.now,state_path=path)
+            patterns = [row for row in restarted.snapshot()['rows']
+                        if row['significance']['observed_kind']=='machine_pattern_suspect']
+            self.assertTrue(patterns)
+            self.assertTrue(all(row['significance']['status']=='inactive' and row['significance']['kind'] is None
+                                for row in patterns), 'restart retains observed evidence without live qualification')
+            self.assertTrue(all(row['significance']['last_source_ts']==row['last_seen'] for row in patterns))
+            self.assertEqual(restarted.evidence, {})
+            self.assertTrue(restarted.snapshot()['history'])
+            restarted.close()
 
     def test_base_quantity_notional_exact_price_identity_and_exchange_side(self):
         self.observe()

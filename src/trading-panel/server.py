@@ -5,7 +5,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from market_data import MarketData
+from kronos_client import KronosClient, response as kronos_response
 import control_client
+KRONOS = KronosClient()
 import selection
 from manual_paper import ManualPaper
 from exchange_data import get_exchange_data
@@ -27,6 +29,9 @@ EXCHANGE_DATA = get_exchange_data()
 # Read-only observations restart their continuous-age clock after service restart.
 DENSITIES = DensityMonitor(EXCHANGE_DATA, background=__name__ == '__main__')
 FILES = {
+    "/density-signals.js": ("density-signals.js", "text/javascript; charset=utf-8"),
+    "/kronos.js": ("kronos.js", "text/javascript; charset=utf-8"),
+    "/kronos.css": ("kronos.css", "text/css; charset=utf-8"),
     "/lightweight-charts-5.2.1.js": ("lightweight-charts-5.2.1.js", "text/javascript; charset=utf-8"),
     "/exchange-chart.js": ("exchange-chart.js", "text/javascript; charset=utf-8"),
     "/chart-stream.js": ("chart-stream.js", "text/javascript; charset=utf-8"),
@@ -124,7 +129,25 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path == "/api/manual-paper":
+            if path == '/api/kronos/status':
+                if urlsplit(self.path).query:
+                    self.api_error(400, 'Некорректные параметры Kronos')
+                    return
+                data = dict(KRONOS.status(), token=control_client.TOKEN)
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            elif path == '/api/kronos/forecast':
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                if set(query) != {'exchange', 'symbol', 'interval'} or any(len(v) != 1 for v in query.values()) or len(urlsplit(self.path).query) > 250:
+                    self.api_error(400, 'Укажите биржу, монету и период один раз')
+                    return
+                try:
+                    packet = EXCHANGE_DATA.peek_chart_snapshot(*(query[k][0] for k in ('exchange', 'symbol', 'interval')))
+                    data = KRONOS.snapshot(packet) if packet.get('status') == 'ok' else kronos_response('pending', enabled=True, error='Ожидаем подтверждённые свечи')
+                except ValueError as exc:
+                    self.api_error(400, str(exc))
+                    return
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            elif path == "/api/manual-paper":
                 data = MANUAL.snapshot()
                 data['token'] = control_client.TOKEN
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
@@ -230,6 +253,32 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(400, b'{"error":"Invalid worker request"}', 'application/json')
             except OSError:
                 self.send(503, b'{"error":"Controller unavailable"}', 'application/json')
+            return
+        if self.path == '/api/kronos/forecast':
+            if not control_client.authorized(self.headers):
+                self.api_error(403, 'Недействительный токен или источник запроса')
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 4096 or self.headers.get('Transfer-Encoding'):
+                    raise ValueError('Некорректный размер запроса')
+                command = json.loads(self.rfile.read(length))
+                if not isinstance(command, dict) or set(command) != {'exchange', 'symbol', 'interval'}:
+                    raise ValueError('Укажите биржу, монету и период')
+                state = KRONOS.status()
+                if state.get('status') not in ('idle', 'queued', 'loading', 'ready') or not state.get('enabled'):
+                    data = state
+                else:
+                    packet = EXCHANGE_DATA.chart_snapshot(*(command[k] for k in ('exchange', 'symbol', 'interval')))
+                    if packet.get('status') == 'ok':
+                        data = KRONOS.request(packet)
+                    elif packet.get('queued') is True:
+                        data = kronos_response('pending', enabled=True, error='Загружаем проверенные свечи')
+                    else:
+                        data = kronos_response('error', enabled=True, error=packet.get('error') or 'Очередь свечей занята. Повторите отбор.')
+                self.send(202, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            except (ValueError, TypeError, OverflowError):
+                self.api_error(400, 'Некорректный запрос Kronos')
             return
         if self.path not in ("/api/models-control", "/api/manual-paper"):
             self.send(404, b'{"error":"Not found"}', "application/json")

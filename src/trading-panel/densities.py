@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import re
+from statistics import median
 import threading
 import time
 import uuid
@@ -22,6 +23,19 @@ MAX_OBSERVATION_GAP = 30
 STABLE_SECONDS = 3600
 SCAN_SECONDS = 1
 CATALOG_SECONDS = 30
+# Transparent scanner heuristics, not calibrated bot probabilities. All size
+# comparisons stay inside one venue, contract and side of a public snapshot.
+SIGNIFICANT_MIN = 100_000.0
+NEAR_DISTANCE_PCT = 0.5
+RELATIVE_SIZE_MIN = 5.0
+DEPTH_SHARE_MIN = 0.2
+PRESSURE_SHARE_MIN = 0.6
+NEIGHBOR_LIMIT = 12
+EVIDENCE_WINDOW = 120
+EVIDENCE_LIMIT = 12
+PATTERN_PATH_LIMIT = 3
+WALL_SIZE_TOLERANCE = 0.35
+EVIDENCE_CANDIDATE_LIMIT = 6
 
 
 def finite(value):
@@ -93,6 +107,7 @@ class DensityMonitor:
         self.rows = OrderedDict()
         self.history = []
         self.books = {}
+        self.evidence = OrderedDict()
         self.catalogs = {}
         self.selected = list(EXCHANGES)
         self.symbols, self.watch = [], []
@@ -188,6 +203,8 @@ class DensityMonitor:
         # A catalog refresh must not erase replay protection for book snapshots.
         # Keep bounded recent book state until its venue is deselected/evicted.
         self.books = {key: value for key, value in self.books.items() if key[0] in self.selected}
+        self.evidence = OrderedDict((key, value) for key, value in self.evidence.items()
+                                    if key[0] in self.selected)
 
     def tick(self):
         """Admit two book reads per second and drain already completed jobs."""
@@ -274,6 +291,168 @@ class DensityMonitor:
                     continue
                 self.observe(exchange, symbol, packet)
 
+    @staticmethod
+    def _assess_levels(ladders, mid):
+        """Explain size using only this snapshot's visible same-side liquidity.
+
+        Exclude the candidate from its nearby-level median. Sparse books have
+        no ratio rather than treating one very large level as its own baseline.
+        Depth/pressure shares explicitly describe returned depth, not all orders.
+        """
+        notionals = {side: [float(price*quantity) for price, quantity in ladder]
+                     for side, ladder in ladders.items()}
+        totals = {side: math.fsum(values) for side, values in notionals.items()}
+        near_totals = {side: math.fsum(value for (price, _), value in zip(ladder, notionals[side])
+                                     if float(abs(price/mid-1)*100) <= NEAR_DISTANCE_PCT)
+                       for side, ladder in ladders.items()}
+        near_total = math.fsum(near_totals.values())
+        if not all(math.isfinite(value) for value in (*totals.values(), near_total)):
+            raise ValueError('Invalid summed book notional')
+        assessed = {}
+        for side, ladder in ladders.items():
+            for index, ((price, _), notional) in enumerate(zip(ladder, notionals[side])):
+                if notional < TRACK_MIN:
+                    continue
+                nearby = [(other_price, notionals[side][other_index])
+                          for other_index, (other_price, _) in enumerate(
+                              ladder[max(0, index-NEIGHBOR_LIMIT):index+NEIGHBOR_LIMIT+1],
+                              start=max(0, index-NEIGHBOR_LIMIT))
+                          if other_index != index and
+                          float(abs(other_price/price-1)*100) <= NEAR_DISTANCE_PCT]
+                nearby.sort(key=lambda value: abs(value[0]-price))
+                neighbors = [value for _, value in nearby[:NEIGHBOR_LIMIT]]
+                baseline = median(neighbors) if len(neighbors) >= 3 else None
+                baseline = baseline if baseline is not None and baseline > 0 else None
+                relative = notional/baseline if baseline is not None else None
+                relative = relative if relative is not None and math.isfinite(relative) else None
+                distance = float(abs(price/mid-1)*100)
+                share = notional/totals[side]
+                large, near = notional >= SIGNIFICANT_MIN, distance <= NEAR_DISTANCE_PCT
+                outlier = relative is not None and relative >= RELATIVE_SIZE_MIN
+                concentrated = len(ladder) >= 5 and share >= DEPTH_SHARE_MIN
+                significant = large and near and (outlier or concentrated)
+                reasons = []
+                reasons.append('large_notional' if large else 'below_size_threshold')
+                reasons.append('near_price' if near else 'outside_near_zone')
+                if outlier:
+                    reasons.append('relative_outlier')
+                if concentrated:
+                    reasons.append('visible_depth_concentration')
+                if baseline is None:
+                    reasons.append('insufficient_neighbors')
+                elif not outlier and not concentrated:
+                    reasons.append('ordinary_local_size')
+                assessed[(side, price_text(price))] = dict(
+                    status='significant' if significant else 'ordinary',
+                    kind='large_wall' if significant else None,
+                    observed_kind='large_wall' if significant else None,
+                    score=20*large+20*near+20*outlier+10*concentrated,
+                    reasons=reasons, relative_size=relative, local_median_notional=baseline,
+                    neighbor_count=len(neighbors), visible_depth_share=share,
+                    side_depth_notional=totals[side], side_level_count=len(ladder),
+                    distance_pct=distance,
+                    near_pressure_share=near_totals[side]/near_total if near_total else None,
+                    near_depth_notional=near_total,
+                    observations=0, first_source_ts=None, last_source_ts=None,
+                    source_stamps=[], confidence='single_snapshot',
+                    pattern=dict(samples=0, repricings=0, side_pressure_observations=0,
+                                 window_seconds=EVIDENCE_WINDOW, price_path=[], ambiguous=False))
+        return assessed
+
+    def _observe_evidence(self, key, source, ladders, levels, assessed, mid):
+        """Bounded correspondence of visible walls, never an order/actor identity.
+
+        A move requires the old large level to have shrunk in covered depth and
+        a uniquely corresponding similar-size level at a new covered price.
+        Added walls, ambiguous matches and movement of mid alone are insufficient.
+        """
+        prior = self.evidence.get(key, {})
+        if not finite(prior.get('source_ts')) or not 0 < source-prior['source_ts'] <= MAX_OBSERVATION_GAP:
+            prior = {}
+        stamps = [stamp for stamp in prior.get('source_stamps', [])
+                  if 0 <= source-stamp <= EVIDENCE_WINDOW]
+        current = dict(source_ts=source, source_stamps=(stamps+[source])[-EVIDENCE_LIMIT:], sides={})
+        for side, ladder in ladders.items():
+            candidates = [(price, significance) for (candidate_side, price), significance in assessed.items()
+                          if candidate_side == side and significance['status'] == 'significant']
+            candidates.sort(key=lambda value: (-levels[(side, value[0])], value[1]['distance_pct']))
+            overflow = len(candidates) > EVIDENCE_CANDIDATE_LIMIT
+            candidates = candidates[:EVIDENCE_CANDIDATE_LIMIT]
+            old_side = prior.get('sides', {}).get(side, {})
+            old_candidates = old_side.get('candidates', [])
+            lower, upper = ladder[-1][0], ladder[0][0]
+            lower, upper = min(lower, upper), max(lower, upper)
+            possible = []
+            for price, significance in candidates:
+                matches = []
+                if not overflow and not old_side.get('overflow'):
+                    for old_index, old in enumerate(old_candidates):
+                        old_price, new_price = decimal(old['price_text']), decimal(price)
+                        similar = 1-WALL_SIZE_TOLERANCE <= levels[(side, price)]/old['notional'] <= 1+WALL_SIZE_TOLERANCE
+                        current_pressure = significance['near_pressure_share']
+                        old_pressure = old['chain'][-1]['near_pressure_share']
+                        pressure = (current_pressure is not None and old_pressure is not None and
+                                    current_pressure >= PRESSURE_SHARE_MIN and old_pressure >= PRESSURE_SHARE_MIN)
+                        if not similar or not pressure:
+                            continue
+                        if old_price == new_price:
+                            matches.append((old_index, False))
+                            continue
+                        covered = (lower <= old_price <= upper and
+                                   old_side['lower'] <= new_price <= old_side['upper'])
+                        toward = ((new_price > old_price if side == 'bid' else new_price < old_price) and
+                                  abs(new_price-mid) < abs(old_price-mid))
+                        old_shrank = levels.get((side, old['price_text']), 0) < SIGNIFICANT_MIN
+                        if covered and toward and old_shrank:
+                            matches.append((old_index, True))
+                possible.append(matches)
+            used = {}
+            for matches in possible:
+                for old_index, _ in matches:
+                    used[old_index] = used.get(old_index, 0)+1
+            stored = []
+            for (price, significance), matches in zip(candidates, possible):
+                unique = len(matches) == 1 and used[matches[0][0]] == 1
+                ambiguous = overflow or bool(old_side.get('overflow')) or bool(matches) and not unique
+                chain = old_candidates[matches[0][0]]['chain'] if unique else []
+                chain = [step for step in chain if 0 <= source-step['source_ts'] <= EVIDENCE_WINDOW]
+                step = dict(source_ts=source, price_text=price, distance_pct=significance['distance_pct'],
+                            near_pressure_share=significance['near_pressure_share'],
+                            mid_price_text=price_text(mid), moved=unique and matches[0][1])
+                chain = (chain+[step])[-EVIDENCE_LIMIT:]
+                # The first retained source has no retained predecessor and
+                # cannot by itself count as an observed repricing.
+                repricings = sum(bool(item['moved']) for item in chain[1:])
+                pressure_count = sum(item['near_pressure_share'] is not None and
+                                     item['near_pressure_share'] >= PRESSURE_SHARE_MIN for item in chain)
+                moves = [index for index, item in enumerate(chain) if index and item['moved']]
+                proof = ([chain[moves[-2]-1], chain[moves[-2]], chain[moves[-1]]]
+                         if len(moves) >= 2 else chain[-PATTERN_PATH_LIMIT:])
+                pattern = dict(samples=len(chain), repricings=repricings,
+                               side_pressure_observations=pressure_count, window_seconds=EVIDENCE_WINDOW,
+                               price_path=[{field: item[field] for field in ('source_ts','price_text','distance_pct')}
+                                           for item in proof], ambiguous=ambiguous)
+                significance['pattern'] = pattern
+                if ambiguous:
+                    significance['reasons'].append('ambiguous_correspondence')
+                if len(chain) >= 3 and repricings >= 2 and pressure_count == len(chain) and not ambiguous:
+                    significance.update(kind='machine_pattern_suspect', observed_kind='machine_pattern_suspect',
+                                        confidence='repeated_pattern', score=significance['score']+25)
+                    significance['reasons'].extend(('repeated_repricing', 'near_side_pressure'))
+                stored.append(dict(price_text=price, notional=levels[(side, price)], chain=chain))
+            current['sides'][side] = dict(lower=lower, upper=upper, candidates=stored, overflow=overflow)
+        self.evidence[key] = current
+        self.evidence.move_to_end(key)
+        while len(self.evidence) > SCAN_LIMIT:
+            self.evidence.popitem(last=False)
+
+    @staticmethod
+    def _inactive_significance(row):
+        significance = row.get('significance')
+        if isinstance(significance, dict):
+            row['significance'] = dict(significance, status='inactive', kind=None,
+                                       observed_kind=significance.get('kind') or significance.get('observed_kind'))
+
     def _record(self, row, now, reason):
         self.sequence += 1
         item = dict(self._public(row), event_id=self.epoch+':'+str(self.sequence), density_id=row['id'],
@@ -292,12 +471,16 @@ class DensityMonitor:
         if row['status'] != status:
             row['status'] = status
             row['stable'] = False
+            self._inactive_significance(row)
             self._record(row, now, reason)
         row['continuous_since'] = None
         row['age_seconds'] = 0
         row['stable'] = False
 
     def _expire(self, now):
+        self.evidence = OrderedDict((key, value) for key, value in self.evidence.items()
+                                    if finite(value.get('source_ts')) and
+                                    -2 <= now-value['source_ts'] <= FRESH_SECONDS)
         for row in self.rows.values():
             if row['status'] == 'active' and not -2 <= now-row['last_seen'] <= FRESH_SECONDS:
                 self._interrupt(row, 'unavailable', now, 'Нет свежего наблюдения стакана')
@@ -326,6 +509,7 @@ class DensityMonitor:
                      finite(source) and finite(updated) and -2 <= now-source <= FRESH_SECONDS and
                      -2 <= now-updated <= FRESH_SECONDS)
             if not valid:
+                self.evidence.pop(key, None)
                 failure = packet if isinstance(packet, dict) else {}
                 pending = failure.get('status') == 'pending'
                 self.books[key] = dict(previous, status='pending' if pending else 'unavailable',
@@ -338,6 +522,7 @@ class DensityMonitor:
                 return False
             if finite(previous.get('source_ts')) and source <= previous['source_ts']:
                 if source < previous['source_ts']:
+                    self.evidence.pop(key, None)
                     for row in self.rows.values():
                         if (row['exchange'], row['symbol']) == key and row['status'] != 'missing':
                             row['misses'] = 0
@@ -368,18 +553,27 @@ class DensityMonitor:
                 bid_min, ask_max = decimal(coverage.get('bid_min')), decimal(coverage.get('ask_max'))
                 if bid_min != ladders['bid'][-1][0] or ask_max != ladders['ask'][-1][0]:
                     raise ValueError('Invalid book coverage')
+                assessed = self._assess_levels(ladders, mid)
             except (ValueError, TypeError, KeyError, OverflowError, InvalidOperation):
                 return self.observe(exchange, symbol, dict(status='error', error='Некорректный стакан'), now)
             self.books[key] = dict(status='ok', source_ts=source, updated=updated, error='',
                                    timestamp_origin=packet.get('timestamp_origin', 'exchange'))
             while len(self.books) > SCAN_LIMIT:
                 self.books.pop(next(iter(self.books)))
+            self._observe_evidence(key, source, ladders, levels, assessed, mid)
             for level, notional in levels.items():
                 side, price = level
                 if notional < TRACK_MIN:
                     continue
                 identity = density_id(exchange, symbol, side, price)
                 row = self.rows.get(identity)
+                old_significance = row.get('significance', {}) if row is not None else {}
+                previous_stamps = (old_significance.get('source_stamps', [])
+                                   if row is not None and row['status'] == 'active' and
+                                   0 < source-row['last_seen'] <= MAX_OBSERVATION_GAP else [])
+                stamps = [stamp for stamp in previous_stamps if finite(stamp) and
+                          0 <= source-stamp <= EVIDENCE_WINDOW]
+                stamps = (stamps+[source])[-EVIDENCE_LIMIT:]
                 if row is None:
                     row = dict(id=identity, exchange=exchange, symbol=symbol, side=side,
                                price=float(decimal(price)), price_text=price, notional=notional,
@@ -399,6 +593,14 @@ class DensityMonitor:
                     row['stable'] = row['age_seconds'] >= STABLE_SECONDS
                 row['distance_pct'] = float(abs(decimal(price)/mid-1)*100)
                 row['timestamp_origin'] = packet.get('timestamp_origin', 'exchange')
+                significance = assessed[level]
+                significance.update(observations=len(stamps), first_source_ts=stamps[0],
+                                    last_source_ts=source, source_stamps=stamps)
+                if len(stamps) >= 2:
+                    significance['score'] += 5
+                    if significance['confidence'] != 'repeated_pattern':
+                        significance['confidence'] = 'repeated_observations'
+                row['significance'] = significance
                 self.rows.move_to_end(identity)
             for row in self.rows.values():
                 if (row['exchange'], row['symbol']) != key:
@@ -456,9 +658,19 @@ class DensityMonitor:
                         coverage=dict(total=sum(exchange['total'] for exchange in exchanges), scanned=scanned,
                                       limit=SCAN_LIMIT, selected=len(self.targets), min_notional=TRACK_MIN,
                                       stable_seconds=STABLE_SECONDS, poll_seconds=10,
-                                      observe_seconds=SCAN_SECONDS), exchanges=exchanges,
+                                      observe_seconds=SCAN_SECONDS,
+                                      significance=dict(min_notional=SIGNIFICANT_MIN,
+                                          near_distance_pct=NEAR_DISTANCE_PCT, relative_size_min=RELATIVE_SIZE_MIN,
+                                          visible_depth_share_min=DEPTH_SHARE_MIN, min_neighbors=3,
+                                          depth_share_min_levels=5, near_pressure_share_min=PRESSURE_SHARE_MIN,
+                                          evidence_window_seconds=EVIDENCE_WINDOW, evidence_limit=EVIDENCE_LIMIT,
+                                          score_kind='rule_priority', depth_basis='returned_same_side_levels',
+                                          pressure_basis='returned_bid_and_ask_within_near_distance')),
+                        exchanges=exchanges,
                         error=self.persistence_error,
-                        note='Периодические снимки; наблюдаемый срок не доказывает непрерывность между снимками')
+                        note='Периодические снимки; виден объём на цене, а не отдельный участник. '
+                             'Повторное смещение похожего объёма не доказывает бота, исполнение, спуфинг '
+                             'или непрерывность между снимками; доли относятся только к полученной глубине')
 
     def _restore(self):
         if self.state_path is None or not self.state_path.exists():
@@ -483,6 +695,7 @@ class DensityMonitor:
                 row = dict(raw, id=identity, price=float(decimal(price)), price_text=price,
                            status='unavailable', stable=False, age_seconds=0, episode_age_seconds=0,
                            continuous_since=None, misses=0)
+                self._inactive_significance(row)
                 self.rows[identity] = row
             self.history = [dict(row) for row in data.get('history', [])[:HISTORY_LIMIT] if isinstance(row, dict) and
                             row.get('exchange') in EXCHANGES and isinstance(row.get('symbol'), str) and

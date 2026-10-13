@@ -696,6 +696,10 @@ class ExchangeData:
     def chart_snapshot(self, exchange, symbol, interval):
         return self._snapshot("chart", (_exchange(exchange), _symbol(symbol), _interval(interval)))
 
+    def peek_chart_snapshot(self, exchange, symbol, interval):
+        """Read verified closed candles without starting a fetch or renewing proof."""
+        return self._snapshot("chart", (_exchange(exchange), _symbol(symbol), _interval(interval)), refresh=False)
+
     def book_snapshot(self, exchange, symbol):
         return self._snapshot("book", (_exchange(exchange), _symbol(symbol)))
 

@@ -2,6 +2,7 @@
 (function(scope){
  'use strict';
  const STORE='lab-chart-levels-v1',TYPES={resistance:'Сопротивление',support:'Поддержка'};
+ const signals=typeof module!=='undefined'?require('./density-signals.js'):scope.LabDensitySignals;
  const finite=n=>typeof n==='number'&&Number.isFinite(n),positive=n=>finite(n)&&n>0&&n<=1e15;
  const fresh=(t,now,ttl)=>finite(t)&&t<=now+2&&now-t<=ttl;
  const pair=s=>s.exchange+':'+s.symbol;
@@ -9,10 +10,10 @@
  function densityLevels(packet,source,now=Date.now()/1000){
   if(!source||!Array.isArray(packet?.rows))return [];
   const confirmed=!packet.error&&!packet.refresh_error&&fresh(packet.updated,now,30)&&['ok','partial'].includes(packet.status);
-  const rows=packet.rows.filter(r=>r&&r.exchange===source.exchange&&r.symbol===source.symbol&&typeof r.id==='string'&&['bid','ask'].includes(r.side)&&positive(r.price)&&finite(r.notional)&&r.notional>=100000&&finite(r.distance_pct)&&r.distance_pct>=0&&r.distance_pct<=5&&['active','unavailable','unobserved'].includes(r.status));
+  const rows=packet.rows.filter(r=>r&&r.exchange===source.exchange&&r.symbol===source.symbol&&typeof r.id==='string'&&['bid','ask'].includes(r.side)&&positive(r.price)&&['active','unavailable','unobserved'].includes(r.status)&&signals.view(r,now,{historical:true}));
   const seen=new Set(),result=[];
   for(const side of ['bid','ask'])for(const r of rows.filter(r=>r.side===side).sort((a,b)=>b.notional-a.notional).slice(0,3)){
-   if(seen.has(r.id))continue;seen.add(r.id);result.push({id:r.id,price:r.price,side:r.side,notional:r.notional,confirmed:confirmed&&r.status==='active'&&fresh(r.last_seen,now,25)});
+   if(seen.has(r.id))continue;seen.add(r.id);result.push({id:r.id,price:r.price,side:r.side,notional:r.notional,confirmed:confirmed&&signals.view(r,now,{historical:true}).current});
   }
   return result;
  }
