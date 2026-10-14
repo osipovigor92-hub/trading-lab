@@ -5,6 +5,15 @@
  const finite=n=>typeof n==='number'&&Number.isFinite(n),positive=n=>finite(n)&&n>0;
  const symbolOK=s=>typeof s==='string'&&/^[A-Z0-9]{1,28}USDT$/.test(s),hashOK=s=>typeof s==='string'&&/^[a-f0-9]{64}$/.test(s);
  const nativeSymbol=(exchange,symbol)=>exchange==='okx'?symbol.slice(0,-4)+'-USDT-SWAP':exchange==='gate'?symbol.slice(0,-4)+'_USDT':symbol;
+ const textError=value=>typeof value==='string'&&value.trim()?value.replace(/[\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim().slice(0,180):'Сервис не ответил.';
+ const requestError=(message,status)=>Object.assign(Error(textError(message)),{kronosRequestError:true,httpStatus:status});
+ const requestFailure=error=>error?.name==='AbortError'?'Время запроса истекло.':error?.kronosRequestError?textError(error.message):'Сетевая ошибка: не удалось связаться с панелью.';
+ async function readResponse(response){
+  // Keep the HTTP status even when a proxy returns HTML or an empty body.
+  if(!response.ok){let value;try{value=JSON.parse(await response.text());}catch(error){}const supplied=value&&typeof value==='object'&&!Array.isArray(value)?value.error||value.message:null,standard={400:'Некорректные параметры запроса.',401:'Требуется авторизация.',403:'Доступ к запросу отклонён.',404:'Маршрут Kronos не найден.',405:'Метод запроса не разрешён.',502:'Промежуточный сервер не получил ответ панели.',503:'Сервис временно недоступен.',504:'Промежуточный сервер не дождался ответа.'}[response.status]||'Запрос завершился ошибкой.';throw requestError('HTTP '+response.status+' · '+(typeof supplied==='string'&&supplied.trim()?supplied:standard),response.status);}
+  const raw=await response.text();let value;try{value=JSON.parse(raw);}catch(error){throw requestError('Сервис вернул некорректный JSON.');}
+  if(!value||typeof value!=='object'||Array.isArray(value))throw requestError('Некорректный ответ Kronos.');return value;
+ }
  function candidates(exchange,interval,symbols){
   if(!EXCHANGES.has(exchange)||!PERIODS.has(String(interval))||!Array.isArray(symbols))return [];
   return [...new Set(symbols.filter(symbolOK))].slice(0,LIMIT).map(symbol=>({exchange,symbol,interval:String(interval)}));
@@ -36,7 +45,7 @@
    return y-x||b.agreement-a.agreement||a.symbol.localeCompare(b.symbol);
   });
  }
- const api={LIMIT,HORIZON,SCENARIOS,candidates,sourceKey,nativeSymbol,currentSource,binding,validReady,measure,rank};
+ const api={LIMIT,HORIZON,SCENARIOS,candidates,sourceKey,nativeSymbol,currentSource,binding,validReady,measure,rank,readResponse,requestFailure};
  if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;scope.LabKronos=api;
  document.addEventListener('DOMContentLoaded',()=>{
   const page=document.getElementById('page-market'),viewbar=page?.querySelector('.screener-viewbar');if(!viewbar)return;
@@ -60,7 +69,6 @@
    const controls=Array.from(page.querySelectorAll(chartView?'.chart-grid-controls input,.chart-grid-controls select,.chart-grid-controls button[aria-pressed]':'.screener-controls input,.screener-controls select,.screener-filter-details input,.screener-meta select,#screener-column-filters input')).map(node=>[node.getAttribute('aria-label')||'',node.value??'',node.getAttribute('aria-pressed')||''].join(':'));
    return {view:chartView?'charts':'table',exchange,interval,visible:symbols.length,candidates:selected,identity:[chartView?'charts':'table',exchange,interval,...controls,...selected.map(source=>source.symbol)].join('|')};
   }
-  const textError=value=>String(value||'Сервис не ответил.').slice(0,180);
   function workerOK(){return !demo&&worker?.enabled===true&&worker.demo!==true&&['idle','ready','queued'].includes(worker.status)&&typeof worker.token==='string'&&worker.token.length>=16;}
   function buttons(){start.disabled=!visible()||!workerOK()||running||!snapshot?.candidates.length;stop.hidden=!running;panel.setAttribute('aria-busy',String(running));}
   function sourceText(){sourceLine.textContent=(snapshot?.candidates.length||0)+' из '+(snapshot?.visible||0)+' видимых монет · '+(displayNames[snapshot?.exchange]||'Источник недоступен')+' · '+(periodNames[snapshot?.interval]||'—')+' · горизонт 6 свечей. Первые 8 в текущем порядке.';}
@@ -68,12 +76,12 @@
   function syncSelection(){const next=selection();if(snapshot&&snapshot.identity!==next.identity)cancel('Источник или список монет изменён. Запустите новую оценку.');snapshot=next;sourceText();buttons();}
   async function json(url,options={}){
    const controller=new AbortController();readController=controller;const timeout=setTimeout(()=>controller.abort(),8000);
-   try{const response=await fetch(url,{...options,cache:'no-store',credentials:'same-origin',signal:controller.signal});const value=await response.json();if(!response.ok)throw Error(textError(value.error||value.message||'Ошибка ответа сервиса'));if(!value||typeof value!=='object')throw Error('Некорректный ответ Kronos.');return value;}finally{clearTimeout(timeout);if(readController===controller)readController=null;}
+   try{return await readResponse(await fetch(url,{...options,cache:'no-store',credentials:'same-origin',signal:controller.signal}));}finally{clearTimeout(timeout);if(readController===controller)readController=null;}
   }
   async function status(force=false){
    if(demo||!visible()||statusPromise||!force&&Date.now()-lastStatus<10000)return statusPromise;
    const mine=generation,controller=new AbortController();statusController=controller;lastStatus=Date.now();const timeout=setTimeout(()=>controller.abort(),8000);
-   statusPromise=(async()=>{try{const response=await fetch('/api/kronos/status',{cache:'no-store',credentials:'same-origin',signal:controller.signal}),value=await response.json();if(!response.ok||!value||typeof value.enabled!=='boolean')throw Error('Некорректный статус Kronos.');if(!visible()||mine!==generation)return;worker=value;badge.textContent=workerOK()?'Kronos-mini · CPU':worker.status==='loading'?'Kronos загружается':'Kronos не подключён';if(!running&&!rows.size)progress.textContent=workerOK()?'Готов к оценке. Нажмите «Оценить монеты».':worker.status==='loading'?'Модель загружается. Оценка станет доступна после запуска.':'Kronos не подключён. Запуск расчёта недоступен.';if(!workerOK()&&running)cancel('Kronos недоступен. Повторите оценку после подключения.');}catch(error){if(mine!==generation||!visible())return;worker=null;badge.textContent='Kronos недоступен';if(running)cancel('Kronos недоступен. Повторите оценку после подключения.');else progress.textContent='Не удалось проверить Kronos. Откройте панель повторно, чтобы повторить.';}finally{clearTimeout(timeout);if(statusController===controller)statusController=null;statusPromise=null;buttons();}})();return statusPromise;
+   statusPromise=(async()=>{try{const response=await fetch('/api/kronos/status',{cache:'no-store',credentials:'same-origin',signal:controller.signal}),value=await readResponse(response);if(typeof value.enabled!=='boolean')throw requestError('Некорректный статус Kronos.');if(!visible()||mine!==generation)return;worker=value;badge.textContent=workerOK()?'Kronos-mini · CPU':worker.status==='loading'?'Kronos загружается':'Kronos не подключён';if(!running&&!rows.size&&!total)progress.textContent=workerOK()?'Готов к оценке. Нажмите «Оценить монеты».':worker.status==='loading'?'Модель загружается. Оценка станет доступна после запуска.':'Kronos не подключён. Запуск расчёта недоступен.';if(!workerOK()&&running)cancel('Kronos недоступен. Повторите оценку после подключения.');}catch(error){if(mine!==generation||!visible())return;worker=null;badge.textContent='Статус Kronos не проверен';const reason='Не удалось проверить Kronos: '+requestFailure(error);if(running)cancel(reason);else progress.textContent=reason;}finally{clearTimeout(timeout);if(statusController===controller)statusController=null;statusPromise=null;buttons();}})();return statusPromise;
   }
   const pct=value=>(value>0?'+':'')+value.toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})+'%';
   const utc=stamp=>new Date(stamp*1000).toLocaleString('ru-RU',{timeZone:'UTC',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).replace(',', '');
@@ -93,28 +101,29 @@
    const valid=()=>mine===generation&&visible()&&snapshot.identity===identity;
    for(const source of queue){
     if(!valid())break;active={source,label:'проверяем закрытые свечи',binding:'',started:Date.now(),pendingStart:Date.now(),lastPacket:null,submissions:1,warming:false};progress.textContent=progressText();let packet;
-    try{packet=await json('/api/kronos/forecast',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Control':worker.token},body:JSON.stringify(source)});}catch(error){if(!valid())break;fail(error.name==='AbortError'?'Время запроса истекло.':'Нет ответа Kronos.');continue;}
+    try{packet=await json('/api/kronos/forecast',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Control':worker.token},body:JSON.stringify(source)});}catch(error){if(!valid())break;fail(requestFailure(error));continue;}
     if(!valid())break;active.modelStarting=packet.status==='loading'&&packet.accepted===false;active.warming=packet.status==='pending'||active.modelStarting;
     while(valid()){
      if(packet.status==='ready'){
       if(validReady(packet,source,Date.now()/1000,active.binding)){const row=measure(packet);row.binding=binding(packet);rows.set(sourceKey(source),row);completed++;active=null;renderResults();progress.textContent=progressText();}else fail('Ответ модели не подтверждён для текущих свечей.');break;
      }
-     if(packet.demo===true||packet.enabled===false&&packet.status!=='pending'&&!(packet.status==='idle'&&active.warming)){fail('Kronos не подключён.');break;}
+     if(packet.demo===true){fail('Kronos не подключён.');break;}
      if(['error','unavailable','stale','disabled','busy'].includes(packet.status)){fail(packet.status==='busy'?'Очередь занята. Повторите оценку.':textError(packet.error||'Оценка недоступна.'));break;}
+     if(packet.enabled===false&&packet.status!=='pending'&&!(packet.status==='idle'&&active.warming)){fail('Kronos не подключён.');break;}
      if(!['queued','loading','pending','idle'].includes(packet.status)){fail('Некорректный статус оценки.');break;}
      if(packet.source){if(!currentSource(packet.source,source)||active.binding&&binding(packet)!==active.binding){fail('Закрытые свечи изменились. Повторите оценку.');break;}if(['queued','loading'].includes(packet.status)&&packet.job_id&&packet.accepted!==false)active.binding=binding(packet);}
      if(Date.now()-active.started>150000||['pending','idle'].includes(packet.status)&&Date.now()-active.pendingStart>30000){fail('Оценка не завершена. Повторите её вручную.');break;}
      if(packet.status==='idle'&&active.modelStarting){
-      try{const state=await json('/api/kronos/status');if(!valid())break;worker=state;active.modelStarting=state.status!=='idle';if(active.modelStarting)packet={...packet,status:'pending',enabled:true};}catch(error){if(!valid())break;fail('Не удалось проверить запуск модели.');break;}
+      try{const state=await json('/api/kronos/status');if(!valid())break;worker=state;active.modelStarting=state.status!=='idle';if(active.modelStarting)packet={...packet,status:'pending',enabled:true};}catch(error){if(!valid())break;fail(requestFailure(error));break;}
      }
      if(packet.status==='idle'&&active.warming&&active.submissions===1&&currentSource(packet.source,source)){
       active.submissions++;active.warming=false;active.label='запускаем оценку';progress.textContent=progressText();
-      try{packet=await json('/api/kronos/forecast',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Control':worker.token},body:JSON.stringify(source)});}catch(error){if(!valid())break;fail('Нет ответа Kronos. Повторите оценку вручную.');break;}
+      try{packet=await json('/api/kronos/forecast',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Control':worker.token},body:JSON.stringify(source)});}catch(error){if(!valid())break;fail(requestFailure(error));break;}
       if(!valid())break;continue;
      }
      active.label=active.modelStarting?'модель загружается':packet.status==='queued'?'в очереди':packet.status==='loading'?'считаем 5 сценариев':'ждём подтверждённые свечи';active.lastPacket=packet;progress.textContent=progressText();
      await refreshCached();if(!valid())break;await new Promise(resolve=>setTimeout(resolve,2000));if(!valid())break;
-     try{packet=await json('/api/kronos/forecast?'+new URLSearchParams(source));}catch(error){if(!valid())break;fail('Не удалось проверить оценку. Повторите её вручную.');break;}
+     try{packet=await json('/api/kronos/forecast?'+new URLSearchParams(source));}catch(error){if(!valid())break;fail(requestFailure(error));break;}
     }
    }
    if(valid()){running=false;active=null;renderResults();progress.textContent=progressText()+'.'+(failureNotes.length?' '+failureNotes.slice(0,2).join('; ')+(failureNotes.length>2?'…':''):'')+(completed?'':' Завершённых оценок нет.');buttons();}

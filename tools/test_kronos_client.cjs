@@ -13,4 +13,16 @@ test('malformed predictions reject null infinity time order and fabricated sprea
 test('scenario agreement is an empirical direction count, including flat closes',()=>{const p=packet(),samples=[99,100,101,102,103];p.end_close_samples=samples;p.forecast=p.forecast.map((b,i)=>i===5?{...b,low:99,median:101,high:103}:b);assert.equal(k.validReady(p,source,now),true);assert.equal(k.measure(p).agreement,3);});
 test('growth decline movement and agreement filter rank completed rows only',()=>{const rows=[{symbol:'BTCUSDT',change:2,agreement:5},{symbol:'ETHUSDT',change:-4,agreement:4},{symbol:'SOLUSDT',change:3,agreement:3}];assert.deepEqual(k.rank(rows).map(r=>r.symbol),['SOLUSDT','BTCUSDT','ETHUSDT']);assert.deepEqual(k.rank(rows,'decline').map(r=>r.symbol),['ETHUSDT','BTCUSDT','SOLUSDT']);assert.deepEqual(k.rank(rows,'movement',true).map(r=>r.symbol),['ETHUSDT','BTCUSDT']);assert.equal(rows[0].symbol,'BTCUSDT');});
 test('all native periods and exchange identities stay valid',()=>{for(const exchange of ['binance','bybit','okx','gate','bitget'])for(const interval of ['1','5','15','60','240','1440']){const s={exchange,symbol:'BTCUSDT',interval},step=Number(interval)*60,close=Math.floor((now-2)/step)*step,p=packet({source:{...packet().source,...s,native_symbol:k.nativeSymbol(exchange,s.symbol),candle_end:close},expires_at:close+step+2,forecast:packet().forecast.map((b,i)=>({...b,time:close+i*step}))});assert.equal(k.validReady(p,s,now),true,exchange+':'+interval);}});
-console.log('Kronos client passed '+checks+' meaningful contract groups.');
+(async()=>{
+ const http=(status,body)=>({status,ok:status>=200&&status<300,text:async()=>body});
+ await assert.rejects(k.readResponse(http(403,JSON.stringify({error:'Недействительный токен'}))),error=>error.httpStatus===403&&k.requestFailure(error)==='HTTP 403 · Недействительный токен');
+ for(const status of [405,502])await assert.rejects(k.readResponse(http(status,'<html><script>unsafe()</script></html>')),error=>error.httpStatus===status&&k.requestFailure(error).startsWith('HTTP '+status+' · ')&&!error.message.includes('<html>')&&!error.message.includes('unsafe'));
+ await assert.rejects(k.readResponse({status:502,ok:false,text:async()=>{throw new TypeError('body connection failed');}}),error=>error.httpStatus===502&&error.message.startsWith('HTTP 502'));
+ await assert.rejects(k.readResponse(http(403,JSON.stringify({error:'x'.repeat(1000)}))),error=>error.message.length===180&&error.message.startsWith('HTTP 403'));
+ await assert.rejects(k.readResponse(http(200,'<html>not JSON</html>')),error=>k.requestFailure(error)==='Сервис вернул некорректный JSON.');
+ await assert.rejects(k.readResponse(http(200,'null')),error=>k.requestFailure(error)==='Некорректный ответ Kronos.');
+ assert.deepEqual(await k.readResponse(http(202,'{"status":"queued"}')),{status:'queued'});
+ assert.equal(k.requestFailure(new TypeError('Failed to fetch')),'Сетевая ошибка: не удалось связаться с панелью.');
+ assert.equal(k.requestFailure(Object.assign(Error('abort'),{name:'AbortError'})),'Время запроса истекло.');
+ console.log('Kronos client passed '+checks+' meaningful contract groups plus HTTP/JSON/network/timeout error contracts.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
