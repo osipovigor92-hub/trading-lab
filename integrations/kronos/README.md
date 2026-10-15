@@ -163,7 +163,15 @@ Basic Auth. Остальные маршруты остаются GET-only. Не�
 же `-c`. При отказе исходный файл восстанавливается. Это не часть установки
 модели и не запускается автоматически при обновлении сайта.
 
+Существующие `limit_req`, `limit_req_status` и `limit_conn` сохраняются в
+точном маршруте с теми же значениями и общими зонами. Помощник не отключает
+лимиты и не повышает их. Ошибка о другом неподдерживаемом правиле называет
+директиву и строку без её аргументов.
+
 Семантика ограничения методов описана в официальной документации
 [Nginx limit_except](https://nginx.org/en/docs/http/ngx_http_core_module.html#limit_except).
+Ограничения нагрузки описаны в
+[limit_req](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html#limit_req)
+и [limit_conn](https://nginx.org/en/docs/http/ngx_http_limit_conn_module.html#limit_conn).
 Подробная диагностика и проверка результата — в
 [docs/kronos.md](../../docs/kronos.md).

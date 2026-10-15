@@ -57,6 +57,68 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(updated[:start] + updated[end:], ORIGINAL)
         self.assertEqual(HTTPS.forecast_configuration(updated), updated)
 
+    def test_actual_rate_limits_and_shared_zones_are_preserved_in_exact_clone(self):
+        limits = '''limit_req zone=trading_lab burst=20 nodelay;
+            limit_req_status 429;
+            limit_conn trading_lab_connections 8;'''
+        source = ORIGINAL.replace("http {", '''http {
+    limit_req_zone $binary_remote_addr zone=trading_lab:10m rate=10r/s;
+    limit_conn_zone $binary_remote_addr zone=trading_lab_connections:10m;''').replace(
+            "proxy_http_version 1.1;", limits + "\n            proxy_http_version 1.1;")
+        updated = HTTPS.forecast_configuration(source)
+        http = HTTPS.singleton(HTTPS.parse(updated), "http")
+        server = HTTPS.singleton(http.children, "server")
+        original_root = next(node for node in server.children if node.values == ["location", "/"])
+        forecast = next(node for node in server.children if node.values == ["location", "=", HTTPS.ROUTE])
+        root_body = updated[original_root.opening + 1:original_root.closing]
+        forecast_body = updated[forecast.opening + 1:forecast.closing]
+        self.assertEqual(forecast_body, root_body.replace("limit_except GET {", "limit_except GET POST {", 1))
+        self.assertEqual(root_body, source[source.index("location / {") + len("location / {"):
+                                           source.index("\n        }\n") + len("\n        ")])
+        for rule in limits.splitlines():
+            self.assertEqual(updated.count(rule.strip()), 2)
+        self.assertEqual(updated.count("limit_req_zone "), 1)
+        self.assertEqual(updated.count("limit_conn_zone "), 1)
+        self.assertEqual(updated.count('auth_basic "Trading Lab";'), 1)
+        self.assertEqual(updated.count("auth_basic_user_file /etc/trading-lab-https/users;"), 1)
+        self.assertEqual(updated.count("limit_except GET {"), 1)
+        self.assertEqual(updated.count("limit_except GET POST {"), 1)
+        start = updated.index(HTTPS.MARKER)
+        end = updated.index("location / {", start)
+        self.assertEqual(updated[:start] + updated[end:], source)
+        self.assertEqual(HTTPS.forecast_configuration(updated), updated)
+
+    def test_unknown_and_nested_rate_limit_rules_remain_refused(self):
+        for rule in ("limit_req_dry_run on;", "limit_conn_status 429;",
+                     "limit_req { deny all; }", "limit_req_status { deny all; }",
+                     "limit_conn { deny all; }"):
+            with self.subTest(rule=rule), self.assertRaises(HTTPS.ConfigError):
+                HTTPS.forecast_configuration(ORIGINAL.replace("proxy_http_version 1.1;", rule))
+
+    def test_unsupported_root_diagnostic_has_name_line_and_no_arguments(self):
+        rule = "auth_request /private-fixture/token-SECRET;"
+        source = ORIGINAL.replace("proxy_http_version 1.1;", rule)
+        with self.assertRaises(HTTPS.ConfigError) as caught:
+            HTTPS.forecast_configuration(source)
+        expected_line = source.count("\n", 0, source.index(rule)) + 1
+        self.assertEqual(str(caught.exception), "Root location has unsupported directive auth_request at line "
+                         + str(expected_line) + "; manual review is required.")
+        self.assertNotIn("private-fixture", str(caught.exception))
+        self.assertNotIn("SECRET", str(caught.exception))
+
+    def test_unsupported_root_diagnostic_redacts_noncanonical_names(self):
+        for name in ('"private-fixture"', '"auth_request"', 'auth\\_request', 'private\\-fixture', "private-fixture",
+                     "секрет", "Z" * 65, '"private\\\nfixture"', "9private"):
+            rule = name + " /secret-fixture;"
+            with self.subTest(name=name), self.assertRaises(HTTPS.ConfigError) as caught:
+                HTTPS.forecast_configuration(ORIGINAL.replace("proxy_http_version 1.1;", rule))
+            message = str(caught.exception)
+            self.assertIn("<noncanonical directive>", message)
+            self.assertNotIn("private", message)
+            self.assertNotIn("secret-fixture", message)
+            self.assertNotIn("секрет", message)
+            self.assertLess(len(message), 150)
+
     def test_braces_semicolons_comments_quotes_and_variables_are_values(self):
         source = ORIGINAL.replace('proxy_read_timeout 45s;', '''# { } location = /api/kronos/forecast { malicious; }
             proxy_set_header X-Fixture "{;#}";

@@ -8,6 +8,7 @@ import argparse
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -25,10 +26,11 @@ PROXY_DIRECTIVES = {
     "proxy_busy_buffers_size", "proxy_request_buffering", "proxy_redirect",
     "proxy_pass_request_headers", "proxy_pass_request_body",
 }
+ROOT_DIRECTIVES = PROXY_DIRECTIVES | {"limit_req", "limit_req_status", "limit_conn"}
 
 
 class ConfigError(Exception):
-    """Safe diagnostic: never include configuration contents or credentials."""
+    """Safe diagnostic: never include directive arguments or credentials."""
 
 
 @dataclass
@@ -205,8 +207,15 @@ def forecast_configuration(source):
     if any(node is not root and node.values != ["location", "=", ROUTE] for node in locations):
         raise ConfigError("Gateway has other location access rules; manual review is required.")
     for node in root.children:
-        if node.values[0] != "limit_except" and (node.values[0] not in PROXY_DIRECTIVES or node.children is not None):
-            raise ConfigError("Root location has unsupported rules; manual review is required.")
+        if node.values[0] != "limit_except" and (node.values[0] not in ROOT_DIRECTIVES or node.children is not None):
+            token = node.words[0]
+            name = token.value
+            if not (re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name)
+                    and source[token.start:token.end] == name):
+                name = "<noncanonical directive>"
+            line = source.count("\n", 0, token.start) + 1
+            raise ConfigError("Root location has unsupported directive " + name
+                              + " at line " + str(line) + "; manual review is required.")
     expected_value(root.children, "proxy_pass", ["http://127.0.0.1:8787"])
     host = [node for node in named(root.children, "proxy_set_header") if len(node.values) > 1 and node.values[1].lower() == "host"]
     if len(host) != 1 or host[0].values != ["proxy_set_header", "Host", "127.0.0.1:8787"]:
