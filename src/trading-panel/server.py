@@ -142,7 +142,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 try:
                     packet = EXCHANGE_DATA.peek_chart_snapshot(*(query[k][0] for k in ('exchange', 'symbol', 'interval')))
-                    data = KRONOS.snapshot(packet) if packet.get('status') == 'ok' else kronos_response('pending', enabled=True, error='Ожидаем подтверждённые свечи')
+                    if packet.get('status') == 'ok':
+                        data = KRONOS.snapshot(packet)
+                    elif packet.get('status') == 'error':
+                        data = kronos_response('error', enabled=True, error=packet.get('error') or 'Источник свечей недоступен')
+                    else:
+                        data = kronos_response('pending', enabled=True, error='Ожидаем подтверждённые свечи')
                 except ValueError as exc:
                     self.api_error(400, str(exc))
                     return

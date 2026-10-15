@@ -65,7 +65,12 @@ def build_handler(exchange, density, market, kronos, port):
                 elif parsed.path == '/api/kronos/forecast':
                     if set(args) != {'exchange', 'symbol', 'interval'}: raise ValueError('Invalid Kronos source')
                     packet = exchange.peek_chart_snapshot(*(args[k] for k in ('exchange', 'symbol', 'interval')))
-                    data = kronos.snapshot(packet) if packet.get('status') == 'ok' else response('pending', enabled=True, error='Ожидаем проверенные свечи')
+                    if packet.get('status') == 'ok':
+                        data = kronos.snapshot(packet)
+                    elif packet.get('status') == 'error':
+                        data = response('error', enabled=True, error=packet.get('error') or 'Источник свечей недоступен')
+                    else:
+                        data = response('pending', enabled=True, error='Ожидаем проверенные свечи')
                 elif parsed.path == '/api/exchange-screener':
                     if set(args) - {'exchange'}: raise ValueError('Invalid catalog query')
                     data = exchange.exchange_snapshot(args.get('exchange', 'bybit'))

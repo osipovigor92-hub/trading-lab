@@ -123,14 +123,16 @@
      }
      active.label=active.modelStarting?'модель загружается':packet.status==='queued'?'в очереди':packet.status==='loading'?'считаем 5 сценариев':'ждём подтверждённые свечи';active.lastPacket=packet;progress.textContent=progressText();
      await refreshCached();if(!valid())break;await new Promise(resolve=>setTimeout(resolve,2000));if(!valid())break;
-     try{packet=await json('/api/kronos/forecast?'+new URLSearchParams(source));}catch(error){if(!valid())break;fail(requestFailure(error));break;}
+     // Ordinary chart reads schedule bounded REST revalidation; model GETs only read its proof.
+     try{await json('/api/exchange-chart?'+new URLSearchParams(source));if(!valid())break;packet=await json('/api/kronos/forecast?'+new URLSearchParams(source));}catch(error){if(!valid())break;fail(requestFailure(error));break;}
     }
    }
    if(valid()){running=false;active=null;renderResults();progress.textContent=progressText()+'.'+(failureNotes.length?' '+failureNotes.slice(0,2).join('; ')+(failureNotes.length>2?'…':''):'')+(completed?'':' Завершённых оценок нет.');buttons();}
   }
   async function refreshCached(){
    if(!visible()||cacheBusy||readController||!rows.size)return;const mine=generation,keys=[...rows.keys()],key=keys[cacheCursor++%keys.length],row=rows.get(key);cacheBusy=true;
-   try{const packet=await json('/api/kronos/forecast?'+new URLSearchParams({exchange:row.source.exchange,symbol:row.source.symbol,interval:row.source.interval}));if(mine!==generation||!visible())return;if(validReady(packet,row.source,Date.now()/1000,row.binding)){const refreshed=measure(packet);refreshed.binding=row.binding;rows.set(key,refreshed);}else{rows.delete(key);retired++;}renderResults();}catch(error){if(mine===generation&&visible()){rows.delete(key);retired++;renderResults();if(!running)progress.textContent='Подтверждение оценки недоступно. Запустите отбор повторно.';}}finally{cacheBusy=false;}
+   // Table mode has no visible-chart pump to renew the same-input REST proof.
+   try{const query=new URLSearchParams({exchange:row.source.exchange,symbol:row.source.symbol,interval:row.source.interval});await json('/api/exchange-chart?'+query);if(mine!==generation||!visible())return;const packet=await json('/api/kronos/forecast?'+query);if(mine!==generation||!visible())return;if(validReady(packet,row.source,Date.now()/1000,row.binding)){const refreshed=measure(packet);refreshed.binding=row.binding;rows.set(key,refreshed);}else{rows.delete(key);retired++;}renderResults();}catch(error){if(mine===generation&&visible()){rows.delete(key);retired++;renderResults();if(!running)progress.textContent='Подтверждение оценки недоступно. Запустите отбор повторно.';}}finally{cacheBusy=false;}
   }
   function tick(){if(!visible())return;syncSelection();renderResults();if(!running){status();refreshCached();}}
   panel.addEventListener('toggle',()=>{if(panel.open){syncSelection();if(demo)progress.textContent='Kronos выключен в демо.';else status(true);timer??=setInterval(tick,2000);}else{clearInterval(timer);timer=null;statusController?.abort();if(running||rows.size)cancel('Панель закрыта. Запустите новый отбор после открытия.');}buttons();});

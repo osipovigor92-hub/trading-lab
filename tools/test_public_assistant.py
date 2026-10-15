@@ -140,6 +140,19 @@ class PublicAssistantHTTPTests(unittest.TestCase):
         self.assertEqual(data["end_close_samples"], [])
         self.assertFalse(data["accepted"])
 
+    def test_forecast_get_preserves_source_error_without_warming_or_submitting(self):
+        for reason in ("closed candle series is stale", None):
+            with self.subTest(reason=reason):
+                self.exchange.packet = dict(status="error", queued=False, error=reason, fixture_only=True)
+                code, _, data = self.request("GET", QUERY_PATH)
+                self.assertEqual((code, data["status"], data["enabled"]), (200, "error", True))
+                self.assertEqual(data["error"], reason or "Источник свечей недоступен")
+                self.assertEqual(data["forecast"], [])
+                self.assertEqual(data["end_close_samples"], [])
+                self.assertFalse(data["accepted"])
+                self.assertEqual(self.kronos.snapshots, [])
+                self.assert_no_jobs()
+
     def test_refused_chart_admission_errors_and_get_never_retries_even_after_slots_free(self):
         for source_error in (None, "Fixture chart queue refused"):
             with self.subTest(source_error=source_error):
