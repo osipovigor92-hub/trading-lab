@@ -9,6 +9,7 @@ from io import BytesIO
 import json
 from pathlib import Path
 import sys
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -186,6 +187,53 @@ class KronosHTTPTests(unittest.TestCase):
         recovered = self.request(FORECAST + QUERY)
         self.assertEqual(recovered["status"], "ready")
         self.assertEqual(recovered["job_id"], original["job_id"])
+        self.assertEqual(len(self.model_posts()), 1)
+
+    def test_async_chart_revalidation_requires_another_forecast_read_to_receive_new_proof(self):
+        initial_chart = self.verified_chart()
+        original = self.request(FORECAST, "POST")
+        self.clock.advance(28)
+        still_current = self.request(CHART)
+        self.assertFalse(still_current["refreshing"])
+        self.assertEqual(still_current["updated"], initial_chart["updated"])
+        previous_rest_calls = len(self.fixture.calls)
+        started, release = threading.Event(), threading.Event()
+        original_request = self.adapter._request
+
+        def delayed(exchange, path, params):
+            if path == exchange_data.PATHS[exchange][2]:
+                started.set()
+                if not release.wait(timeout=2):
+                    raise AssertionError("Fixture chart release missing")
+            return original_request(exchange, path, params)
+
+        self.adapter._request = delayed
+        try:
+            self.clock.advance(30)
+            refreshing = self.request(CHART)
+            self.assertTrue(started.wait(timeout=1))
+            self.assertTrue(refreshing["refreshing"])
+            self.assertEqual(refreshing["updated"], initial_chart["updated"])
+            held = self.request(FORECAST + QUERY)
+            self.assertEqual(held["status"], "ready")
+            self.assertEqual(held["current_source_updated"], initial_chart["updated"])
+            self.clock.advance(1)
+        finally:
+            release.set()
+        await_idle(self.adapter)
+        self.assertEqual(len(self.fixture.calls), previous_rest_calls + 1)
+        # The HTTP response already held by a browser does not change when
+        # the asynchronous REST job finishes. Its own proof still expires.
+        self.clock.advance(17)
+        self.assertGreater(self.clock.now - held["current_source_updated"], 75)
+        self.assertEqual(self.client.snapshot(initial_chart)["status"], "stale")
+        previous_admissions = self.adapter.chart_snapshot.call_count
+        current = self.request(FORECAST + QUERY)
+        self.assertEqual(current["status"], "ready")
+        self.assertGreater(current["current_source_updated"], held["current_source_updated"])
+        self.assertEqual(current["source"], original["source"])
+        self.assertEqual(current["job_id"], original["job_id"])
+        self.assertEqual(self.adapter.chart_snapshot.call_count, previous_admissions)
         self.assertEqual(len(self.model_posts()), 1)
 
     def test_new_closed_boundary_cannot_reuse_or_resubmit_old_forecast(self):

@@ -1,7 +1,7 @@
 /* Optional Kronos screener. Only the explicit batch action admits model work. */
 (function(scope){
  'use strict';
- const LIMIT=8,HORIZON=6,SCENARIOS=5,PERIODS=new Set(['1','5','15','60','240','1440']),EXCHANGES=new Set(['bybit','binance','okx','gate','bitget']);
+ const LIMIT=15,HORIZON=6,SCENARIOS=5,PERIODS=new Set(['1','5','15','60','240','1440']),EXCHANGES=new Set(['bybit','binance','okx','gate','bitget']);
  const finite=n=>typeof n==='number'&&Number.isFinite(n),positive=n=>finite(n)&&n>0;
  const symbolOK=s=>typeof s==='string'&&/^[A-Z0-9]{1,28}USDT$/.test(s),hashOK=s=>typeof s==='string'&&/^[a-f0-9]{64}$/.test(s);
  const nativeSymbol=(exchange,symbol)=>exchange==='okx'?symbol.slice(0,-4)+'-USDT-SWAP':exchange==='gate'?symbol.slice(0,-4)+'_USDT':symbol;
@@ -14,10 +14,13 @@
   const raw=await response.text();let value;try{value=JSON.parse(raw);}catch(error){throw requestError('Сервис вернул некорректный JSON.');}
   if(!value||typeof value!=='object'||Array.isArray(value))throw requestError('Некорректный ответ Kronos.');return value;
  }
- function candidates(exchange,interval,symbols){
-  if(!EXCHANGES.has(exchange)||!PERIODS.has(String(interval))||!Array.isArray(symbols))return [];
-  return [...new Set(symbols.filter(symbolOK))].slice(0,LIMIT).map(symbol=>({exchange,symbol,interval:String(interval)}));
+ function candidatePage(exchange,interval,symbols,page=0){
+  const empty={candidates:[],symbols:[],total:0,pages:0,page:0,from:0,to:0};
+  if(!EXCHANGES.has(exchange)||!PERIODS.has(String(interval))||!Array.isArray(symbols)||!Number.isSafeInteger(page)||page<0)return empty;
+  const unique=[...new Set(symbols.filter(symbolOK))],total=unique.length,pages=Math.ceil(total/LIMIT),start=page*LIMIT,selected=unique.slice(start,start+LIMIT);
+  return {candidates:selected.map(symbol=>({exchange,symbol,interval:String(interval)})),symbols:unique,total,pages,page,from:selected.length?start+1:0,to:selected.length?start+selected.length:0};
  }
+ const candidates=(exchange,interval,symbols,page=0)=>candidatePage(exchange,interval,symbols,page).candidates;
  const sourceKey=source=>source?[source.exchange,source.symbol,source.interval].join(':'):'';
  function currentSource(source,expected,now=Date.now()/1000){
   if(!source||sourceKey(source)!==sourceKey(expected)||!EXCHANGES.has(source.exchange)||!symbolOK(source.symbol)||!PERIODS.has(source.interval)||source.native_symbol!==nativeSymbol(source.exchange,source.symbol)||!hashOK(source.input_hash))return false;
@@ -45,14 +48,15 @@
    return y-x||b.agreement-a.agreement||a.symbol.localeCompare(b.symbol);
   });
  }
- const api={LIMIT,HORIZON,SCENARIOS,candidates,sourceKey,nativeSymbol,currentSource,binding,validReady,measure,rank,readResponse,requestFailure};
+ const api={LIMIT,HORIZON,SCENARIOS,candidatePage,candidates,sourceKey,nativeSymbol,currentSource,binding,validReady,measure,rank,readResponse,requestFailure};
  if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;scope.LabKronos=api;
  document.addEventListener('DOMContentLoaded',()=>{
   const page=document.getElementById('page-market'),viewbar=page?.querySelector('.screener-viewbar');if(!viewbar)return;
   const el=(tag,cls='',text='')=>{const node=document.createElement(tag);node.className=cls;node.textContent=text;return node;},button=(text,handler,cls='screener-order')=>{const node=el('button',cls,text);node.type='button';node.addEventListener('click',handler);return node;};
   const demo=document.body.dataset.demo==='true',panel=el('details','kronos-panel');panel.id='kronos-screener';
-  const summary=el('summary','kronos-summary'),title=el('strong','','Kronos · Отбор монет'),badge=el('span','kronos-summary-note muted',demo?'Kronos выключен в демо':'До 8 монет · 6 свечей');summary.append(title,badge);panel.append(summary);viewbar.after(panel);
+  const summary=el('summary','kronos-summary'),title=el('strong','','Kronos · Отбор монет'),badge=el('span','kronos-summary-note muted',demo?'Kronos выключен в демо':'До 15 монет · 6 свечей');summary.append(title,badge);panel.append(summary);viewbar.after(panel);
   const content=el('div','kronos-content'),toolbar=el('div','kronos-toolbar'),sourceLine=el('p','kronos-source muted'),start=button('Оценить монеты',run,'primary-button'),stop=button('Остановить отбор',()=>cancel('Отбор остановлен.',false));stop.hidden=true;
+  const selectionBar=el('div','kronos-selection'),pages=el('div','kronos-pages'),previous=button('Предыдущие 15',()=>changePage(-1)),next=button('Оценить следующие 15',()=>changePage(1,true));pages.setAttribute('role','group');pages.setAttribute('aria-label','Группы монет Kronos');pages.append(previous,next);selectionBar.append(sourceLine,pages);
   const controls=el('div','kronos-controls'),sortLabel=el('label','','Отбор по'),sort=el('select');sort.setAttribute('aria-label','Порядок отбора Kronos');for(const [value,text]of [['growth','Росту модели'],['decline','Снижению модели'],['movement','Величине движения']]){const option=el('option','',text);option.value=value;sort.append(option);}sortLabel.append(sort);
   const agreeLabel=el('label','kronos-agree'),agree=el('input');agree.type='checkbox';agree.setAttribute('aria-label','Совпадение направления минимум 4 из 5');agreeLabel.append(agree,el('span','','Направление ≥4 из 5'));controls.append(sortLabel,agreeLabel);toolbar.append(start,stop,controls);
   const progress=el('p','kronos-progress muted');progress.setAttribute('role','status');progress.setAttribute('aria-live','polite');progress.textContent=demo?'Kronos выключен в демо.':'Откройте панель и запустите оценку выбранных монет.';
@@ -60,20 +64,22 @@
   const table=el('table','kronos-table');table.setAttribute('aria-label','Завершённые оценки Kronos');const head=el('thead'),headRow=el('tr');for(const text of ['Монета','Медиана, 6 свечей','Разброс сценариев','Направление','Закрытие · UTC','Расчёт']){const cell=el('th','',text);cell.scope='col';headRow.append(cell);}head.append(headRow);const tbody=el('tbody');table.append(head,tbody);scroll.append(table);
   const empty=el('p','kronos-empty muted');empty.hidden=true;
   const note=el('p','kronos-note muted','Медиана и минимум–максимум 5 сценариев Kronos-mini на 6 свечей. Совпадение направления — число сценариев, а не вероятность. Результат модели служит для сравнения монет; торговое решение остаётся за вами.');
-  const metadata=el('p','kronos-metadata muted');metadata.hidden=true;content.append(sourceLine,toolbar,progress,scroll,empty,note,metadata);panel.append(content);
-  let generation=0,snapshot=null,worker=null,lastStatus=0,statusPromise=null,rows=new Map(),active=null,running=false,completed=0,total=0,failures=0,failureNotes=[],retired=0,readController=null,statusController=null,timer=null,suspended=false,cacheBusy=false,cacheCursor=0;
+  const metadata=el('p','kronos-metadata muted');metadata.hidden=true;content.append(selectionBar,toolbar,progress,scroll,empty,note,metadata);panel.append(content);
+  let generation=0,pageIndex=0,snapshot=null,worker=null,lastStatus=0,statusPromise=null,rows=new Map(),active=null,running=false,completed=0,total=0,failures=0,failureNotes=[],retired=0,readController=null,statusController=null,timer=null,suspended=false,cacheBusy=false,cacheCursor=0;
   const visible=()=>!suspended&&!document.hidden&&!page.hidden&&panel.open;
   const displayNames={bybit:'Bybit',binance:'Binance',okx:'OKX',gate:'Gate',bitget:'Bitget'},periodNames={'1':'1м','5':'5м','15':'15м','60':'1ч','240':'4ч','1440':'1д'};
   function selection(){
-   const chartView=page.classList.contains('chart-grid-active'),exchange=chartView?page.querySelector('[aria-label="Биржа графиков"]')?.value:'bybit',interval=chartView?page.querySelector('[aria-label="Период графиков"]')?.value:'5',nodes=page.querySelectorAll(chartView?'.chart-grid-workspace .chart-tile[data-symbol]':'#screener-table tbody tr[data-symbol]'),symbols=Array.from(nodes).filter(node=>!node.hidden).map(node=>node.dataset.symbol),selected=candidates(exchange,interval,symbols);
+   const chartView=page.classList.contains('chart-grid-active'),exchange=chartView?page.querySelector('[aria-label="Биржа графиков"]')?.value:'bybit',interval=chartView?page.querySelector('[aria-label="Период графиков"]')?.value:'5',nodes=page.querySelectorAll(chartView?'.chart-grid-workspace .chart-tile[data-symbol]':'#screener-table tbody tr[data-symbol]'),symbols=Array.from(nodes).filter(node=>!node.hidden).map(node=>node.dataset.symbol),selected=candidatePage(exchange,interval,symbols,pageIndex);
    const controls=Array.from(page.querySelectorAll(chartView?'.chart-grid-controls input,.chart-grid-controls select,.chart-grid-controls button[aria-pressed]':'.screener-controls input,.screener-controls select,.screener-filter-details input,.screener-meta select,#screener-column-filters input')).map(node=>[node.getAttribute('aria-label')||'',node.value??'',node.getAttribute('aria-pressed')||''].join(':'));
-   return {view:chartView?'charts':'table',exchange,interval,visible:symbols.length,candidates:selected,identity:[chartView?'charts':'table',exchange,interval,...controls,...selected.map(source=>source.symbol)].join('|')};
+   const scopeIdentity=[chartView?'charts':'table',exchange,interval,...controls,...selected.symbols].join('|');
+   return {view:chartView?'charts':'table',exchange,interval,...selected,visible:selected.total,scopeIdentity,identity:scopeIdentity+'|group:'+pageIndex};
   }
   function workerOK(){return !demo&&worker?.enabled===true&&worker.demo!==true&&['idle','ready','queued'].includes(worker.status)&&typeof worker.token==='string'&&worker.token.length>=16;}
-  function buttons(){start.disabled=!visible()||!workerOK()||running||!snapshot?.candidates.length;stop.hidden=!running;panel.setAttribute('aria-busy',String(running));}
-  function sourceText(){sourceLine.textContent=(snapshot?.candidates.length||0)+' из '+(snapshot?.visible||0)+' видимых монет · '+(displayNames[snapshot?.exchange]||'Источник недоступен')+' · '+(periodNames[snapshot?.interval]||'—')+' · горизонт 6 свечей. Первые 8 в текущем порядке.';}
+  function buttons(){start.disabled=!visible()||!workerOK()||running||!snapshot?.candidates.length;previous.disabled=!visible()||running||!snapshot?.page;next.disabled=!visible()||!workerOK()||running||!snapshot?.pages||snapshot.page+1>=snapshot.pages;stop.hidden=!running;panel.setAttribute('aria-busy',String(running));}
+  function sourceText(){sourceLine.textContent=(snapshot?.from?snapshot.from+'–'+snapshot.to:'0')+' из '+(snapshot?.visible||0)+' видимых монет · '+(displayNames[snapshot?.exchange]||'Источник недоступен')+' · '+(periodNames[snapshot?.interval]||'—')+' · горизонт 6 свечей.';}
   function cancel(message,clear=true){generation++;running=false;active=null;readController?.abort();readController=null;if(clear){rows.clear();completed=0;total=0;failures=0;failureNotes=[];retired=0;}if(message)progress.textContent=message;renderResults();buttons();}
-  function syncSelection(){const next=selection();if(snapshot&&snapshot.identity!==next.identity)cancel('Источник или список монет изменён. Запустите новую оценку.');snapshot=next;sourceText();buttons();}
+  function syncSelection(message='Источник или список монет изменён. Запустите новую оценку.'){let selected=selection();if(snapshot&&snapshot.scopeIdentity!==selected.scopeIdentity){pageIndex=0;selected=selection();}if(snapshot&&snapshot.identity!==selected.identity)cancel(message);snapshot=selected;sourceText();buttons();}
+  function changePage(delta,assess=false){if(running||!visible()||!snapshot||assess&&!workerOK())return;const target=pageIndex+delta;if(target<0||target>=snapshot.pages)return;pageIndex=target;syncSelection('Группа монет изменена. Нажмите «Оценить монеты».');if(assess)run();}
   async function json(url,options={}){
    const controller=new AbortController();readController=controller;const timeout=setTimeout(()=>controller.abort(),8000);
    try{return await readResponse(await fetch(url,{...options,cache:'no-store',credentials:'same-origin',signal:controller.signal}));}finally{clearTimeout(timeout);if(readController===controller)readController=null;}
@@ -130,9 +136,13 @@
    if(valid()){running=false;active=null;renderResults();progress.textContent=progressText()+'.'+(failureNotes.length?' '+failureNotes.slice(0,2).join('; ')+(failureNotes.length>2?'…':''):'')+(completed?'':' Завершённых оценок нет.');buttons();}
   }
   async function refreshCached(){
-   if(!visible()||cacheBusy||readController||!rows.size)return;const mine=generation,keys=[...rows.keys()],key=keys[cacheCursor++%keys.length],row=rows.get(key);cacheBusy=true;
-   // Table mode has no visible-chart pump to renew the same-input REST proof.
-   try{const query=new URLSearchParams({exchange:row.source.exchange,symbol:row.source.symbol,interval:row.source.interval});await json('/api/exchange-chart?'+query);if(mine!==generation||!visible())return;const packet=await json('/api/kronos/forecast?'+query);if(mine!==generation||!visible())return;if(validReady(packet,row.source,Date.now()/1000,row.binding)){const refreshed=measure(packet);refreshed.binding=row.binding;rows.set(key,refreshed);}else{rows.delete(key);retired++;}renderResults();}catch(error){if(mine===generation&&visible()){rows.delete(key);retired++;renderResults();if(!running)progress.textContent='Подтверждение оценки недоступно. Запустите отбор повторно.';}}finally{cacheBusy=false;}
+   if(!visible()||cacheBusy||readController||!rows.size)return;const mine=generation;cacheBusy=true;
+   // Two sequential rows keep fifteen results within the existing 75s proof
+   // while the 30s chart TTL revalidates asynchronously; model GET never renews it.
+   try{for(let count=0,limit=Math.min(2,rows.size);count<limit;count++){
+    if(mine!==generation||!visible()||readController||!rows.size)return;const keys=[...rows.keys()],key=keys[cacheCursor++%keys.length],row=rows.get(key);
+    try{const query=new URLSearchParams({exchange:row.source.exchange,symbol:row.source.symbol,interval:row.source.interval});await json('/api/exchange-chart?'+query);if(mine!==generation||!visible())return;const packet=await json('/api/kronos/forecast?'+query);if(mine!==generation||!visible())return;if(validReady(packet,row.source,Date.now()/1000,row.binding)){const refreshed=measure(packet);refreshed.binding=row.binding;rows.set(key,refreshed);}else{rows.delete(key);retired++;}renderResults();}catch(error){if(mine===generation&&visible()){rows.delete(key);retired++;renderResults();if(!running)progress.textContent='Подтверждение оценки недоступно. Запустите отбор повторно.';}}
+   }}finally{cacheBusy=false;}
   }
   function tick(){if(!visible())return;syncSelection();renderResults();if(!running){status();refreshCached();}}
   panel.addEventListener('toggle',()=>{if(panel.open){syncSelection();if(demo)progress.textContent='Kronos выключен в демо.';else status(true);timer??=setInterval(tick,2000);}else{clearInterval(timer);timer=null;statusController?.abort();if(running||rows.size)cancel('Панель закрыта. Запустите новый отбор после открытия.');}buttons();});

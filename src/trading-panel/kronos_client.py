@@ -21,6 +21,7 @@ TOKENIZER = "NeoQuasar/Kronos-Tokenizer-2k"
 TOKENIZER_REVISION = "26966d0035065a0cae0ebad7af8ece35bc1fb51c"
 CODE_REVISION = "67b630e67f6a18c9e9be918d9b4337c960db1e9a"
 HORIZON, SCENARIOS, LOOKBACK = 6, 5, 120
+COMPLETED_LIMIT = 16
 PORT = 8790
 STATUSES = {"unavailable", "idle", "loading", "queued", "ready", "error", "stale"}
 EXCHANGES = {"binance", "bybit", "okx", "gate", "bitget"}
@@ -135,7 +136,45 @@ class KronosClient:
         self.transport = transport
         self.wall = wall_clock or time.time
         self.clock = clock or time.monotonic
-        self.cache, self.lock = OrderedDict(), threading.Lock()
+        self.cache, self.completed, self.lock = OrderedDict(), OrderedDict(), threading.Lock()
+
+    def _expire_completed(self):
+        with self.lock:
+            now = self.wall()
+            for job_id, value in list(self.completed.items()):
+                if now >= value["expires_at"]:
+                    del self.completed[job_id]
+
+    def _remember_completed(self, value, request):
+        if value.get("status") != "ready" or value.get("demo"):
+            return
+        # Keep only the validated response, never the 120 input candles or
+        # unrelated worker fields. The original source receipt stays intact.
+        retained = {key: deepcopy(value[key]) for key in response() if key in value}
+        retained["source"] = {key: deepcopy(value["source"][key]) for key in request["source"]}
+        self._expire_completed()
+        with self.lock:
+            if self.wall() >= retained["expires_at"]:
+                return
+            self.completed[request["job_id"]] = retained
+            self.completed.move_to_end(request["job_id"])
+            while len(self.completed) > COMPLETED_LIMIT:
+                self.completed.popitem(last=False)
+
+    def _completed_snapshot(self, value, request):
+        source = value.get("source")
+        if (value.get("status") != "idle" or value.get("enabled") is not True or
+                value.get("demo") or value.get("error") is not None or value.get("job_id") != request["job_id"] or
+                not isinstance(source, dict) or
+                any(source.get(key) != item for key, item in request["source"].items() if key != "updated")):
+            return value
+        with self.lock:
+            retained = deepcopy(self.completed.get(request["job_id"]))
+            if retained is not None:
+                self.completed.move_to_end(request["job_id"])
+        # An idle worker only proves availability and the current source. It
+        # never creates a forecast: one must already have completed here.
+        return self._checked(retained, request) if retained is not None else value
 
     def _call(self, method, path, payload=None):
         if self.transport:
@@ -228,9 +267,11 @@ class KronosClient:
             return response("error", error=str(exc), source=request["source"] if request else None)
 
     def status(self):
+        self._expire_completed()
         return self._checked(self._read("/status"))
 
     def request(self, packet):
+        self._expire_completed()
         try:
             request = packet_request(packet, self.wall())
         except (ValueError, TypeError) as exc:
@@ -242,11 +283,18 @@ class KronosClient:
         with self.lock:
             self.cache.pop("/jobs?job_id=" + request["job_id"], None)
             self.cache.pop("/status", None)
-        return self._checked(result, request)
+        checked = self._checked(result, request)
+        self._remember_completed(checked, request)
+        return checked
 
     def snapshot(self, packet):
+        self._expire_completed()
         try:
             request = packet_request(packet, self.wall())
         except (ValueError, TypeError) as exc:
             return response("stale", error=str(exc))
-        return self._checked(self._read("/jobs?job_id=" + request["job_id"]), request)
+        checked = self._checked(self._read("/jobs?job_id=" + request["job_id"]), request)
+        if checked.get("status") == "ready":
+            self._remember_completed(checked, request)
+            return checked
+        return self._completed_snapshot(checked, request)

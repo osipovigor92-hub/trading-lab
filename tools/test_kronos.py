@@ -1,5 +1,6 @@
 """Offline contract fixtures. No real model, weights, exchange data or accuracy claims."""
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from email.message import Message
 import importlib.util
 import io
@@ -82,6 +83,22 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["source"]["updated"], self.packet["updated"])
         self.assertEqual(result["current_source_updated"], self.packet["updated"])
         self.assertEqual(result["expires_at"], self.packet["candle_end"] + 302)
+        self.assertEqual(list(self.client.completed), [self.request["job_id"]])
+
+    def test_completed_retention_excludes_input_candles_and_unrelated_worker_fields(self):
+        self.result.update(candles=[dict(private_fixture=True)] * 120, request=dict(private_fixture=True))
+        self.result["source"] = dict(self.result["source"], unrelated_fixture=[dict(private_fixture=True)] * 120)
+        self.client.request(self.packet)
+        retained = self.client.completed[self.request["job_id"]]
+        self.assertEqual(set(retained), set(response()))
+        self.assertEqual(set(retained["source"]), set(self.request["source"]))
+        self.assertNotIn("candles", retained)
+        self.assertNotIn("request", retained)
+
+    def test_demo_worker_result_is_never_retained_as_an_actual_completed_forecast(self):
+        self.result["demo"] = True
+        self.assertTrue(self.client.request(self.packet)["demo"])
+        self.assertEqual(self.client.completed, {})
 
     def test_fresh_identical_rest_proof_admits_original_input_after_100s(self):
         self.clock.advance(100)
@@ -160,6 +177,175 @@ class ContractFixtureEngine:
     def close(self):
         self.closed = True
         self.release.set()
+
+
+class CompletedRetentionTests(unittest.TestCase):
+    """Real bounded worker/client lifecycle with an explicitly fake engine."""
+    def setUp(self):
+        self.clock = Clock()
+        self.clock.now = int(self.clock.now // 300) * 300 + 17
+        self.engine = ContractFixtureEngine(None)
+        self.engine.release.set()
+        self.jobs = worker.ForecastJobs(
+            "unused-fixture", engine_factory=lambda runtime: self.engine,
+            wall_clock=lambda: self.clock.now)
+        self.addCleanup(self.jobs.close)
+        with self.jobs.condition:
+            self.assertTrue(self.jobs.condition.wait_for(lambda: self.jobs.phase == "idle", timeout=1))
+        self.calls, self.override, self.worker_reads = [], None, []
+
+        def transport(method, path, payload):
+            self.calls.append((method, path, deepcopy(payload)))
+            if method == "POST":
+                self.assertEqual(path, "/request")
+                return self.jobs.request(payload)
+            self.assertEqual(method, "GET")
+            if path == "/status":
+                return self.jobs.status()
+            self.assertTrue(path.startswith("/jobs?job_id="))
+            result = (deepcopy(self.override) if self.override is not None else
+                      self.jobs.get(path.split("=", 1)[1]))
+            self.worker_reads.append(deepcopy(result))
+            return result
+
+        self.client = KronosClient(transport=transport,
+                                   wall_clock=lambda: self.clock.now,
+                                   clock=lambda: self.clock.mono)
+
+    def posts(self):
+        return [call for call in self.calls if call[0] == "POST"]
+
+    def admit(self, symbol):
+        packet = fixture_packet(self.clock, symbol)
+        queued = self.client.request(packet)
+        self.assertIn(queued["status"], ("queued", "ready"))
+        with self.jobs.condition:
+            self.assertTrue(self.jobs.condition.wait_for(
+                lambda: self.jobs.jobs[queued["job_id"]]["result"]["status"] == "ready", timeout=1))
+        ready = self.client.snapshot(packet)
+        self.assertEqual(ready["status"], "ready")
+        self.clock.advance(1.1)
+        return ready
+
+    def test_fifteen_results_survive_worker_eight_cache_without_any_get_admission(self):
+        originals = {"C" + str(i) + "USDT": self.admit("C" + str(i) + "USDT") for i in range(15)}
+        self.assertEqual(len(self.jobs.jobs), 8)
+        self.assertEqual(self.jobs.status()["queue_limit"], 2)
+        self.assertEqual(len(self.client.completed), 15)
+        self.assertLessEqual(len(self.client.cache), 9)
+        self.assertEqual(self.engine.calls, 15)
+        first = originals["C0USDT"]
+        self.assertEqual(self.jobs.get(first["job_id"])["status"], "idle")
+        for symbol, original in originals.items():
+            current = self.client.snapshot(fixture_packet(self.clock, symbol))
+            self.assertEqual(current["status"], "ready")
+            for key in ("job_id", "source", "forecast", "completed_at", "inference_ms", "expires_at"):
+                self.assertEqual(current[key], original[key], (symbol, key))
+            self.assertGreater(current["current_source_updated"], original["current_source_updated"])
+        self.assertTrue(any(value["status"] == "idle" for value in self.worker_reads))
+        self.assertEqual(len(self.posts()), 15)
+        self.assertEqual(self.engine.calls, 15)
+
+    def test_retention_is_bounded_to_sixteen_and_unknown_idle_never_creates_result(self):
+        first = self.admit("C0USDT")
+        for i in range(1, 17):
+            self.admit("C" + str(i) + "USDT")
+        self.assertEqual(len(self.client.completed), 16)
+        self.assertNotIn(first["job_id"], self.client.completed)
+        self.assertEqual(len(self.jobs.jobs), 8)
+        for symbol in ("C0USDT", "UNKNOWNUSDT"):
+            idle = self.client.snapshot(fixture_packet(self.clock, symbol))
+            self.assertEqual((idle["status"], idle["forecast"]), ("idle", []))
+        self.assertEqual(len(self.posts()), 17)
+        self.assertEqual(self.engine.calls, 17)
+
+    def test_retained_packets_are_deep_copies_and_keep_original_receipt(self):
+        returned = self.admit("C0USDT")
+        original = deepcopy(returned)
+        returned["forecast"][0]["median"] = 999
+        returned["source"]["updated"] = 0
+        returned["end_close_samples"][0] = 999
+        for i in range(1, 9):
+            self.admit("C" + str(i) + "USDT")
+        restored = self.client.snapshot(fixture_packet(self.clock, "C0USDT"))
+        self.assertEqual(restored["status"], "ready")
+        for key in ("forecast", "source", "end_close_samples", "completed_at", "expires_at"):
+            self.assertEqual(restored[key], original[key])
+        restored["forecast"][0]["median"] = 998
+        self.assertEqual(self.client.snapshot(fixture_packet(self.clock, "C0USDT"))["forecast"], original["forecast"])
+        self.assertEqual(len(self.posts()), 9)
+
+    def test_worker_failures_busy_states_and_mismatched_binding_never_use_retained_ready(self):
+        original = self.admit("C0USDT")
+        request = packet_request(fixture_packet(self.clock, "C0USDT"), self.clock.now)
+        base = dict(enabled=True, source=original["source"], job_id=request["job_id"], seed=request["seed"])
+        cases = [response(status, **base) for status in ("unavailable", "error", "stale", "loading", "queued")]
+        cases += [response("idle", **dict(base, enabled=False)),
+                  response("idle", error="fixture failure", **base),
+                  dict(response("idle", **base), demo=True),
+                  response("idle", **dict(base, job_id="f" * 64)),
+                  response("idle", **dict(base, source=dict(original["source"], symbol="ETHUSDT"))),
+                  dict(response("idle", **base), model_revision="different-fixture-revision"),
+                  dict(response("idle", **base), tokenizer_revision="different-fixture-tokenizer"),
+                  dict(response("idle", **base), code_revision="different-fixture-code")]
+        for value in cases:
+            with self.subTest(status=value["status"], error=value.get("error")):
+                self.override = value
+                self.client.cache.clear()
+                result = self.client.snapshot(fixture_packet(self.clock, "C0USDT"))
+                self.assertNotEqual(result["status"], "ready")
+                self.assertEqual(result["forecast"], [])
+                self.assertEqual(result["end_close_samples"], [])
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_worker_transport_outage_never_falls_back_to_retained_ready(self):
+        self.admit("C0USDT")
+        self.client.cache.clear()
+        with patch.object(self.client, "_call", side_effect=OSError("fixture unavailable")):
+            result = self.client.snapshot(fixture_packet(self.clock, "C0USDT"))
+        self.assertEqual((result["status"], result["enabled"], result["forecast"]),
+                         ("unavailable", False, []))
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_changed_input_hash_or_source_never_reuses_previous_retained_result(self):
+        original = self.admit("C0USDT")
+        for packet in (fixture_packet(self.clock, "OTHERUSDT"), fixture_packet(self.clock, "C0USDT")):
+            if packet["symbol"] == "C0USDT":
+                packet["candles"][-1]["turnover"] += 1
+            result = self.client.snapshot(packet)
+            self.assertEqual((result["status"], result["forecast"]), ("idle", []))
+            self.assertNotEqual(result["job_id"], original["job_id"])
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_fresh_same_input_proof_never_extends_original_candle_expiry(self):
+        original = self.admit("C0USDT")
+        for i in range(1, 9):
+            self.admit("C" + str(i) + "USDT")
+        self.clock.advance(original["expires_at"] - self.clock.now - 0.1)
+        renewed = self.client.snapshot(fixture_packet(self.clock, "C0USDT"))
+        self.assertEqual(renewed["status"], "ready")
+        self.assertEqual(renewed["expires_at"], original["expires_at"])
+        self.assertEqual(renewed["source"], original["source"])
+        self.assertEqual(renewed["completed_at"], original["completed_at"])
+        self.clock.advance(0.2)
+        current = self.client.snapshot(fixture_packet(self.clock, "C0USDT"))
+        self.assertEqual((current["status"], current["forecast"]), ("idle", []))
+        self.assertNotEqual(current["job_id"], original["job_id"])
+        self.assertEqual(len(self.client.completed), 0)
+        self.assertEqual(len(self.posts()), 9)
+
+    def test_parallel_readers_preserve_cached_packet_and_never_submit_model_work(self):
+        original = self.admit("C0USDT")
+        for i in range(1, 9):
+            self.admit("C" + str(i) + "USDT")
+        packet = fixture_packet(self.clock, "C0USDT")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: self.client.snapshot(packet), range(32)))
+        self.assertTrue(all(value["status"] == "ready" and value["forecast"] == original["forecast"] for value in results))
+        results[0]["forecast"][0]["median"] = 999
+        self.assertEqual(results[1]["forecast"], original["forecast"])
+        self.assertEqual(len(self.client.completed), 9)
+        self.assertEqual(len(self.posts()), 9)
 
 
 class WorkerTests(unittest.TestCase):
