@@ -83,7 +83,7 @@ components:
 
 # Design System: Trading Lab
 
-<!-- Extracted from the final CSS cascade and synthetic preview captures on 2026-10-10. Root's bounded visual review passed at 1280, 390 and 320px on all four pages. -->
+<!-- Shared identity extracted from the CSS cascade and synthetic previews. The five-page chart/density extension passed its bounded review; native interactive charts receive a separate verification record below. -->
 
 ## Overview
 
@@ -91,7 +91,7 @@ components:
 
 The approved concept is a dark working surface built around legible data, restrained cyan actions and clear selected states. Flat panels and fine dividers contain dense measurements without ornamental elevation. Green and rose indicate direction; muted text carries context and unavailable states.
 
-The implemented identity is shared by all four pages. A compact header keeps navigation quiet, and the screener's selected coin remains recognizable across its watch entry, table row and detail panel. Numbers change in place. The visual system makes observation and manual action easy to distinguish.
+The implemented identity is shared by all five pages. A compact header keeps navigation quiet, and the screener's selected coin remains recognizable across its watch entry, table row and detail panel. Numbers change in place. The visual system makes observation and manual action easy to distinguish.
 
 **Key Characteristics:**
 
@@ -107,6 +107,8 @@ The frontmatter records the final cascade: `screener.css` overrides the global p
 
 Primary cyan identifies actions, focus and activity emphasis. Rising green and falling rose express observed direction. They do not grade safety or profitability. Graphite background, panel, control and border tones establish containment; near-white text and muted text establish reading priority. The chart uses its own fast EMA, slow EMA and VWAP colors, named in the legend.
 
+Native exchange plots use a near-black `#101214` field, green `#26a69a` rising candles and red `#ef5350` falling candles. Dotted horizontal grid lines, a right price scale, a colored last-price tag and a restrained symbol watermark follow the requested chart reference. These plot-specific colors preserve the graphite shell and cyan controls.
+
 **The Direction Rule.** Use direction color with a signed value or an explicit setup label; color alone does not explain the observation.
 
 ## Typography
@@ -119,13 +121,15 @@ The main screener heading is 28px; other page headings are 27px. Panel titles ar
 
 The shell caps content at 1900px with 24px desktop side padding and a 64px header. The screener follows the pinned watch/table/detail arrangement: the watchlist and table form the left workspace, observation events sit directly beneath them, and the selected-coin detail occupies the right column. Standard desktop widths reserve 200px for the watchlist and 330px for detail; at 1600px and above these become 220px and 370px. The center table absorbs the remaining width.
 
-At 1200px and below the detail moves under the watch/table region and uses a two-column internal layout. At 650px and below the screener stacks its panels: watchlist, results, observations and detail. The table scrolls within its own container; the page must not acquire horizontal overflow. Mobile watch entries form two columns. At 760px and below four fixed bottom-navigation items replace desktop tabs, and page padding reserves space for the navigation and safe area.
+At 1200px and below the detail moves under the watch/table region and uses a two-column internal layout. At 650px and below the screener stacks its panels: watchlist, results, observations and detail. The table scrolls within its own container; the page must not acquire horizontal overflow. Mobile watch entries form two columns. At 760px and below five fixed bottom-navigation items replace desktop tabs, and page padding reserves space for the navigation and safe area.
 
 Desktop panels use 16px internal padding, 15px grid gutters and fine one-pixel boundaries. Mobile panels use 14px padding and 12px vertical gaps. Table headers stay visible inside their scrolling region. The left workspace has its own grid so the tall detail column does not push the observation feed down.
 
+The default screener view now uses a responsive chart grid within the same market page; the activity table remains a deliberate view choice. Density filters sit above a two-column workspace: a narrow list of confirmed hour-old levels at left and newer/unconfirmed rows or a distance radar at right. At mobile widths the regions stack, stable entries form two columns and the table scrolls within its own region. Radar marker position represents signed distance and size represents relative notional, with source/side/size/distance/status exposed in its accessible name. Colors and typography inherit the existing system.
+
 ## Elevation & Depth
 
-Depth comes from tonal layering and borders. Panels, selected rows and navigation states have no decorative box shadow. The chart rests on a darker field inside its panel. Focus uses a two-pixel cyan outline with three-pixel offset; this is an interaction cue, not ambient glow. Navigation transitions take 150ms and are disabled with reduced-motion preferences.
+Depth comes from tonal layering and borders. Panels, selected rows and navigation states have no decorative box shadow. The chart rests on a darker field inside its panel. Focus uses a two-pixel cyan outline with three-pixel offset; this is an interaction cue, not ambient glow. Active navigation colors update immediately with the visible page.
 
 ## Shapes
 
@@ -133,13 +137,15 @@ Panels use gently rounded eight-pixel corners. Controls, chart frames and watch 
 
 ## Components
 
+The expanded chart toolbar adds “Плотности” and a collapsible “Уровни” editor. Existing graphite controls and 44px mobile targets remain. Manual resistance is gold and support violet, with full labels in the removable annotation list; density bid/ask lines are dotted green/rose and unconfirmed levels are grey with an explicit question mark. “Показать уровни” fits the price axis deliberately. Forms accept price entry as a keyboard alternative to pointer placement. All controls and annotations stay within the scrollable dialog at 320px.
+
 ### Buttons and fields
 
 Primary actions have a solid cyan background, dark text and a five-pixel radius. Secondary actions use a dark fill and restrained border. Standard controls have a 42px minimum height; primary/secondary buttons and inputs/selects become 44px on mobile. Disabled buttons reduce opacity and expose the disabled state. Hover increases brightness; keyboard focus receives the shared visible outline.
 
 ### Navigation and counts
 
-Desktop labels occupy the header with a cyan underline and stronger text for the active page. Mobile navigation has four labeled icons and a subdued selected background. Alert counts use compact badges and represent fresh events, not the retained history total.
+Desktop labels occupy the header with a cyan underline and stronger text for the active page. Mobile navigation has five labeled icons and a subdued selected background. Alert counts use compact badges and represent fresh events, not the retained history total.
 
 ### Panels and watch entries
 
@@ -151,9 +157,23 @@ Rows preserve their symbol identity while values update. The selected row has a 
 
 The selected detail groups a price/chart area, current 1m setup, trend, volume/movement, liquidity, nearby levels and four-part activity breakdown. Reasons and risk calculation use disclosures. Chart timeframe controls change the visual candle series while the setup caption continues to state its 1m timeframe.
 
+### Densities
+
+Compact filter fields and exchange checkboxes retain their labels. Table, radar and refresh controls expose selected/disabled states. Stable levels are flat rows with dividers; the current table and missing-history disclosure retain source identities. Bid/ask colors always accompany side labels. Unavailable and out-of-depth rows use text status and muted colors; they do not inherit current confirmation. The radar uses authored geometry, a central reference line and keyboard-focusable markers, without decorative effects.
+
+### Interactive exchange charts
+
+Grid tiles and the expanded dialog share the locally served Lightweight Charts renderer. The native plot carries candles, crosshair, right price scale and UTC timeline; its compact readout exposes the hovered candle's OHLC and base volume. The plot preserves room for controls and its visible TradingView attribution. Native tables inside the plot use zero cell padding and neutral backgrounds, so application table styling cannot distort the axes.
+
+The dialog keeps all six periods, zoom/reset controls and optional volume and EMA/VWAP toggles outside the plot. Volume uses a separate pane. A focused chart supports keyboard zoom, pan and latest-candle reset; pointer and touch gestures act within the plot. Historical viewport anchors remain stable across refresh. Unconfirmed sources keep dimmed historical candles and a written status; source or period changes clear the old series while the next packet is pending. Narrow layouts retain locally contained plots and wrapped controls.
+
+During the bounded publication wait after a candle closes, the tile and readout explain that the closed candle is updating. This replaces the generic failure wording only for that verified continuity window; the original series remains historical until the new close arrives. Actual errors and expired evidence keep explicit unconfirmed labels.
+
 ### Observations and PAPER
 
 Observation rows show coin, time and event text. Current versus historical status is written explicitly; historical labels use muted text while the row and coin action remain. PAPER actions use existing button conventions and explicit virtual-position language. Missing server state and pending calculations show an explanation instead of a fabricated result.
+
+Directional alert captions add a written “Рекомендация LONG” or “Рекомендация SHORT” in the existing buy/sell colors alongside the scenario label. Source, observed price, reason and invalidation remain grouped within the same flat event row. Archived copies and expired captions use muted direction labels that explicitly say “история”; archive proof says “история — сохранённое наблюдение” without implying that a still-current event has ended. Current conditions use a separate source-verified direction label. The direction filter follows the existing select/control conventions. No token or visual-world replacement is introduced.
 
 ## Do's and Don'ts
 
@@ -170,4 +190,22 @@ Observation rows show coin, time and event text. Current versus historical statu
 - Don't turn an activity score into a profit claim or a command to trade.
 - Don't erase an observation when its current-validity label expires.
 - Don't imply that synthetic preview captures prove live exchange availability.
-- Don't reintroduce removed website sections into the four-page navigation.
+- Don't reintroduce legacy models, journals, Live or execution controls into the five-page navigation. The explicitly requested Kronos comparison belongs inside the screener.
+
+The chart-grid and densities extension preserves the documented palette and components. The bounded visual review passed after one grouped fix batch and one confirmation batch: 18 synthetic captures cover the chart grid, table, densities and three retained pages at 1280, 390 and 320px, with no page overflow or browser errors. Root inspected the chart grid and densities at desktop/mobile widths and representative retained-page captures. A navigation color transition found in the confirmation batch was corrected and checked through focused functional assertions. These captures establish layout and state presentation, not live market availability.
+
+The subsequent native-chart update passed its own bounded review: 21 synthetic captures cover the five pages, table and expanded chart at 1280/390/320px. Root inspected the default grid and expanded charts at desktop/mobile widths, corrected the hidden-dialog initial width and selected-period accessibility in one grouped fix batch, then completed one confirmation batch. No page/dialog overflow or browser errors remained. Functional browser checks passed for historical OHLCV crosshair, zoom/pan/reset without market requests, the separate volume pane, six periods, source/watch isolation, stale history and UTC viewport preservation across rolling candle windows. No further visual polish loop was run; captures remain synthetic evidence. No raster ships.
+
+The chart-level update passed its bounded review at 1280/390/320px using `artifacts/chart-levels-{1280,390,320}.png`. Root inspected all three sizes, grouped the control styling and source-proof corrections, then inspected one confirmation batch. Gold resistance, violet support, bid/ask density colors and grey unconfirmed labels remain readable within the graphite chart dialog. Narrow controls wrap and the editor scrolls within the dialog; no page/dialog overflow or browser errors remained. The captures use isolated synthetic fixtures and do not prove live exchange availability. No further visual polish loop was run; no raster ships.
+
+The directional-alert extension preserves this world and all frontmatter tokens. Its bounded review used `artifacts/recommendation-alerts-{1280,390,320}.png`, one grouped archive-copy correction and one confirmation batch resumed after an intermittent 320px navigation interruption. The independent final review passed at all three widths with **ship** disposition for the scoped copy fix: archive LONG/SHORT stays muted with neutral saved-observation proof while current captions remain active; reasons, invalidation and responsive layout retain their hierarchy. No remaining issue or browser error was reported. Adaptive closed-candle status and refresh behavior passed separate functional checks with the existing chart-level controls. No further visual polish loop was run. The captures are isolated synthetic evidence; no raster ships. The incumbent sidecar is retained unchanged, including its pre-existing four-page narrative/navigation drift.
+
+The live-chart extension retains these tokens. Native forming candles have an explicit compact “формируется” caption; the independent “Цена сейчас” line/readout has its own UTC update time. Historical cursor OHLC keeps its historical meaning. The dialog wraps the readout on narrow widths, and unavailable/connecting streams explain their state alongside retained closed-candle proof. An independent bounded review inspected six synthetic grid/dialog captures at 1280/390/320px and held one issue: the compact forming caption was hidden with the source label. A visible compact caption and focused grid-only confirmation resolved it. The final disposition is **pass; ship for the scoped live-state disclosure correction**. Expanded captures were retained; no further polish or whole-site review was run. Functional checks found no page/dialog overflow, browser errors or trading commands. Captures remain isolated synthetic evidence, with no raster shipped and no latency guarantee.
+
+The column/density and performance extension preserves frontmatter tokens and the incumbent graphite world. Header sort buttons use written ↑/↓ and aria-sort; a collapsible per-column range row stays within the table's local horizontal scroller. Inputs expose labels, focus and invalid-range state. Source-specific density buttons use pressed state, bid/ask native lines and written confirmation beside grey stale lines.
+
+Bounded root review inspected the initial three column captures, all three grid-density captures and representative speed-table/density captures. One grouped column capture correction restored ordinary synthetic LINK price and scroll origin; its confirmation was inspected at desktop/mobile widths. Grid-density captures required no visual correction. Functional checks cover 1280/390/320, no page overflow or browser errors for these new controls. These are scoped interface/state checks, not an exhaustive whole-site verdict or latency guarantee. Existing chart-level checks also passed at all three widths. Captures remain synthetic and no raster ships; the older sidecar is retained unchanged.
+
+## Significant densities and optional Kronos
+
+Use the existing graphite tokens, compact native controls and written freshness states. Density selection explains size relative to neighboring returned levels, returned-side concentration or repeated observed repricing. A machine-pattern label describes evidence and leaves the owner unknown. No raw/all-density option is offered. Kronos stays collapsed inside the screener, evaluates at most eight current candidates only on explicit action and exposes scenario range, agreement count, UTC source close and calculation time. Keep its table locally scrollable on narrow screens and its descriptive text visible; no probability or execution claim belongs in this comparison. Initial scoped Kronos captures at 1280/390/320 were inspected without a visual correction. A separate real-data desktop integration capture establishes successful inference and source display, without a quality or whole-site verdict. Density capture disposition is recorded in the surface file after review.

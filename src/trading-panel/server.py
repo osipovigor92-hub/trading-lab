@@ -5,9 +5,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from market_data import MarketData
+from kronos_client import KronosClient, response as kronos_response
 import control_client
+KRONOS = KronosClient()
 import selection
 from manual_paper import ManualPaper
+from exchange_data import get_exchange_data
+from densities import DensityMonitor
+
+
+class PanelHTTPServer(ThreadingHTTPServer):
+    # A reload requests the local script/style bundle concurrently. A five-
+    # connection accept backlog can drop critical scripts on Windows.
+    request_queue_size = 64
 
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
@@ -15,7 +25,21 @@ STATE = Path("/var/lib/trading-bot/state.json")
 # never has to wait for another browser tab to have visited the screener first.
 MARKET = MarketData(background=True)
 MANUAL = ManualPaper(MARKET, background=True)
+EXCHANGE_DATA = get_exchange_data()
+# Read-only observations restart their continuous-age clock after service restart.
+DENSITIES = DensityMonitor(EXCHANGE_DATA, background=__name__ == '__main__')
 FILES = {
+    "/density-signals.js": ("density-signals.js", "text/javascript; charset=utf-8"),
+    "/kronos.js": ("kronos.js", "text/javascript; charset=utf-8"),
+    "/kronos.css": ("kronos.css", "text/css; charset=utf-8"),
+    "/lightweight-charts-5.2.1.js": ("lightweight-charts-5.2.1.js", "text/javascript; charset=utf-8"),
+    "/exchange-chart.js": ("exchange-chart.js", "text/javascript; charset=utf-8"),
+    "/chart-stream.js": ("chart-stream.js", "text/javascript; charset=utf-8"),
+    "/chart-levels.js": ("chart-levels.js", "text/javascript; charset=utf-8"),
+    "/chart-grid.js": ("chart-grid.js", "text/javascript; charset=utf-8"),
+    "/chart-grid.css": ("chart-grid.css", "text/css; charset=utf-8"),
+    "/densities.js": ("densities.js", "text/javascript; charset=utf-8"),
+    "/densities.css": ("densities.css", "text/css; charset=utf-8"),
     "/fresh-alerts.js": ("fresh-alerts.js", "text/javascript; charset=utf-8"),
     "/alerts.css": ("alerts.css", "text/css; charset=utf-8"),
     "/positions.js": ("positions.js", "text/javascript; charset=utf-8"),
@@ -85,6 +109,8 @@ class Handler(BaseHTTPRequestHandler):
             "img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
             if chart else
             "default-src 'self'; frame-src 'self'; frame-ancestors 'none'; "
+            "connect-src 'self' wss://stream.bybit.com wss://fstream.binance.com "
+            "wss://ws.okx.com wss://fx-ws.gateio.ws wss://ws.bitget.com; "
             "base-uri 'none'; form-action 'none'; object-src 'none'"
         )
         self.send_header("Content-Security-Policy", policy)
@@ -103,7 +129,30 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path == "/api/manual-paper":
+            if path == '/api/kronos/status':
+                if urlsplit(self.path).query:
+                    self.api_error(400, 'Некорректные параметры Kronos')
+                    return
+                data = dict(KRONOS.status(), token=control_client.TOKEN)
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            elif path == '/api/kronos/forecast':
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                if set(query) != {'exchange', 'symbol', 'interval'} or any(len(v) != 1 for v in query.values()) or len(urlsplit(self.path).query) > 250:
+                    self.api_error(400, 'Укажите биржу, монету и период один раз')
+                    return
+                try:
+                    packet = EXCHANGE_DATA.peek_chart_snapshot(*(query[k][0] for k in ('exchange', 'symbol', 'interval')))
+                    if packet.get('status') == 'ok':
+                        data = KRONOS.snapshot(packet)
+                    elif packet.get('status') == 'error':
+                        data = kronos_response('error', enabled=True, error=packet.get('error') or 'Источник свечей недоступен')
+                    else:
+                        data = kronos_response('pending', enabled=True, error='Ожидаем подтверждённые свечи')
+                except ValueError as exc:
+                    self.api_error(400, str(exc))
+                    return
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            elif path == "/api/manual-paper":
                 data = MANUAL.snapshot()
                 data['token'] = control_client.TOKEN
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
@@ -131,6 +180,23 @@ class Handler(BaseHTTPRequestHandler):
                     method = MARKET.assistant_alerts_snapshot if path == '/api/market-alerts' else MARKET.assistant_snapshot
                     data = method(filters, query.get('search', [''])[0], watch=query.get('watch', [''])[0])
                 except ValueError as exc:
+                    self.api_error(400, str(exc))
+                    return
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            elif path in ("/api/exchange-screener", "/api/exchange-chart", "/api/densities"):
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                allowed = {'exchanges', 'symbols', 'watch'} if path == '/api/densities' else ({'exchange'} if path == '/api/exchange-screener' else {'exchange', 'symbol', 'interval'})
+                if len(urlsplit(self.path).query) > 3000 or any(len(v) != 1 for v in query.values()) or set(query) - allowed:
+                    self.api_error(400, 'Некорректные параметры публичных данных')
+                    return
+                try:
+                    if path == '/api/densities':
+                        data = DENSITIES.request(**{k: v[0] for k, v in query.items()})
+                    elif path == '/api/exchange-screener':
+                        data = EXCHANGE_DATA.exchange_snapshot(query.get('exchange', ['bybit'])[0])
+                    else:
+                        data = EXCHANGE_DATA.chart_snapshot(query.get('exchange', ['bybit'])[0], query.get('symbol', [''])[0], query.get('interval', ['5'])[0])
+                except (ValueError, TypeError) as exc:
                     self.api_error(400, str(exc))
                     return
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
@@ -193,6 +259,32 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self.send(503, b'{"error":"Controller unavailable"}', 'application/json')
             return
+        if self.path == '/api/kronos/forecast':
+            if not control_client.authorized(self.headers):
+                self.api_error(403, 'Недействительный токен или источник запроса')
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 4096 or self.headers.get('Transfer-Encoding'):
+                    raise ValueError('Некорректный размер запроса')
+                command = json.loads(self.rfile.read(length))
+                if not isinstance(command, dict) or set(command) != {'exchange', 'symbol', 'interval'}:
+                    raise ValueError('Укажите биржу, монету и период')
+                state = KRONOS.status()
+                if state.get('status') not in ('idle', 'queued', 'loading', 'ready') or not state.get('enabled'):
+                    data = state
+                else:
+                    packet = EXCHANGE_DATA.chart_snapshot(*(command[k] for k in ('exchange', 'symbol', 'interval')))
+                    if packet.get('status') == 'ok':
+                        data = KRONOS.request(packet)
+                    elif packet.get('queued') is True:
+                        data = kronos_response('pending', enabled=True, error='Загружаем проверенные свечи')
+                    else:
+                        data = kronos_response('error', enabled=True, error=packet.get('error') or 'Очередь свечей занята. Повторите отбор.')
+                self.send(202, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            except (ValueError, TypeError, OverflowError):
+                self.api_error(400, 'Некорректный запрос Kronos')
+            return
         if self.path not in ("/api/models-control", "/api/manual-paper"):
             self.send(404, b'{"error":"Not found"}', "application/json")
             return
@@ -219,4 +311,4 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print("Panel: http://127.0.0.1:8787", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
+    PanelHTTPServer(("127.0.0.1", 8787), Handler).serve_forever()

@@ -1,291 +1,73 @@
-# Crypto screener and levels
+# Графики и плотности
 
-See [stable tracking](stable-tracking.md) for pinned row order, historical rating
-labels, priority watchlists and the retained alert feed added after these stages.
+В разделе «Скринер» доступны два вида. «Графики» сравнивает монеты на выбранной бирже. «Таблица» сохраняет помощника Bybit: активность, причины сетапа, наблюдение, алерты и ручной расчёт риска. Переключение вида не очищает избранные монеты или историю.
 
-The **Скринер** tab lists the top 100 valid Bybit linear USDT perpetual tickers by 24-hour turnover. Search, minimum turnover, sorting and presets run locally. Expiry futures, pre-listing rows, malformed and duplicate tickers are excluded. This does not change the symbol selection or entry rules of trading models.
+## Графики
 
-- Price, 24-hour change, turnover in USDT, daily high/low range and quoted bid/ask spread.
-- A transparent **«Рейтинг»** score (0–100): four integer parts for liquidity,
-  spread, relative volume and the order book, with measured values and explanations.
-  It describes observed market conditions; see Stage 2 below for the fixed formula.
-- Presets: all, active/liquid (range ≥3%, turnover ≥20M USDT, spread ≤0.03%), tight spread (turnover ≥50M, spread ≤0.02%), gainers, losers, and observed/open-position bot symbols.
-- Selecting a coin requests up to 180 closed 1/5/15/60-minute candles and a 200-level REST book. A chart starts with 90 candles (45 on small screens), turnover bars and VWAP of the last 60 candles. `− / % / +` changes the visible candle range and therefore the price scale; the chosen scale is saved separately for each timeframe and is not reset by a quote update or an internal panel switch. TradingView links and the overview chart support any selected screener symbol. Mobile rows show turnover, range and spread under each coin without horizontal scrolling.
-- The chart supports time zoom around the pointer, price zoom over the right axis, drag panning, pinch zoom and double-click reset. Views are stored per symbol and timeframe; previously saved per-timeframe scale is used as a starting point. Desktop column headings sort 24-hour change, turnover, spread or rating in either direction; a changed price briefly highlights up/down with reduced-motion support.
-- Support/resistance: strict 2-left/2-right confirmed swing lows/highs, clustered within max(0.05% close, 0.25 ATR14) total width; up to three nearest zones below/above the last closed price. Zones crossing the price are omitted. Pivot counts describe history, not independent tests or probabilities. Lines beyond the visible candle price scale are shown in the level list only. This is a descriptive heuristic, not a validated trading strategy.
-- Book volume: price × base quantity in USDT, separated by ±0.02/0.05/0.10% nested bands. Three largest visible price levels per side within ±0.10%. Partial depth is marked as a lower bound. Changes between distinct snapshots no more than 12 seconds apart also include cancellations and changing band membership. They are not a reconstruction of all book events or proof of execution. Snapshot age is shown.
-- The selected coin card exposes price, OI, contract funding, VWAP, ATR and
-  base-quantity volume without expanding details. Quotes, candles and the book
-  have independent age/status indicators; see Stage 3 below.
-- Bot activity: actual saved A/B/C/D phases and positions, entry notional and last close. Stale or halted positions are explicitly historical. Grid stays in its existing tab. C/D still require their separate `install_research.py` installation.
-- Alerts combine the existing B conditions, book-only watch state, and fresh C/D
-  research checks. Green/red means a fresh model condition; yellow means only
-  observation. A position, cooldown or stale feed blocks the entry label. The
-  list patches existing cards rather than recreating them on every refresh, so
-  open details and scroll context do not blink away.
-- Browser notification permission is requested only on a user click. When enabled,
-  a newly confirmed entry or new PAPER position can notify while the tab is hidden
-  and the browser remains active. Notifications are not push delivery and are
-  unreliable if the browser or phone suspends the page. Sound uses distinct tones
-  for LONG and SHORT and works only on a visible page after a user gesture.
+- Биржи: Bybit, Binance, OKX, Gate и Bitget. Текущая свеча и цена поступают через публичные WebSocket, закрытая история — через REST. Только данные USDT perpetual; доступность зависит от ответа каждой биржи. Ошибка или задержка отображается явно.
+- Периоды свечей: 1м, 5м, 15м, 1ч, 4ч, 1д; сетка на 4, 6, 9 или 12 окон. На узком экране окна идут в одну колонку.
+- Поиск, отдельное наблюдение за парой «биржа + символ», фильтр «Мои монеты», развёрнутый график с включаемыми EMA20/50, VWAP60 и отдельной панелью базового объёма.
+- Позиции монет закрепляются при появлении. Обновление котировок и метрик не двигает окна. Кнопка «Пересортировать» применяет актуальную выбранную метрику. Смена фильтра или метрики — явный новый отбор.
+- Наблюдение Bybit также передаётся существующему помощнику (до 8 монет). Наблюдение на другой бирже сохраняется отдельно и не меняет источник сигналов Bybit.
 
-## Deployment and resource use
+Свечи в сетке и развёрнутом окне рисует локальная библиотека TradingView Lightweight Charts 5.2.1. Курсор показывает время выбранной свечи в UTC, её O/H/L/C и базовый объём V. Перетаскивание сдвигает график; колесо мыши или жест масштабирования меняет масштаб. При фокусе на графике клавиши `+` и `−` меняют масштаб, стрелки двигают область просмотра, `Home` возвращает последние свечи. В развёрнутом окне доступны кнопки масштаба и «К последним свечам».
 
-### Stage 1: smart coin selection
+Эти действия работают с уже загруженными 60–180 закрытыми свечами и отдельной текущей свечой, без подгрузки старой истории. Выбранный участок истории сохраняет временные границы при обновлении окна данных. Если график оставлен на последних свечах, он следует за новым баром. Смена биржи, монеты или периода очищает прежний источник. Открытая свеча помечена «формируется»; её цена меняется до закрытия периода. Отдельная голубая пунктирная линия «Цена сейчас» показывает последнюю цену сделки.
 
-The **«Умный отбор · фильтры и проверка»** section adds adjustable eligibility
-thresholds. Each row exposes every check, its value and threshold, and one of
-**«прошёл»**, **«проверяется»**, **«отсев»**. Use **«Показать»** to show passed,
-pending or rejected rows. Defaults are heuristics for screening, not validated
-trading parameters. They can be changed and reset; preferences are saved in the
-browser. Selection thresholds determine eligibility separately from the rating.
+### Как обновляются графики
 
-| Check | Default | Unit / calculation |
-| --- | --- | --- |
-| 24h turnover | ≥20 million | USDT |
-| Spread | ≤0.03% | Quoted spread and worst spread across 5 books |
-| 24h range | 1–30% | Existing daily high/low range |
-| ATR(14) | 0.08–0.8% | Closed 1-minute candles |
-| Relative volume | ≥1× | Mean base quantity of last 5 closed minutes / previous 20 |
-| Open interest | ≥1 million | `openInterestValue`, USDT |
-| Absolute funding | ≤0.05% | `fundingRate` ×100, per contract interval; interval shown when available |
-| Depth | ≥5,000 | Minimum Bid and Ask USDT inside ±0.1% over 5 books |
-| Impact | ≤0.05% | Worst VWAP movement from best quote for quantity equal to ~100 USDT at mid, both sides, 5 books |
+Текущая свеча обновляется при сообщении биржи, поэтому движение цены видно внутри выбранного периода. Отрисовка объединяет частые сообщения в течение 250 мс. Для Bybit канал свечей публикуется с частотой 1–60 секунд, а отдельный тикер может приходить каждые 100 мс; линия цены продолжает показывать изменения между свечными сообщениями. Binance публикует свечи до четырёх раз в секунду, OKX и Bitget — до раза в секунду при активности. Эти частоты описывают каналы бирж и не гарантируют сообщение в каждый момент или задержку конкретного подключения.
 
-The base 24h volume must be positive. Missing OI, funding or quantity means
-**«проверяется»**, never an assumed zero. Any known failed threshold gives
-**«отсев»**. Passing requires all checks and five distinct exchange book sequences
-at least 1.5 seconds apart within 60 seconds; the latest must be at most 12 seconds
-old. The entire ±0.1% band must be covered. Candles expire after 75 seconds,
-their last closed minute after 120 seconds, and tickers after 45 seconds.
-The browser also expires passed results and rejects a verification from a
-different ticker snapshot. A failed refresh cannot preserve a passed label.
+Подписки начинаются по проверенному каталогу инструментов: последняя цена может поступить, пока история ещё стоит в серверной очереди. Текущий бар добавляется только после загрузки последовательной закрытой истории той же биржи, монеты и периода. Если закрытая история ещё не подтверждена, её статус остаётся видимым. EMA20/50, VWAP60, NATR и рекомендации LONG/SHORT используют только проверенные закрытые свечи; живой слой их не подменяет.
 
-`GET /api/market-selection` accepts the 11 named numeric thresholds in
-`selection.DEFAULT_FILTERS` and optional uppercase alphanumeric `search` (≤24
-characters). Unknown, repeated, empty, nonfinite, out-of-bounds and inverted
-range/ATR parameters return 400. This endpoint reads only public market data.
+Сетка и развёрнутый график делят подписки, максимум 13 сочетаний «биржа + монета + период». Скрытая вкладка закрывает подключения и при возвращении подписывается заново. При обрыве живые свеча и линия цены снимаются, история остаётся доступной, а повторные подключения используют задержку от 2 до 30 секунд с небольшим разбросом. Последняя цена действительна до 10 секунд от исходного сообщения; открытая свеча — до 75 секунд и только в текущем периоде. Закрывшийся бар может показываться до 10 секунд как «закрылась · проверяем», пока REST подтверждает новую историю. Повторный опрос не продлевает эти сроки.
 
-To fit the small VDS, ticker checks cover the top 100, but candles and order
-books warm for only **up to 8 pairs**, prioritised by turnover after ticker
-thresholds and the current search. Other pairs remain pending until analysed;
-there is no claim that all 100 books have been checked. Use search to prioritise
-a specific pair. Initial collection can take about a minute when eight pairs
-are eligible, longer if the exchange is unavailable. Several browsers share the
-same cache; the most recent request sets the shortlist for 30 seconds. Without
-browser requests the default shortlist is warmed. Memory remains bounded:
-24 cached responses, histories for 24 symbols with 5 summaries each, and the
-existing 2 workers / 2 outstanding upstream calls. No new service is required.
+У OKX время в свечном сообщении обозначает начало бара, поэтому время получения показывается отдельно и не объявляется временем генерации. Объём текущей свечи Gate остаётся прочерком: поток передаёт число контрактов, которое нельзя смешивать с базовым объёмом закрытой истории без пересчёта. Статусы и правила источников описаны в [exchange-data.md](exchange-data.md).
 
-Offline checks: `python tools/check.py`. Browser checks additionally run
-`node tools/test_selection_ui.cjs` for threshold changes, reset/persistence,
-explanations retained across refresh, pending/stale/error data, and widths
-1280/390/320. The preview uses explicitly synthetic data.
+NATR 5м / 14 = `100 × ATR14 / последняя цена закрытия` по 5-минутным свечам; NATR 1м / 30 — та же формула с периодом 30 на минутных свечах. True Range учитывает текущий диапазон и разрыв относительно предыдущего закрытия. ATR использует среднее первых N значений TR и дальнейшее сглаживание Уайлдера. NATR показывает волатильность, без утверждения о направлении или доходности.
 
-### Stage 2: candidate rating and explanations
+Изменение 5м рассчитывается от закрытия пять минут назад до последней закрытой минутной свечи. Оборот и изменение 24ч поступают из публичных тикеров. Если биржа не предоставляет число сделок за 24ч, вместо него стоит прочерк. Для OKX оценка оборота помечается отдельно; её нельзя считать точным биржевым quote turnover.
 
-The old turnover/quoted-spread-only score is replaced by a server-calculated
-rating. Click the desktop score or expand the selection line under the symbol
-on any screen to see four parts, their observed values and labels such as
-**«Ликвидность высокая»**, **«Спред узкий»**, **«Объём растёт»** and
-**«Стакан подтверждает»**. The method can be expanded above the list.
+Сетка загружает свечи только для видимых монет и выбранной метрики. NATR и изменение 5м сортируют уже измеренные монеты; остальные идут по обороту. Это не полный непрерывный NATR-скан всех инструментов биржи. Строка над графиками показывает размер выборки и число измеренных монет. Поиск позволяет открыть другую монету из доступного каталога.
 
-Each part is clamped to 0–25 and rounded to the nearest integer (half up).
-The final 0–100 score is exactly the sum of the displayed parts.
-Let `clamp(x)` bound x to 0–1. Percent values below use percentage points,
-so a 0.01% spread is the number `0.01`.
+Подтверждённая история требует 60–180 последовательных закрытых свечей, правильной биржи, символа и периода, свежего времени источника. Во время сбоя последняя история может оставаться приглушённой с пометкой «не подтверждён». Её метрика не считается актуальной, даже если отдельный живой тикер доступен. Нельзя открыть расчёт Bybit/PAPER через график другой биржи.
 
-| Part | Raw points before rounding | Explanation / input |
-| --- | --- | --- |
-| Liquidity | `25 × clamp((log10(T) − log10(2,000,000)) / 2)`; zero when T=0 | T is 24h turnover in USDT: 2M gives 0, 20M gives 13, 200M gives 25; «высокая» at ≥100M |
-| Spread | `25 × clamp(1 − S / 0.05)` | S is the larger of the quoted spread and worst spread of five books; «узкий» at ≤0.02% |
-| Volume | `25 × clamp(R / 2)` | R is mean base quantity per minute over the last five closed minutes / the previous twenty; 1× gives 13, 2× gives 25; «растёт» means ≥1.2× that baseline |
-| Book | `15 × clamp(D / 20,000) + 10 × clamp(1 − I / 0.05)` | D is the lowest Bid/Ask depth in USDT inside ±0.1% across five books; I is their worst estimated impact in %, for ~100 USDT; «подтверждает» requires all current book checks to pass |
+Фоновая проверка через 30 секунд не снимает подтверждение ещё актуальных свечей: сохраняются исходное время ответа (не старше 75 секунд) и текущая закрытая граница периода. Ошибка проверки, новая закрытая свеча или превышение срока сразу снимают подтверждение. Свежесть свечей проверяется независимо от каталога котировок. Два места ограниченной серверной очереди зарезервированы для графиков; клиент сначала загружает видимые графики, затем дополнительные свечи метрик, без повторного запроса одной пары в процессе загрузки.
 
-These anchors are explicit screening heuristics, not a trained predictor or
-a probability of profit. Changing eligibility thresholds does not rescale the
-four components. A fully observed coin that fails a threshold can retain a
-numeric rating and its **«отсев»** state. Rating sorting groups passed coins
-first, pending coins second, rejected coins last in both directions; known
-scores precede unavailable ones inside a group. Equal ratings use turnover,
-then symbol for stable ordering.
+Каталог проверяется каждые 5 секунд. Проверки закрытой истории идут обычно каждые 15 секунд, с ранним запросом у следующей границы периода. Короткое ожидание публикации новой закрытой свечи запускает повторы раз в секунду в пределах десятисекундного окна. HTTPS-соединения сервера повторно используются, а неизменившиеся данные не вызывают повторную загрузку всех серий или изменение размеров графика. Это сокращает работу при обновлении; исходные метки подтверждения сохраняются.
 
-The final score requires all 12 selection checks to have known finite values
-(coverage must be true), five complete books, and the same source freshness
-limits as Stage 1. Missing OI/funding or an incomplete book cannot produce a
-complete score. Known component points remain visible but are neither replaced
-by zero nor renormalised; the total shows **«проверяется»** / **«—»**.
-The browser checks freshness and that all four parts add up to the total;
-a stale source, different ticker snapshot, malformed total or failed API
-refresh removes the complete rating. There is no ticker-only fallback.
+### Уровни на графике
 
-Rating is calculated from the existing selection data, with no added upstream
-requests, caches, workers or services. It does not change model entry rules,
-positions or journals. Tests cover exact sums, rounding and anchors, monotonic
-responses, worst-book measurements, invalid/missing/stale inputs, threshold
-independence, sort grouping and desktop/mobile expansion with live refresh.
+Откройте монету кнопкой «Развернуть». «Уровни» открывает выбор поддержки/сопротивления: введите цену и нажмите «Добавить» либо выберите «Нанести кликом» и нажмите на нужную высоту в области свечей. Escape отменяет нанесение. Отметки сохраняются в этом браузере отдельно для каждой пары «биржа + монета», также при смене периода. До 12 уровней на пару и 48 пар; каждый уровень удаляется отдельно. «Показать уровни» подбирает ценовой масштаб, «К последним свечам» возвращает обычный масштаб.
 
-### Stage 3: selected coin card
+«Плотности» наносит до трёх значимых заявок с каждой стороны от 100 000 USDT, в пределах 0,5% от середины стакана. Уровень должен выделяться относительно соседних цен или занимать существенную долю полученной стороны; повторные перестановки проверяются отдельно. Обычные крупные уровни без этих оснований скрыты. Зелёные пунктирные линии — покупка, розовые — продажа. Подтверждение требует свежего общего снимка (30 секунд) и свежего наблюдения уровня (25 секунд). При сбое последние уровни серые, с «?»; исчезновения, подтверждённые монитором, убираются. Открытие уровня из раздела «Плотности» передаёт его биржу, монету и исходное подтверждение. Пока открыто окно графика, таблица плотностей приостанавливает свой опрос; при закрытии восстанавливает выбранные фильтры.
 
-Selecting a coin updates the **«Карточка выбранной монеты»** section and its
-adjacent book. Existing 1m/5m/15m/1h charts, confirmed levels, zoom/pan, overlays
-and turnover bars are retained. The four timeframe controls remain visible on
-small screens and use 44px touch targets. Views remain saved per symbol/timeframe.
+Жёлтые и фиолетовые сплошные линии — ручные сопротивление и поддержка. Плотности — наблюдения стакана, ручные линии — ваши отметки. Нанесение уровней не создаёт торговых команд.
 
-Six always-visible measurements use the selected symbol and timeframe:
+## Плотности
 
-| Measurement | Unit and meaning |
-| --- | --- |
-| Price | Latest ticker price in USDT; 24h change and turnover below it |
-| OI | `openInterestValue` in USDT from the shared ticker snapshot; unknown OI stays unavailable |
-| Funding | `fundingRate × 100`, signed %, per contract interval; e.g. −0.0002 becomes −0.02%. Interval is shown only when supplied; it is never assumed to be eight hours |
-| VWAP | Sum of turnover in USDT / sum of base quantity over the latest 60 closed candles, in USDT; unavailable for zero total quantity |
-| ATR(14) | Mean of the last 14 true ranges, in USDT and % of the last closed price, for the selected timeframe |
-| Volume | Sum of base quantity over the latest 60 closed candles, labelled with the selected base asset; turnover in USDT is shown separately |
+Подробный контракт наблюдения и ограничения покрытия описаны в [densities.md](densities.md). Биржи, сумма в USDT, расстояние, сторона, число уровней и монеты настраиваются в этом разделе. «Покупка» и «Продажа» обозначают стороны лимитных заявок, без автоматического LONG/SHORT сигнала.
 
-The detailed levels section retains the last closed price and **RVOL by
-turnover over 5 / previous 20 candles**. This chart measure is explicitly
-labelled and is distinct from the base-quantity minute RVOL used by selection
-and ranking. Both volume and turnover can be valid measured zeros. Missing OI,
-funding or VWAP is shown as **«—»**, without substituting zero. Main price
-measurements use compact precision; exceptionally small nonzero prices use
-scientific notation rather than becoming a displayed zero.
+Длительное наблюдение заявки не доказывает намерение её исполнить. Публичные снимки не позволяют гарантировать защиту от снятия заявок или манипуляций. Исчезновение и недоступность данных сохраняются в истории как разные события.
 
-The card shows each source's original timestamp and age:
+## Источники и образец
 
-- Quotes expire after 45 seconds. OI/funding use this same observed snapshot
-  time; no separate exchange update time for those fields is claimed.
-- Candles expire after 75 seconds since their fetch and when the latest closed
-  candle end exceeds one selected period plus 75 seconds. Stale candles hide
-  the chart, zones and candle-based measurements, while fresh quote values remain.
-- The book expires after 8 seconds. Expired book depth is hidden while fresh
-  chart and quote values remain. Incomplete ±0.1% coverage is marked as a lower
-  estimate, independently of timestamp freshness.
+Интерфейс и набор функций изучены на [ScreenerCrypto](https://screenercrypto.ru/) и в разделе [«Плотности»](https://screenercrypto.ru/densities). Название Trading Lab и ранее выбранная графитовая палитра сохранены.
 
-Loading, unavailable, stale and missing-symbol states are explicit. A failed
-refresh can retain a previously verified response only within its original
-freshness window and displays **«повторяем обновление»**. An old response is
-never stamped with the browser's current time. Responses for another symbol
-or timeframe cannot populate the card; request generation prevents a slow
-previous selection from overwriting the currently selected coin. Native open
-details and metric DOM nodes survive updates.
+Движок графиков: [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts), версия 5.2.1 поставляется вместе с сайтом; графики не требуют CDN или отдельного сервиса TradingView. Подпись TradingView сохраняется в каждом графике. Библиотека рисует переданные публичные свечи и не является источником данных биржи.
 
-The backend exposes existing calculated ATR and base-quantity volume as
-`atr` and `volume_window` in `/api/market-chart`. No additional upstream API
-calls, services, workers, cache entries, dependencies or model changes are
-introduced. Offline tests cover the units, zeros, funding conversion and
-independent expiry. `node tools/test_coin_card_ui.cjs` checks all four
-timeframes at 1280/390/320, missing/negative/zero/partial/wrong/stale/error
-responses, delayed coin switching, persistence and recovery; it also runs in CI.
+Для текущего бара используется подход `series.update` из официального [примера обновления Lightweight Charts](https://tradingview.github.io/lightweight-charts/tutorials/demos/realtime-updates). Публичные каналы и ограничения: [Bybit свечи](https://bybit-exchange.github.io/docs/v5/websocket/public/kline) и [тикеры](https://bybit-exchange.github.io/docs/v5/websocket/public/ticker), [Binance схема адресов `/market`](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Important-WebSocket-Change-Notice), [OKX свечи](https://app.okx.com/docs-v5/en/#order-book-trading-market-data-ws-candlesticks-channel), [Gate Futures WebSocket](https://www.gate.com/docs/developers/futures/ws/en/), [Bitget свечи](https://www.bitget.com/docs/classic/websocket/contract/public/Candlesticks-Channel).
 
-### Stage 4: selected coin PAPER trade plan
+Формула TR и сглаживание ATR: [TradingView ATR](https://www.tradingview.com/support/solutions/43000501823-average-true-range-atr/). Единицы базового объёма и quote turnover, а также отличие открытой свечи: [Bybit Kline](https://bybit-exchange.github.io/docs/v5/market/kline). Контракты остальных бирж и пересчёты — в [exchange-data.md](exchange-data.md).
 
-The **«План сделки · PAPER»** section follows the selected coin card. It shows
-direction, entry zone, stop, up to two confirmed-zone targets, base quantity,
-virtual entry notional, planned stop loss, risk budget and net reward/risk.
-It uses the selected 1/5/15/60 minute chart plus the existing minute selection
-packet and selected book. There are no additional upstream requests or services.
-It is a planning calculation; model actions, balances, positions and journals
-are unchanged. No trading or control POST request is sent.
+`tools/preview.py` и браузерные проверки используют синтетические данные с явной надписью «ДЕМО»; внешние потоки в этом режиме отключены. Они проверяют интерфейс и состояния, без доказательства доступности бирж с производственного сервера. Отдельный публичный WebSocket-пробник 11 октября 2026 года получил свечи BTC 5м и цены со всех пяти бирж за двадцатисекундный запуск. Зафиксированные задержки сообщений с биржевым временем составили 0,04–0,56 секунды; у свечей OKX доступно только время получения. Это разовая проверка из среды пробника, без гарантии для каждого браузера или VDS.
 
-The fixed hypothesis is a pullback to a confirmed zone:
+## Фильтры столбцов и плотности в сетке
 
-- LONG requires EMA20 > EMA50, the latest closed price above VWAP, and a
-  positive close-to-close move over five bars; SHORT requires all opposites.
-  EMAs use a first-period SMA seed followed by the standard 2/(period+1) update.
-- The nearest support behind the closed price is the LONG entry zone, expanded
-  upward by 0.25 ATR; the nearest resistance is the SHORT zone, expanded downward.
-  The stop sits 0.5 ATR beyond the far edge of that zone.
-- Targets sit 0.1 ATR before the nearest and next opposite confirmed zones.
-  The second assumes a break through the first zone; it is absent when no
-  second zone exists. Targets are evaluated for the whole quantity separately,
-  and their reported profits must not be added. A nearer unfavorable target
-  cannot be skipped in order to manufacture a higher reward/risk.
+Заголовки таблицы переключают сортировку ↓ / ↑. «24ч» сравнивает подписанное изменение, а не модуль. «Фильтры столбцов» раскрывает «от/до» для цены, 24ч, активности, RVOL, RSI и спреда. Границы включены; отсутствующие измерения не считаются нулями и не проходят диапазон. Ошибка диапазона подсвечивается и объясняется. Настройки сохраняются в браузере. Явная сортировка пересобирает закреплённый порядок один раз; последующие котировки обновляют значения без перестановки. Фильтры локальны и не расширяют сетевой поиск или лимит анализа.
 
-Defaults, editable in **«Капитал и расчёт риска»**:
+Кнопка «Плотности» каждой карточки включает уровни выбранной биржи и пары: от 100 000 USDT, до 0,5% от середины стакана, максимум три на сторону, с теми же основаниями значимости, что в разделе «Плотности». Покупка и продажа подписаны; серый уровень не имеет свежего подтверждения. Включения сохраняются отдельно для бирж. Видимые включённые карточки делят один запрос cache раз в две секунды, приостановленный за раскрытым графиком, таблицей и скрытой вкладкой. Нативные price lines обновляются без повторной загрузки свечей и сброса масштаба.
 
-| Setting | Default | Allowed values |
-|---|---|---|
-| Virtual capital | 600 USDT | 10–1,000,000 USDT |
-| Risk budget | 0.5% | 0.01–5% of virtual capital |
-| Entry notional cap | 100 USDT | 1 USDT up to virtual capital |
-| Fee per side | 0.055% | 0–1% |
-| Residual slippage allowance per side | 0.05% | 0–5% |
-| Minimum net reward/risk to first target | 1.5 | 1–10 |
+## Kronos · Отбор монет
 
-The fee default matches the existing PAPER simulator and Bybit's published
-base VIP-0 perpetual/futures taker rate, verified 2026-10-05. The account's
-actual rate can differ by region, tier and special trading zone; this setting
-is a simulation assumption, not a lookup of the user's account.
-Sources: [Bybit fee structure](https://www.bybit.com/en/help-center/article/Trading-Fee-Structure),
-[fee calculation](https://www.bybit.com/en/help-center/article/Futures-Contracts-Fees-Explained),
-[funding calculation](https://www.bybit.com/en/help-center/article/Funding-fee-calculation).
-
-Sizing uses the entry edge farthest from the stop. Let `d` be +1 for LONG or
-−1 for SHORT, `E` the entry edge, `S` the stop, `T_i` a target, `f` the fee rate,
-and `a = slippage_pct/100 + max(ticker_spread, book_spread)/200`.
-
-```text
-E' = E × (1 + d × a)
-S' = S × (1 − d × a)
-T_i' = T_i × (1 − d × a)
-F = max(E', S', all T_i') × max(0, d × current_funding_rate)
-L = d × (E' − S') + f × (E' + S') + F
-B = capital × risk_pct / 100
-Q = min(B / L, max_notional / E', capital / (E' × (1 + f)))
-planned_loss = Q × L
-net_profit_i = Q × [d × (T_i' − E') − f × (E' + T_i') − F]
-net_RR_i = net_profit_i / planned_loss
-```
-
-`Q` is reduced by one relative machine epsilon to keep rounded arithmetic on
-the conservative side of the caps. Prices and rates are dimensionally separate;
-`Q` is in base coins and costs/profits are in USDT. The one adverse funding
-payment is an explicit reserve using the largest modeled price and the current
-rate, not a claim about the future settlement mark or holding duration.
-Receiving funding gives no profit credit. Future rates and slippage can change.
-The virtual fractional quantity is not exchange lot-size validation.
-
-Readiness requires all three card sources to be **fresh**, without a transport
-or retained refresh error, a complete matching **passed** selection and rating,
-continuous closed bars, valid confirmed zones, full ±0.1% book coverage and
-agreement between ticker, book mid and best levels. The calculated quantity
-must fit the five verified visible levels on each side, with their actual
-impact no greater than the configured slippage allowance; the 100-USDT
-selection impact is not extrapolated to another position size.
-
-**«Готов для PAPER»** also requires the live price inside the entry zone and
-first-target net RR at least the chosen minimum. Otherwise the panel distinguishes
-waiting for a return, a missing scenario, a rejected plan, missing/stale/error
-inputs, a crossed stop or already reached target, and an existing fresh model
-position on the same coin. A retained halted position is historical and does
-not create a false active-position block. States recompute with new data;
-this stage does not persist a signal lifecycle or implement stage-6 alerts.
-
-Settings are validated and stored locally under `lab-paper-plan-v1` after
-applying them. Editing immediately clears the displayed size/risk until the
-new calculation is applied; invalid or partial settings never produce a ready
-plan. Native expanded settings/method details and metric nodes survive refresh.
-The hypothesis and thresholds require chronological PAPER evaluation before
-any claim of profitability.
-
-`node --test tools/test_paper_plan.cjs` verifies long/short geometry, net costs,
-funding direction, caps, boundaries, identity/expiry/selection gates and actual
-quantity depth. `node tools/test_paper_plan_ui.cjs` checks 1280/390/320 widths,
-all four timeframes, input validation and persistence, waiting/cancellation,
-missing/partial/stale/error data, delayed coin changes and absence of POSTs.
-Both are included in CI.
-
-This update changes the panel only. Existing `tools/update.sh <full SHA>` installs it; no service, VPN, firewall, account or model configuration changes. New endpoints are read-only `/api/screener`, `/api/market-chart?symbol=BTCUSDT&interval=5`, and `/api/market-book?symbol=BTCUSDT`. A fixed hostname and allowlisted public endpoints prevent arbitrary URL requests. Query symbols/timeframes are validated. No credentials are used.
-
-Two background workers, at most two outstanding requests, 24 cached results, 6-second upstream timeout, 2 MB response cap. Cached data is shared across browsers. The panel service prefetches the shared top-100 ticker snapshot every 5 seconds even when no browser has opened the screener. The browser continues updating its selected screener symbol and alert/model snapshots while another section of the same dashboard is open; only DOM painting is deferred for the hidden section. Candles refresh after 25 seconds and the selected book after 2 seconds. A transient refresh error retains the last verified response until its actual timestamp expires; it is never relabelled as fresh. Local UI expires tickers at 45 seconds, candles at 75 seconds since fetch (also checks last closed candle end), and books at 8 seconds. Source errors hide the corresponding data. The feature works when B is halted, except B's trade flow and bot feed-dependent execution. The browser cannot promise background sound while the whole browser tab is suspended, but server-side snapshots and PAPER models continue independently of the open panel section.
-
-Bybit blocked or unavailable: the UI shows unavailable/queued/stale status. It does not fall back to invented prices or silently label historical results live. Analytics cache is in memory and lost on panel restart; model and journal persistence are unaffected.
-
-Primary API references:
-
-- https://bybit-exchange.github.io/docs/v5/market/tickers
-- https://bybit-exchange.github.io/docs/v5/market/kline
-- https://bybit-exchange.github.io/docs/v5/market/orderbook
-
-Validation: backend tests cover ticker units/filtering, closed candles/gaps, confirmed swings, flat charts, order-book notional/coverage, request coalescing/backoff and invalid queries. Browser checks cover search, presets, coin/timeframe selection, overlays, volume bars, bots, small-screen overflow and data expiration.
+Встроенная раскрываемая панель сравнивает группы до 15 видимых монет по кнопке «Оценить монеты». Диапазон показывает место группы в текущем списке; «Оценить следующие 15» запускает следующую, «Предыдущие 15» возвращает назад. Самостоятельного перехода и расчёта всего рынка нет. Доступны отбор по росту/снижению/движению медианы, разброс пяти сценариев и фильтр совпадения направления ≥4 из 5. Расчёт идёт отдельно от скринера. Настоящие веса и свежие закрытые свечи обязательны; устаревшие результаты не ранжируются. Совпадение сценариев не является вероятностью. Подробности, установка и локальная проверка — в [kronos.md](kronos.md).

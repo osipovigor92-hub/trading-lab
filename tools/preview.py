@@ -11,12 +11,18 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+
+class PreviewHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 64
+
 ROOT = Path(__file__).resolve().parents[1]
 PANEL = ROOT/'src/trading-panel'
 sys.path.insert(0, str(PANEL))
 import selection
 from market_alerts import ASSISTANT_KINDS, MarketAlerts
 from manual_paper import ManualPaper
+from densities import EXCHANGES, density_id
+from exchange_data import INTERVALS as EXCHANGE_INTERVALS
 spec = importlib.util.spec_from_file_location('lab_report', ROOT/'src/trading-report/report.py')
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
@@ -128,6 +134,137 @@ CONTROL = DemoControl()
 PAPER_TEST = False
 ALERTS = MarketAlerts()
 
+def demo_significance(row):
+    """Authored synthetic evidence, visibly demo; never a market measurement."""
+    stamp = row['last_seen']
+    significant = row['notional'] >= 100000 and row['distance_pct'] <= .5
+    return dict(status='significant' if row['status'] == 'active' and significant else 'inactive' if significant else 'ordinary',
+                kind='large_wall' if row['status'] == 'active' and significant else None,
+                observed_kind='large_wall' if significant else None, relative_size=8,
+                local_median_notional=row['notional']/8, neighbor_count=6,
+                visible_depth_share=.25, side_depth_notional=row['notional']*4, side_level_count=10,
+                observations=1, first_source_ts=stamp, last_source_ts=stamp, source_stamps=[stamp], pattern={})
+
+
+def exchange_fixture(path, query):
+    """Five venues and densities are explicit synthetic UI fixtures, never REST."""
+    now = time.time()
+    exchange = query.get('exchange', ['bybit'])[0]
+    if exchange not in EXCHANGES:
+        return dict(status='error', updated=now, error='Invalid demo exchange', demo=True)
+    if path == '/api/densities':
+        selected = query.get('exchanges', [','.join(EXCHANGES)])[0].split(',')
+        selected = [value for value in selected if value in EXCHANGES]
+        rows, history = [], []
+        examples = [('BTCUSDT', 'bid', 59730, 520000, 3900, 'active'),
+                    ('ETHUSDT', 'ask', 2310, 285000, 5700, 'active'),
+                    ('SOLUSDT', 'bid', 144.5, 165000, 920, 'active'),
+                    ('LINKUSDT', 'ask', 14.26, 112000, 4400, 'unavailable'),
+                    ('AVAXUSDT', 'bid', 11.04, 84000, 85, 'unobserved')]
+        prices = {'BTCUSDT':60000, 'ETHUSDT':2300, 'SOLUSDT':145, 'LINKUSDT':14.2, 'AVAXUSDT':11.1}
+        for index, venue in enumerate(selected):
+            for symbol, side, price, notional, age, status in examples:
+                row = dict(id=density_id(venue,symbol,side,str(price)), exchange=venue, symbol=symbol,
+                           side=side, price=price, price_text=str(price), notional=notional*(1+index*.18),
+                           distance_pct=abs(price/prices[symbol]-1)*100, first_seen=now-age,
+                           last_seen=now if status=='active' else now-45,
+                           age_seconds=age if status=='active' else 0, status=status,
+                           stable=status=='active' and age>=3600, timestamp_origin='demo', demo=True)
+                row['significance'] = demo_significance(row)
+                rows.append(row)
+            missing = dict(rows[-1], id=density_id(venue,'ONDOUSDT','ask','.506'),symbol='ONDOUSDT',side='ask',
+                           price=.506,price_text='.506',notional=175000,distance_pct=1.2,
+                           status='missing',stable=False,age_seconds=0,first_seen=now-700,last_seen=now-120,
+                           observed_at=now-90,reason='ДЕМО: отсутствует в двух снимках',event_id='demo-'+venue)
+            missing['distance_pct'] = .3
+            missing['significance'] = demo_significance(missing)
+            history.append(missing)
+        return dict(status='ok',updated=now,rows=rows,history=history,demo=True,
+                    coverage=dict(total=len(selected)*100,scanned=len(selected)*2,selected=len(selected)*2,
+                                  limit=20,min_notional=50000,stable_seconds=3600,poll_seconds=10),
+                    exchanges=[dict(id=venue,status='ok',updated=now,error='',total=100,scanned=2) for venue in selected],
+                    error='',note='ДЕМО: синтетические уровни и срок жизни; не наблюдения биржи')
+    packet = market_fixture('/api/screener', {})
+    if path == '/api/exchange-screener':
+        rows = [dict(row, exchange=exchange, native_symbol=row['symbol'], turnover24=row['turnover'],
+                     change24=row['change'], price=row['price'], quote='USDT') for row in packet['rows']]
+        rows = [dict(row, id=exchange+':'+row['symbol'], range24=row['range24'], trades24=120000 if exchange=='binance' else None,
+                     turnover_estimated=False, funding_rate=row.get('funding'), quote_volume=row['turnover']) for row in rows]
+        return dict(packet,exchange=exchange,rows=rows,demo=True,source='Synthetic preview',
+                    source_ts=packet['updated'],timestamp_origin='demo',stale=False)
+    interval = query.get('interval', ['5'])[0]
+    symbol = query.get('symbol', ['BTCUSDT'])[0]
+    quote = next((row['price'] for row in packet['rows'] if row['symbol'] == symbol), None)
+    if interval not in EXCHANGE_INTERVALS or quote is None:
+        return dict(status='error',exchange=exchange,symbol=symbol,interval=interval,updated=now,
+                    error='Invalid demo symbol or interval',demo=True)
+    if interval in market.INTERVALS:
+        chart = market_fixture('/api/market-chart', query)
+    else:
+        bars = demo_candles(symbol,quote,interval,now)
+        chart = dict(status='ok',symbol=symbol,interval=interval,updated=now,
+                     candle_end=bars[-1]['time']+int(interval)*60,candles=bars)
+    metrics = dict(natr5_14=None, natr1_30=None, change5=None)
+    if chart.get('status') == 'ok' and interval in ('1', '5'):
+        bars = chart['candles']
+        period = 30 if interval == '1' else 14
+        ranges = [max(b['high']-b['low'],abs(b['high']-a['close']),abs(b['low']-a['close'])) for a,b in zip(bars,bars[1:])]
+        atr = sum(ranges[:period])/period
+        for value in ranges[period:]:
+            atr = (atr*(period-1)+value)/period
+        metrics['natr1_30' if interval=='1' else 'natr5_14'] = atr/bars[-1]['close']*100
+        metrics['change5'] = (bars[-1]['close']/bars[-6 if interval=='1' else -2]['close']-1)*100
+    return dict(chart, exchange=exchange, native_symbol=query.get('symbol',['BTCUSDT'])[0],
+                candles=[dict(bar,t=bar['time']) for bar in chart.get('candles',[])],
+                metrics=metrics,metrics_interval=interval,demo=True,source='Synthetic preview',
+                source_ts=chart.get('candle_end'),timestamp_origin='demo',stale=False)
+
+
+def demo_candles(symbol, price, interval, now):
+    """Deterministic, invented OHLC paths for visual checks, never market history."""
+    # Distinct regimes make chart scales, pullbacks and volume bars testable.
+    profiles = {
+        'BTCUSDT': ((-.024,-.013,-.020,.008,.018,.011,.023,.018,.029), .0021, 4, ((62,1.8),(121,1.1))),
+        'ETHUSDT': ((.038,.028,.037,.008,-.005,.003,-.018,-.004,0), .0030, 95, ((76,1.3),(139,1.7))),
+        'SOLUSDT': ((-.033,-.025,-.031,-.027,-.018,.004,.019,.008,.021), .0040, 3000, ((110,2.5),(146,1.2))),
+        'ONDOUSDT': ((.001,-.018,.007,.052,.072,.043,.006,-.028,-.009), .0062, 330000, ((74,2.8),(124,1.8))),
+        'LINKUSDT': ((.006,-.009,.009,-.007,.005,-.010,.006,-.004,.001), .0019, 58000, ((42,.9),(153,1.1))),
+        'AVAXUSDT': ((.058,.048,.058,.027,.039,.019,-.012,.009,.016), .0045, 41000, ((123,2.1),(153,1.5))),
+    }
+    anchors, noise, minute_volume, bursts = profiles[symbol]
+    step = int(interval)*60
+    end = (now-2)//step*step
+    phase = sum((i+1)*ord(char) for i,char in enumerate(symbol))*.013
+    scale = min(4., max(.65, (step/300.)**.35))
+    paths = []
+    for i in range(180):
+        position = i*(len(anchors)-1)/179
+        index = min(len(anchors)-2, int(position))
+        fraction = position-index
+        trend = anchors[index]*(1-fraction)+anchors[index+1]*fraction
+        jitter = noise*(.38*math.sin(i*.27+phase)+.21*math.sin(i*.79+phase)
+                        +.14*math.sin(i*1.61+phase)+.09*math.cos(i*2.37+phase))
+        paths.append((trend+jitter)*scale)
+    # Final synthetic close agrees with the synthetic screener quote.
+    closes = [price*math.exp(value-paths[-1]) for value in paths]
+    previous = closes[0]*(1-.0004*math.sin(phase))
+    bars = []
+    for i,close in enumerate(closes):
+        opening = previous
+        move = abs(math.log(close/opening))
+        wick = noise*scale*(.13+.17*abs(math.sin(i*1.37+phase)))
+        high = max(opening,close)*(1+wick*(.65+.5*abs(math.sin(i*.93+phase))))
+        low = min(opening,close)*(1-wick*(.65+.5*abs(math.cos(i*1.17+phase))))
+        burst = sum(strength*math.exp(-((i-center)/4.)**2) for center,strength in bursts)
+        activity = .68+.55*abs(math.sin(i*.71+phase))+.28*math.sin(i*1.43+phase)
+        activity += .4*min(3.5,move/(noise*scale))+burst
+        volume = minute_volume*(step/60)*max(.25,activity)
+        bars.append(dict(time=end-(180-i)*step,open=opening,close=close,high=high,low=low,
+                         volume=volume,turnover=volume*(opening+close+high+low)/4))
+        previous = close
+    return bars
+
+
 def market_fixture(path, query):
     now=time.time()
     prices={'BTCUSDT':60000,'ETHUSDT':2300,'SOLUSDT':145,'ONDOUSDT':.5,'LINKUSDT':14.2,'AVAXUSDT':11.1}
@@ -167,12 +304,7 @@ def market_fixture(path, query):
         return dict(status='error',updated=now,error='Invalid demo symbol')
     price=prices[symbol]
     if path=='/api/market-chart':
-        step=market.INTERVALS[interval];end=now//step*step;bars=[]
-        for i in range(180):
-            center=price*(1+.006*math.sin(i*.35)+.001*math.cos(i*.81))
-            o=center*(1+.0005*math.sin(i));c=center*(1-.0005*math.sin(i))
-            bars.append(dict(time=end-(180-i)*step,open=o,close=c,high=max(o,c)*1.0008,
-                             low=min(o,c)*.9992,volume=1000,turnover=price*1000*(1+.2*math.sin(i))))
+        bars=demo_candles(symbol,price,interval,now)
         return market.chart_analysis(symbol,interval,bars,now)
     bids=[[str(price*(1-.00005-i*.00002)),str((30+i%5)*100/price)] for i in range(80)]
     asks=[[str(price*(1+.00005+i*.00002)),str((35+i%5)*100/price)] for i in range(80)]
@@ -240,8 +372,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         data=fixtures()
-        if path == '/api/manual-paper':
+        if path in ('/api/kronos/status', '/api/kronos/forecast'):
+            from kronos_client import response as kronos_response
+            body=json.dumps(dict(kronos_response('unavailable', error='Kronos выключен в демо'),demo=True),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
+        elif path == '/api/manual-paper':
             body=json.dumps(dict(MANUAL.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
+        elif path in ('/api/exchange-screener','/api/exchange-chart','/api/densities'):
+            body=json.dumps(exchange_fixture(path,parse_qs(urlsplit(self.path).query)),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in ('/api/screener','/api/market-chart','/api/market-book','/api/market-selection','/api/market-alerts'):
             body=json.dumps(market_fixture(path,parse_qs(urlsplit(self.path).query)),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in data:
@@ -263,7 +400,7 @@ class Handler(BaseHTTPRequestHandler):
             body=allowed[name].read_bytes()
             kind={'.html':'text/html','.js':'text/javascript','.css':'text/css'}[allowed[name].suffix]+'; charset=utf-8'
             if name=='index.html':
-                body=body.replace(b'<body class="lab-shell">', '<body class="lab-shell"><aside class="notice bad">ДЕМО · СИНТЕТИЧЕСКИЕ ДАННЫЕ · НЕ СЕРВЕР</aside>'.encode())
+                body=body.replace(b'<body class="lab-shell">', '<body class="lab-shell" data-demo="true"><aside class="notice bad">ДЕМО · СИНТЕТИЧЕСКИЕ ДАННЫЕ · НЕ СЕРВЕР</aside>'.encode())
         self.send_response(200)
         self.send_header('Content-Type',kind)
         self.send_header('Content-Length',str(len(body)))
@@ -271,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
         chart = path == '/chart.html'
         self.send_header('Content-Security-Policy',
             "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-src https://www.tradingview-widget.com https://s.tradingview.com; img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
-            if chart else "default-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
+            if chart else "default-src 'self'; frame-src 'self'; frame-ancestors 'none'; connect-src 'self' wss://stream.bybit.com wss://fstream.binance.com wss://ws.okx.com wss://fx-ws.gateio.ws wss://ws.bitget.com; base-uri 'none'; form-action 'none'; object-src 'none'")
         self.end_headers();self.wfile.write(body)
 
     def do_POST(self):
@@ -298,4 +435,4 @@ if __name__=='__main__':
     args=parser.parse_args()
     PAPER_TEST=args.paper_test
     print(f'DEMO: http://127.0.0.1:{args.port}',flush=True)
-    ThreadingHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()
+    PreviewHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()

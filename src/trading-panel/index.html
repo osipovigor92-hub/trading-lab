@@ -10,11 +10,22 @@
 <link rel="stylesheet" href="/alerts.css">
 <link rel="stylesheet" href="/positions.css">
 <link rel="stylesheet" href="/layout.css">
+<link rel="stylesheet" href="/chart-grid.css">
+<link rel="stylesheet" href="/densities.css">
+<link rel="stylesheet" href="/kronos.css">
 <script src="/ui.js" defer></script>
 <script src="/data-client.js" defer></script>
 <script src="/app.js" defer></script>
 <script src="/fresh-alerts.js" defer></script>
 <script src="/screener.js" defer></script>
+<script src="/lightweight-charts-5.2.1.js" defer></script>
+<script src="/exchange-chart.js" defer></script>
+<script src="/chart-stream.js" defer></script>
+<script src="/density-signals.js" defer></script>
+<script src="/chart-levels.js" defer></script>
+<script src="/chart-grid.js" defer></script>
+<script src="/kronos.js" defer></script>
+<script src="/densities.js" defer></script>
 <script src="/positions.js" defer></script>
 <script src="/layout.js" defer></script>
 </head>
@@ -23,10 +34,11 @@
 <header class="lab-topbar">
   <div class="app-brand"><div><b>Trading<span>Lab</span></b><span>Помощник трейдера</span></div></div>
   <nav id="dashboard-tabs" aria-label="Разделы помощника"></nav>
-  <span class="market-source">Bybit · USDT perpetual</span>
+  <span class="market-source">USDT perpetual · публичные данные</span>
 </header>
 <main id="app-main" tabindex="-1">
   <div id="page-market" class="dashboard-page" hidden></div>
+  <div id="page-densities" class="dashboard-page" hidden></div>
   <div id="page-alerts" class="dashboard-page" hidden></div>
   <div id="page-positions" class="dashboard-page" hidden></div>
   <div id="page-settings" class="dashboard-page" hidden></div>
