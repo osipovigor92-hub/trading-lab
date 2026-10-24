@@ -70,6 +70,8 @@ class ManualTests(unittest.TestCase):
         s = self.paper.snapshot()
         self.assertIsNone(s['position'])
         self.assertEqual(len(s['trades']), 1)
+        self.assertEqual(s['trades'][0]['risk_check']['verdict'], 'PASS')
+        self.assertEqual(len(s['trades'][0]['risk_check']['fingerprint']), 64)
         self.assertAlmostEqual(s['balance']-600, marked['net'])
         self.assertAlmostEqual(s['trades'][0]['net'], s['trades'][0]['gross']-s['trades'][0]['entry_fee']-s['trades'][0]['exit_fee'])
 

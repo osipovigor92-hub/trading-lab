@@ -144,3 +144,10 @@ test('coin-card refresh errors keep the original age and expire instead of relab
  assert.equal(partial.sources.book.available,true);assert.match(partial.sources.book.note,/частично/);
  for(const key of ['snapshot','chart','book'])assert.equal(coinCardView({...f,[key]:{status:'error',error:'offline'}}).sources[key==='snapshot'?'ticker':key].status,'error');
 });
+
+test('budget reserve and position cap constrain the PAPER estimate',()=>{
+ const {riskEstimate}=require('../src/trading-panel/screener.js');
+ const input={capital:600,risk:5,entry:100,stop:99,target:104,cash_buffer_pct:90,max_position_pct:5,min_order_usd:5,max_notional:100};
+ const result=riskEstimate(input);assert.ok(result.notional<=30);assert.ok(result.notional*1.00105<=60);
+ for(const change of [{cash_buffer_pct:100},{cash_buffer_pct:NaN},{max_position_pct:0},{min_order_usd:31}])assert.equal(riskEstimate({...input,...change}),null);
+});
