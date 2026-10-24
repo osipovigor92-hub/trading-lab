@@ -180,7 +180,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 kind = {"/api/screener": "screener", "/api/market-chart": "chart", "/api/market-book": "book"}[path]
                 try:
-                    data = MARKET.get(kind, query.get("symbol", [""])[0], query.get("interval", ["5"])[0])
+                    symbol, interval = query.get("symbol", [""])[0], query.get("interval", ["5"])[0]
+                    data = MARKET.request_chart(symbol, interval) if kind == 'chart' else MARKET.get(kind, symbol, interval)
                 except ValueError:
                     self.api_error(400, 'Invalid symbol or timeframe')
                     return

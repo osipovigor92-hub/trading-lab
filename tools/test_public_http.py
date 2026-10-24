@@ -44,6 +44,16 @@ class PublicHTTPTests(unittest.TestCase):
         self.monitor.request.assert_called_with(exchanges='bybit,okx', symbols='BTCUSDT', watch='okx:BTCUSDT')
         self.assertEqual(self.request('/api/densities?exchanges=bybit&refresh=1')[0], 400)
 
+    def test_inspected_chart_registers_indicator_priority(self):
+        market = Mock()
+        market.request_chart.return_value = {'status': 'pending'}
+        with patch.object(self.panel, 'MARKET', market):
+            self.assertEqual(self.request('/api/market-chart?symbol=SOLUSDT&interval=15')[0], 200)
+            market.request_chart.assert_called_once_with('SOLUSDT', '15')
+            market.get.assert_not_called()
+            market.request_chart.side_effect = ValueError('Invalid symbol')
+            self.assertEqual(self.request('/api/market-chart?symbol=BAD&interval=15')[0], 400)
+
     def test_overlay_does_not_replace_density_page_scope(self):
         self.assertEqual(self.request('/api/densities?exchanges=binance&symbols=ETHUSDT&overlay=1')[0], 200)
         self.monitor.request.assert_called_with(exchanges='binance', symbols='ETHUSDT', overlay=True)
