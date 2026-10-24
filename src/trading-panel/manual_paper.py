@@ -8,6 +8,7 @@ import re
 import sqlite3
 import threading
 import time
+from trader_risk import OPTIONAL_LIMITS, budget_limits, check_entry
 
 CAPITAL = 600.0
 HOLD = 180
@@ -80,10 +81,11 @@ def prepare(plan, market, balance, now):
     symbol, side, settings = plan['symbol'], plan['side'], plan['settings']
     if (not isinstance(symbol, str) or not SYMBOL.fullmatch(symbol) or type(side) is not int
             or side not in (-1, 1) or plan['interval'] not in ('1', '5', '15', '60')
-            or not isinstance(settings, dict) or set(settings) != set(LIMITS)
+            or not isinstance(settings, dict) or not set(LIMITS) <= set(settings)
+            or set(settings) - set(LIMITS) - set(OPTIONAL_LIMITS)
             or not isinstance(plan['reason'], str) or not 1 <= len(plan['reason'].strip()) <= 240):
         raise ValueError('Некорректные поля PAPER-плана')
-    if any(not number(v) or not LIMITS[k][0] <= v <= LIMITS[k][1] for k, v in settings.items()):
+    if any(not number(v) or not LIMITS[k][0] <= v <= LIMITS[k][1] for k, v in settings.items() if k in LIMITS):
         raise ValueError('Некорректные настройки риска')
     if settings['max_notional'] > settings['capital']:
         raise ValueError('Лимит входа превышает капитал расчёта')
@@ -110,19 +112,24 @@ def prepare(plan, market, balance, now):
     profit = side*(exit_target-worst)-fee*(worst+exit_target)-reserve
     if loss <= 0 or profit/loss < settings['min_rr']:
         raise ValueError('Прибыль / риск после издержек ниже выбранного минимума')
-    budget = min(balance, settings['capital'])*settings['risk_pct']/100
+    limits = budget_limits(settings, balance)
+    budget = limits['capital']*settings['risk_pct']/100
     ceiling = high*(1+spread/2)*(1+slip)**2
-    qty = min(budget/loss, settings['max_notional']/ceiling, balance/(ceiling*(1+fee)))*(1-1e-10)
+    qty = min(budget/loss, limits['max_notional']/ceiling, limits['spendable']/(ceiling*(1+fee)))*(1-1e-10)
+    if qty <= 0:
+        raise ValueError('После резерва бюджета нет средств для PAPER-входа')
     entry = execution(book, qty, side, slip)
     execution(book, qty, -side, slip)
     risk = qty*(side*(entry-exit_stop)+fee*(entry+exit_stop)+reserve)
     if (qty <= 0 or entry*qty > settings['max_notional']+1e-8 or risk > budget+1e-8
             or entry*qty*(1+fee) > balance+1e-8 or side*(target-entry) <= 0):
         raise ValueError('Размер входа не проходит серверную проверку риска')
-    return dict(symbol=symbol, side=side, entry=entry, quantity=qty, entry_fee=qty*entry*fee,
+    position = dict(symbol=symbol, side=side, entry=entry, quantity=qty, entry_fee=qty*entry*fee,
                 opened=now, stop=stop, target=target, reason=plan['reason'].strip(),
                 settings=settings, risk=risk, budget=budget, funding_time=funding_time,
                 quote_time=book['updated'], interval=plan['interval'], blocked='', last_tick=now)
+    position['risk_check'] = check_entry(plan, position, balance, now)
+    return position
 
 
 class ManualPaper:
