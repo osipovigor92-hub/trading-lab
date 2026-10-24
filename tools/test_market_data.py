@@ -135,6 +135,47 @@ class MarketTests(unittest.TestCase):
                 self.assertEqual(len(calls),2)
         finally:cache.close()
 
+    def test_inspected_coin_gets_next_slot_and_focus_expires(self):
+        mono=[0];cache=market.MarketData(clock=lambda:mono[0]);cache.pool.shutdown(wait=True)
+        class Queue:
+            def submit(self,*args):return Future()
+            def shutdown(self,**kwargs):pass
+        cache.pool=Queue()
+        cache.selection_watch=['BTCUSDT','ETHUSDT']
+        cache.selection_until=100
+        try:
+            cache._selection_tick()  # Both workers are occupied before the user opens SOL.
+            cache.request_chart('SOLUSDT','5')
+            self.assertIsNone(cache.entries[('chart','SOLUSDT','5')]['future'])
+            for entry in list(cache.entries.values()):
+                if entry['future'] is not None:
+                    entry['future'].set_result(dict(status='ok',candle_end=10**12))
+            mono[0]=1
+            cache._selection_tick()
+            self.assertIsNotNone(cache.entries[('chart','SOLUSDT','1')]['future'])
+            self.assertEqual(cache.selection_watch,['BTCUSDT','ETHUSDT'])
+            cache.request_chart('LINKUSDT','1')
+            self.assertEqual(cache.focus_symbol,'LINKUSDT')
+            with self.assertRaises(ValueError):cache.request_chart('../invalid','1')
+            self.assertEqual(cache.focus_symbol,'LINKUSDT')
+            mono[0]=32
+            with patch.object(cache,'get') as get:
+                cache._selection_tick()
+                self.assertNotIn(('chart','LINKUSDT','1'),[call.args for call in get.call_args_list])
+            self.assertLessEqual(sum(e['future'] is not None for e in cache.entries.values()),2)
+        finally:cache.close()
+
+    def test_focus_warms_indicators_even_with_empty_shortlist(self):
+        cache=market.MarketData(clock=lambda:0)
+        cache.selection_until=30
+        try:
+            with patch.object(cache,'get') as get:
+                cache.request_chart('SOLUSDT','15')
+                cache._selection_tick()
+                self.assertIn(('chart','SOLUSDT','1'),[call.args for call in get.call_args_list])
+                self.assertNotIn('book',[call.args[0] for call in get.call_args_list])
+        finally:cache.close()
+
     def test_books_cannot_fill_both_candle_workers(self):
         cache=market.MarketData(clock=lambda:0);cache.pool.shutdown(wait=True)
         class Queue:

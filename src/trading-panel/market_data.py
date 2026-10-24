@@ -324,6 +324,8 @@ class MarketData:
         self.selection_watch = []
         self.selection_until = 0
         self.selection_cursor = 0
+        self.focus_symbol = None
+        self.focus_until = 0
         self.book_history = OrderedDict()
         self.alerts = MarketAlerts()
         self.stop_event = None
@@ -434,22 +436,32 @@ class MarketData:
                     discovery_note='Наблюдение первым; min(|24ч|,20)/20 + min(диапазон24ч,30)/30; затем оборот'
                     if priority == 'activity' else 'Приоритет оборота 24ч')
 
+    def request_chart(self, symbol, interval='5'):
+        """Keep the inspected coin's minute indicators warm even outside the shortlist."""
+        if not SYMBOL.fullmatch(symbol) or interval not in INTERVALS:
+            raise ValueError('Invalid symbol or timeframe')
+        with self.selection_lock:
+            self.focus_symbol = symbol
+            self.focus_until = self.clock() + 30
+        return self.get('chart', symbol, interval)
+
     def _selection_tick(self):
         with self.selection_lock:
             expired = self.clock() > self.selection_until
         if expired:
             self.selection_snapshot()
         with self.selection_lock:
-            if not self.selection_watch:
-                return
-            index = self.selection_cursor % len(self.selection_watch)
+            index = self.selection_cursor % max(1, len(self.selection_watch))
             watch = self.selection_watch[index:] + self.selection_watch[:index]
-            symbol = watch[0]
+            symbol = watch[0] if watch else None
+            if self.focus_symbol and self.clock() < self.focus_until:
+                watch = [self.focus_symbol] + [s for s in watch if s != self.focus_symbol]
             self.selection_cursor += 1
         # Fill available slots now; do not add a one-second delay per coin.
         for watched in watch:
             self.get('chart', watched, '1')
-        self.get('book', symbol)
+        if symbol:
+            self.get('book', symbol)
         # Completed books are harvested by the shared cache on each background tick.
         # Record all watched symbols now rather than waiting a full shortlist rotation.
         with self.selection_lock:
