@@ -44,6 +44,14 @@ class PublicHTTPTests(unittest.TestCase):
         self.monitor.request.assert_called_with(exchanges='bybit,okx', symbols='BTCUSDT', watch='okx:BTCUSDT')
         self.assertEqual(self.request('/api/densities?exchanges=bybit&refresh=1')[0], 400)
 
+    def test_whale_read_endpoint_and_query_validation(self):
+        monitor = Mock()
+        monitor.snapshot.return_value = {'status': 'ok', 'events': []}
+        with patch.object(self.panel, 'WHALES', monitor):
+            self.assertEqual(self.request('/api/whales')[0], 200)
+            monitor.snapshot.assert_called_once_with()
+            self.assertEqual(self.request('/api/whales?symbol=BTCUSDT')[0], 400)
+
     def test_inspected_chart_registers_indicator_priority(self):
         market = Mock()
         market.request_chart.return_value = {'status': 'pending'}

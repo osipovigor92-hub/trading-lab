@@ -41,7 +41,7 @@
   window.labFetch = async (url, options = {}) => {
     const method = String(options.method || 'GET').toUpperCase();
     const {background, fresh, ...requestOptions} = options;
-    if (!(background === true && method === 'GET' && /^\/api\/(?:market-alerts|exchange-screener|exchange-chart|densities|screener|market-selection|market-chart)(?:\?|$)/.test(String(url)))) await visible();
+    if (!(background === true && method === 'GET' && /^\/api\/(?:whales|market-alerts|exchange-screener|exchange-chart|densities|screener|market-selection|market-chart)(?:\?|$)/.test(String(url)))) await visible();
     // Only safe, body-less reads can share a response. Commands must never
     // accidentally reuse a pending GET or another command to the same URL.
     const key = method === 'GET' && !options.body ? method + ' ' + String(url) : '';

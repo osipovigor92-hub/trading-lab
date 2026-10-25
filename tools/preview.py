@@ -353,7 +353,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         data=fixtures()
-        if path == '/api/manual-paper':
+        if path == '/api/whales':
+            body=json.dumps(dict(status='ok',updated=time.time(),epoch='preview',cursor=0,events=[],targets=[],coverage={})).encode();kind='application/json; charset=utf-8'
+        elif path == '/api/manual-paper':
             body=json.dumps(dict(MANUAL.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in ('/api/exchange-screener','/api/exchange-chart','/api/densities'):
             body=json.dumps(exchange_fixture(path,parse_qs(urlsplit(self.path).query)),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
