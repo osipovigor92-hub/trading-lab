@@ -5,6 +5,7 @@ import json
 import threading
 import uuid
 import selection
+import alert_state
 
 ASSISTANT_KINDS = ('breakout_up', 'breakout_down', 'momentum_up', 'momentum_down')
 KINDS = ('ready', 'almost', 'cancelled', 'book_worse', 'near_level') + ASSISTANT_KINDS
@@ -78,11 +79,53 @@ def measure(row, tickers, chart, book, history, filters, now):
 
 class MarketAlerts:
     """Four filter scopes, 100 tracked coins and 50 recent events per scope."""
-    def __init__(self):
+    def __init__(self, state_path=None):
         self.lock = threading.RLock()
         self.epoch = uuid.uuid4().hex
         self.sequence = 0
         self.scopes = OrderedDict()
+        self.state_path, self.storage_error = state_path, ''
+        self.saved_body, self.load_failed = None, False
+        if state_path is not None:
+            try:
+                doc = alert_state.read(state_path)
+                if doc:
+                    self.epoch, self.sequence = doc['epoch'], doc['sequence']
+                    for saved in doc['scopes']:
+                        scope = dict(saved)
+                        key = scope.pop('key')
+                        scope.update(touched=0, rows=[], events=[], analyzing=[])
+                        for name in ('states', 'assistant_states'):
+                            for edge in scope[name].values():edge.update(sources={}, current=None)
+                        self.scopes[key] = scope
+                    self.saved_body = alert_state.encode(self.epoch, self.sequence, self.scopes)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                self.scopes.clear()
+                self.epoch, self.sequence = uuid.uuid4().hex, 0
+                self.storage_error, self.load_failed = str(exc), True
+
+    def _save(self):
+        if self.state_path is None or self.load_failed:
+            return
+        try:
+            body = alert_state.encode(self.epoch, self.sequence, self.scopes)
+            if body != self.saved_body:
+                alert_state.write(self.state_path, body)
+                self.saved_body = body
+            self.storage_error = ''
+        except (OSError, ValueError) as exc:
+            self.storage_error = str(exc)
+
+    def latest(self):
+        with self.lock:
+            if not self.scopes:return None
+            scope = next(reversed(self.scopes.values()))
+            return dict(filters=dict(scope['filters']), search=scope['search'],
+                        watch=','.join(scope['watch']), priority=scope['priority'])
+
+    def persistence(self):
+        return dict(status='error' if self.storage_error else 'durable' if self.state_path is not None else 'memory',
+                    error=self.storage_error)
 
     def register(self, filters, search, now, watch='', priority='turnover'):
         if priority not in ('turnover', 'activity'):
@@ -97,12 +140,13 @@ class MarketAlerts:
             self.scopes.move_to_end(key)
             while len(self.scopes) > 4:
                 self.scopes.popitem(last=False)
+            self._save()
         return key
 
     def active(self, now):
         with self.lock:
             return [(key, dict(s['filters']), s['search']) for key, s in self.scopes.items()
-                    if -2 <= now - s['touched'] <= 30]
+                    if key == next(reversed(self.scopes)) or -2 <= now - s['touched'] <= 30]
 
     def update(self, key, tickers, charts, books, histories, now):
         with self.lock:
@@ -169,6 +213,7 @@ class MarketAlerts:
                 scope['states'][symbol] = previous
             scope['rows'], scope['analyzing'] = current, analyzing
             scope['events'] = [e for e in scope['events'] if -2 <= now - e['time'] <= 300][:50]
+            self._save()
 
     def _update_assistant(self, scope, row, tickers, chart, filters, now):
         value = selection.assistant(row, tickers.get('updated'), chart, now,
@@ -276,6 +321,7 @@ class MarketAlerts:
                     # measured history, but do not return an expired direction.
                     row['assistant'] = dict(assistant, recommendation=None)
             return dict(status='ok', epoch=self.epoch, scope=key, updated=now, cursor=self.sequence,
+                        persistence=self.persistence(), background=True,
                         analyzing=list(scope['analyzing']), analysis_limit=8,
                         rows=rows,
                         events=events, filters=dict(scope['filters']), search=scope['search'], watch=list(scope['watch']),

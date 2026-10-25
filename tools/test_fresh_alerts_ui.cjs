@@ -29,7 +29,7 @@ function currentAssistant(kind,symbol,now,mode){
   await until(()=>fetch(`http://127.0.0.1:${port}/`).then(r=>r.ok).catch(()=>false),'preview');
   browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
   for(const width of widths){
-   const page=await browser.newPage({viewport:{width,height:950}}),errors=[],posts=[],failedRequests=[],scriptResponses=[];let mode='normal',events=Object.keys(labels).map((k,i)=>event(k,i+1,['BTCUSDT','ETHUSDT','SOLUSDT','ONDOUSDT','LINKUSDT'][i])),cursor=5,delay=false,modernPhase=false,clockOffset=0;
+   const page=await browser.newPage({viewport:{width,height:950}}),errors=[],posts=[],failedRequests=[],scriptResponses=[];let mode='normal',events=Object.keys(labels).map((k,i)=>event(k,i+1,['BTCUSDT','ETHUSDT','SOLUSDT','ONDOUSDT','LINKUSDT'][i])),cursor=5,delay=false,modernPhase=false,clockOffset=0,storageError=false;
    page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST')posts.push(r.url());});
    page.on('requestfailed',r=>failedRequests.push({url:r.url(),error:r.failure()?.errorText}));page.on('response',r=>{if(r.request().resourceType()==='script')scriptResponses.push({url:r.url(),status:r.status()});});
    await page.addInitScript(()=>{window.alertBeeps=0;window.alertNotifications=[];window.permissionRequests=0;window.alertClockOffset=0;const actualNow=Date.now.bind(Date);Date.now=()=>actualNow()+window.alertClockOffset;
@@ -50,7 +50,7 @@ function currentAssistant(kind,symbol,now,mode){
      const watch=currentAssistant('momentum_up','ADAUSDT',now,requestedMode),pending=currentAssistant('momentum_down','SUIUSDT',now,requestedMode);
      rows.push({symbol:'ADAUSDT',state:'waiting',assistant:{...watch,setup:'watch'}},{symbol:'SUIUSDT',state:'waiting',assistant:{...pending,status:'pending'}});
     }
-    const packet={status:'ok',epoch:'ui',scope,updated:now,cursor:outCursor,events:outgoing,search:'',rows};
+    const packet={persistence:{status:storageError?'error':'durable'},status:'ok',epoch:'ui',scope,updated:now,cursor:outCursor,events:outgoing,search:'',rows};
     if(delay&&scope==='default'){delay=false;packet.events=[event('ready',19,'OLDUSDT')];packet.cursor=19;await new Promise(r=>setTimeout(r,800));}
     await route.fulfill({contentType:'application/json',json:packet});
    });
@@ -88,7 +88,7 @@ function currentAssistant(kind,symbol,now,mode){
    await page.locator('.fresh-alert-history>summary').click();await page.getByRole('button',{name:'Звук: выключен',exact:true}).click();const beepsBeforeClear=await page.evaluate(()=>alertBeeps);
    await page.getByRole('button',{name:'Очистить историю',exact:true}).click();await page.waitForTimeout(2200);assert.equal(await history.locator('.fresh-event').count(),0,'clear keeps duplicate cursor');
    assert.equal(await feed.locator('.fresh-event').count(),1,'clear removes archive but keeps the active event');assert.equal(await feed.locator('.fresh-event[data-id="ui:20"][data-live="true"]').count(),1);
-   assert.match(await page.locator('.fresh-alert-health').textContent(),/Свежих событий: 1/);assert.equal(await page.evaluate(()=>alertBeeps),beepsBeforeClear,'clear and repeated poll do not replay sound');
+   assert.match(await page.locator('.fresh-alert-health').textContent(),/Свежих событий: 1/);storageError=true;await until(()=>page.locator('.fresh-alert-health').textContent().then(t=>t.includes('не сохраняется')),'storage failure is visible');storageError=false;await until(()=>page.locator('.fresh-alert-health').textContent().then(t=>t.includes('сохраняется на сервере')),'storage recovery is visible');assert.equal(await page.evaluate(()=>alertBeeps),beepsBeforeClear,'clear and repeated poll do not replay sound');
    await page.getByRole('button',{name:'Скринер',exact:true}).click();await until(()=>page.locator('.screener-events .screener-event[data-id="ui:20"][data-live="true"]').count().then(n=>n===1),'compact feed also keeps the active event');await page.getByRole('button',{name:'Алерты',exact:true}).click();
    events=[event('ready',21,'ETHUSDT')];cursor=21;await page.evaluate(()=>{localStorage.setItem('lab-selection-v1',JSON.stringify({rvol_min:1}));document.dispatchEvent(new CustomEvent('lab-selection-changed'));});await until(()=>feed.locator('.fresh-event[data-id="ui:21"]').count().then(n=>n===1),'new event after clear');await feed.getByRole('button',{name:'Карточка ETHUSDT',exact:true}).click();await until(()=>page.locator('#page-market').isVisible(),'open coin card');assert.match(await page.locator('.screener-detail').getAttribute('data-symbol'),/ETHUSDT/);assert.equal(await page.locator('.screener-detail').getAttribute('data-interval'),'1','alert opens its own analysis timeframe');
    await page.getByRole('button',{name:'Алерты',exact:true}).click();modernPhase=true;const now=Date.now()/1000;

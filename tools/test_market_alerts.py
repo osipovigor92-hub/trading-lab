@@ -149,7 +149,7 @@ class AlertTests(unittest.TestCase):
         self.assertNotEqual(MarketAlerts().epoch,self.monitor.epoch)
         for i in range(10):self.monitor.register(selection.parse_filters({'rvol_min':i}),str(i),1002)
         self.assertEqual(len(self.monitor.scopes),4)
-        self.assertEqual(self.monitor.active(1033),[])
+        self.assertEqual([k for k, _, _ in self.monitor.active(1033)], [next(reversed(self.monitor.scopes))])
 
     def test_alignment_and_partial_five_samples_cannot_claim_readiness(self):
         for mutate in ['alignment','samples','duplicate','wrong_symbol','wrong_interval']:

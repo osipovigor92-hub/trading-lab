@@ -15,7 +15,7 @@ ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
 # The public ticker cache is warmed on the server, so opening a dashboard section
 # never has to wait for another browser tab to have visited the screener first.
-MARKET = MarketData(background=True)
+MARKET = MarketData(background=True, alert_state_path=Path('/var/lib/trading-manual-paper/alerts.json'))
 MANUAL = ManualPaper(MARKET, background=True)
 EXCHANGE_DATA = get_exchange_data()
 # Read-only observations restart their continuous-age clock after service restart.
