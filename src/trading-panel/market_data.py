@@ -315,7 +315,7 @@ class MarketData:
     """Two workers, bounded cache and an optional public screener prefetcher."""
     TTL = {"screener": 5, "chart": 25, "book": 2}
 
-    def __init__(self, api=public_api, clock=time.monotonic, background=False):
+    def __init__(self, api=public_api, clock=time.monotonic, background=False, alert_state_path=None):
         self.api, self.clock = api, clock
         self.lock = threading.Lock()
         self.entries = OrderedDict()
@@ -327,10 +327,12 @@ class MarketData:
         self.focus_symbol = None
         self.focus_until = 0
         self.book_history = OrderedDict()
-        self.alerts = MarketAlerts()
+        self.alerts = MarketAlerts(alert_state_path)
         self.stop_event = None
         self.prefetcher = None
         if background:
+            if not self.alerts.latest():
+                self.alerts.register(selection.parse_filters(), '', time.time(), priority='activity')
             self.start_background()
 
     def start_background(self):
@@ -449,7 +451,7 @@ class MarketData:
         with self.selection_lock:
             expired = self.clock() > self.selection_until
         if expired:
-            self.selection_snapshot()
+            self.selection_snapshot(**(self.alerts.latest() or {}))
         with self.selection_lock:
             index = self.selection_cursor % max(1, len(self.selection_watch))
             watch = self.selection_watch[index:] + self.selection_watch[:index]
