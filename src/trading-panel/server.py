@@ -11,6 +11,7 @@ from manual_paper import ManualPaper
 from exchange_data import get_exchange_data
 from densities import DensityMonitor
 
+from whales import WhaleMonitor
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
 # The public ticker cache is warmed on the server, so opening a dashboard section
@@ -20,6 +21,7 @@ MANUAL = ManualPaper(MARKET, background=True)
 EXCHANGE_DATA = get_exchange_data()
 # Read-only observations restart their continuous-age clock after service restart.
 DENSITIES = DensityMonitor(EXCHANGE_DATA, background=__name__ == '__main__')
+WHALES = WhaleMonitor(MARKET, DENSITIES, state_path=Path('/var/lib/trading-manual-paper/whales.json'), background=__name__ == '__main__')
 FILES = {
     "/lightweight-charts-5.2.1.js": ("lightweight-charts-5.2.1.js", "text/javascript; charset=utf-8"),
     "/exchange-chart.js": ("exchange-chart.js", "text/javascript; charset=utf-8"),
@@ -29,6 +31,7 @@ FILES = {
     "/chart-grid.css": ("chart-grid.css", "text/css; charset=utf-8"),
     "/densities.js": ("densities.js", "text/javascript; charset=utf-8"),
     "/densities.css": ("densities.css", "text/css; charset=utf-8"),
+    "/whales.js": ("whales.js", "text/javascript; charset=utf-8"),
     "/fresh-alerts.js": ("fresh-alerts.js", "text/javascript; charset=utf-8"),
     "/alerts.css": ("alerts.css", "text/css; charset=utf-8"),
     "/positions.js": ("positions.js", "text/javascript; charset=utf-8"),
@@ -118,7 +121,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path == "/api/manual-paper":
+            if path == "/api/whales":
+                if urlsplit(self.path).query:
+                    self.api_error(400, 'Invalid query')
+                    return
+                self.send(200, json.dumps(WHALES.snapshot(), ensure_ascii=False, allow_nan=False).encode(), 'application/json')
+            elif path == "/api/manual-paper":
                 data = MANUAL.snapshot()
                 data['token'] = control_client.TOKEN
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), 'application/json')

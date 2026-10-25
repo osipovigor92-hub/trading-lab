@@ -25,7 +25,7 @@ def number(value):
 
 
 def public_api(endpoint, **params):
-    if endpoint not in ("tickers", "kline", "orderbook"):
+    if endpoint not in ("tickers", "kline", "orderbook", "recent-trade"):
         raise ValueError("Unsupported public endpoint")
     query = urlencode(dict(category="linear", **params))
     request = Request("https://api.bybit.com/v5/market/" + endpoint + "?" + query,
