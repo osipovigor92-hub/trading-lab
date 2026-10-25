@@ -10,7 +10,7 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
   await until(()=>fetch(`http://127.0.0.1:${port}/api/manual-paper`).then(r=>r.ok).catch(()=>false));
   browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});
   for(const width of [1280,390,320]){
-   const page=await browser.newPage({viewport:{width,height:950},deviceScaleFactor:1}),errors=[],posts=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST')posts.push({path:new URL(r.url()).pathname,body:JSON.parse(r.postData())});});
+   const page=await browser.newPage({viewport:{width,height:950},deviceScaleFactor:1}),errors=[],posts=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname!=='/api/favorites')posts.push({path:new URL(r.url()).pathname,body:JSON.parse(r.postData())});});
    const opened=Math.floor(Date.now()/1000)-20;let stale=false,manualOffline=false,failOpenOnce=false;
    await page.route(/\/api\/(paper|model-b|research)(?:\?|$)/,async route=>{
     const res=await route.fetch(),data=await res.json(),kind=new URL(route.request().url()).pathname,now=Date.now()/1000;
@@ -52,3 +52,4 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
   console.log('Positions UI passed: desktop/mobile, saved B, model pause, real manual entry/close/reload, idempotent response retry, pause and offline state.');
  }catch(e){console.error(serverLog);throw e;}finally{if(browser)await browser.close();server.kill('SIGTERM');}
 })().catch(e=>{console.error(e);process.exitCode=1;});
+

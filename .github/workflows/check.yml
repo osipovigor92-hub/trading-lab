@@ -58,6 +58,7 @@ jobs:
       - run: node tools/test_chart_stream_ui.cjs
       - run: node tools/test_fresh_alerts_ui.cjs
       - run: node tools/test_whales_ui.cjs
+      - run: node tools/test_favorites_ui.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -65,3 +66,4 @@ jobs:
           path: |
             artifacts/*.png
             artifacts/*.json
+

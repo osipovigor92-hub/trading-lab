@@ -222,7 +222,7 @@
   function persistOrder(){store('lab-screener-order-v1',{mode,sort:sorting.value,order});}
   function toggleWatch(symbol,on=!favorites.has(symbol)){
    if(!safeSymbol(symbol))return;if(on&&!favorites.has(symbol)&&favorites.size>=8){health.textContent='В наблюдении уже 8 монет · уберите одну для добавления';return;}
-   if(on)favorites.add(symbol);else favorites.delete(symbol);store('lab-favorites-v1',[...favorites]);changed();
+   if(on)favorites.add(symbol);else favorites.delete(symbol);store('lab-favorites-v1',[...favorites]);scope.LabFavorites?.changed('lab-favorites-v1');changed();
   }
   function changed(){selectionGeneration++;packet=null;store('lab-selection-v1',filters);document.dispatchEvent(new CustomEvent('lab-selection-changed'));render();refreshSelection();}
   function openCoin(symbol){if(!safeSymbol(symbol))return;document.dispatchEvent(new CustomEvent('lab-screener-table'));selected=symbol;store('lab-selected-coin',symbol);generation++;chart=null;chartError='';scale=1;offset=0;lastDetail=0;for(const key of ['entry','stop','target'])riskInputs[key].value='';scope.LabNavigation.activate('market');render();refreshDetail();}
@@ -273,3 +273,4 @@
   setInterval(refreshSelection,2000);setInterval(()=>{refreshQuotes();if(visible()&&Date.now()-lastDetail>=7000)refreshDetail();},5000);setInterval(()=>{if(visible())render();},1000);render();refreshQuotes();refreshDetail();
  });
 })(typeof window==='undefined'?globalThis:window);
+

@@ -4,7 +4,7 @@ const root=require('node:path').resolve(__dirname,'..');
 try{for(let i=0;i<100;i++){if(await fetch('http://127.0.0.1:18806/').then(r=>r.ok).catch(()=>false))break;await new Promise(r=>setTimeout(r,100));}
 browser=await chromium.launch({headless:true});
 for(const width of [1280,390,320]){const page=await browser.newPage({viewport:{width,height:950}}),errors=[];let requests=0;
-page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>assert.notEqual(r.method(),'POST'));
+page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(new URL(r.url()).pathname!=='/api/favorites')assert.notEqual(r.method(),'POST');});
 await page.addInitScript(()=>localStorage.setItem('lab-start-page','settings'));
 await page.route('**/api/whales',route=>{requests++;const now=Date.now()/1000;return route.fulfill({json:{status:'ok',updated:now,epoch:'whale-test',cursor:3,targets:['BTCUSDT'],coverage:{BTCUSDT:{fresh:true,checked:now}},events:[['large_trade',150000],['large_wall',300000],['wall_missing',75000]].map(([kind,notional],i)=>({id:'whale-test:'+i,kind,notional,symbol:'BTCUSDT',exchange:'bybit',side:'Buy',price:100,time:now,size_multiple:12,baseline_notional:notional/12,baseline_levels:20}))}});});
 await page.goto('http://127.0.0.1:18806/');await page.waitForTimeout(2300);assert.ok(requests>=1,'monitor starts before alerts page opens');
@@ -18,3 +18,4 @@ await box.getByLabel('Порог крупных событий, USDT').fill('100
 assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);await page.close();}
 console.log('Whale UI passed: background polling, amount/type filters, preserved input, 1280/390/320, no order requests.');
 }finally{if(browser)await browser.close();server.kill('SIGTERM');}})().catch(e=>{console.error(e);process.exitCode=1;});
+

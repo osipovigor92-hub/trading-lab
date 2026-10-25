@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'src/trading-panel'))
 import market_data
 import manual_paper
+from favorites import Favorites
 from test_manual_paper import Market, plan
 
 
@@ -31,6 +32,7 @@ class ManualHTTPTests(unittest.TestCase):
             module = importlib.util.module_from_spec(spec)
             with patch.object(market_data, 'MarketData', return_value=market), patch.object(manual_paper, 'ManualPaper', return_value=engine):
                 spec.loader.exec_module(module)
+            module.FAVORITES = Favorites(Path(folder)/"favorites.json")
             try:
                 server = module.ThreadingHTTPServer(('127.0.0.1', 0), module.Handler)
             except PermissionError:
@@ -40,13 +42,21 @@ class ManualHTTPTests(unittest.TestCase):
             headers = {'Host':'127.0.0.1:8787', 'Content-Type':'application/json', 'X-Lab-Control':module.control_client.TOKEN, 'Sec-Fetch-Site':'same-origin'}
             p = plan();p['stamp'] = market.now
             command = dict(id='real-http-open-123', action='open', generation=0, plan=p)
-            def request(value, h=None):
-                return urlopen(Request(base+'/api/manual-paper', data=json.dumps(value).encode(), headers=h or headers), timeout=3)
+            def request(value, h=None, path="/api/manual-paper"):
+                return urlopen(Request(base+path, data=json.dumps(value).encode(), headers=h or headers), timeout=3)
             try:
                 for change in ({'X-Lab-Control':'invalid'}, {'Sec-Fetch-Site':'cross-site'}, {'Origin':'null'}, {'Content-Type':'text/plain'}, {'Host':'attacker.invalid'}):
                     with self.assertRaises(HTTPError) as error:
                         request(command, dict(headers, **change))
                     self.assertEqual(error.exception.code, 403)
+                favorite = dict(id='favorite-http-1', changes=[dict(key='lab-favorites-v1', value='BTCUSDT', present=True)])
+                for change in ({'X-Lab-Control':'invalid'}, {'Sec-Fetch-Site':'cross-site'}):
+                    with self.assertRaises(HTTPError) as error:
+                        request(favorite, dict(headers, **change), '/api/favorites')
+                    self.assertEqual(error.exception.code, 403)
+                with request(favorite, path='/api/favorites') as response:
+                    self.assertEqual(response.status, 202)
+                    self.assertEqual(json.load(response)['groups']['lab-favorites-v1'], ['BTCUSDT'])
                 self.assertIsNone(engine.snapshot()['position'])
                 with request(command) as response:
                     self.assertEqual(response.status, 202)
@@ -65,3 +75,4 @@ class ManualHTTPTests(unittest.TestCase):
                     self.assertNotIn('unsafe-eval', response.headers['Content-Security-Policy'])
             finally:
                 server.shutdown();server.server_close();thread.join()
+
