@@ -41,7 +41,7 @@ class WhaleTests(unittest.TestCase):
         self.assertEqual(monitor.events,[])
 
     def test_wall_requires_age_and_covered_missing_not_outage(self):
-        m=self.monitor();row=dict(id='wall',status='active',notional=200000,last_seen=1000,age_seconds=0,distance_pct=.1,side='bid',symbol='BTCUSDT',exchange='bybit',price=100)
+        m=self.monitor();row=dict(id='wall',status='active',notional=2000,size_multiple=12,baseline_notional=2000/12,baseline_levels=20,last_seen=1000,age_seconds=0,distance_pct=.1,side='bid',symbol='BTCUSDT',exchange='bybit',price=100)
         m.observe_walls(dict(rows=[row]),1000);self.assertFalse(m.events)
         row['age_seconds']=10;m.observe_walls(dict(rows=[row]),1000);self.assertEqual(len(m.events),1)
         row['status']='unobserved';m.observe_walls(dict(rows=[row]),1001);self.assertEqual(len(m.events),1)

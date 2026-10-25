@@ -297,9 +297,19 @@ class DensityMonitor:
                                    timestamp_origin=packet.get('timestamp_origin', 'exchange'))
             while len(self.books) > SCAN_LIMIT:
                 self.books.pop(next(iter(self.books)))
+            averages = {}
+            for side in ('bid', 'ask'):
+                values = [v for (s, _), v in levels.items() if s == side]
+                total = sum(values)
+                for level, value in levels.items():
+                    if level[0] == side:
+                        mean = (total-value)/(len(values)-1) if len(values)>=21 else None
+                        averages[level] = (mean, value/mean if mean and mean>0 else None, len(values)-1)
+            qualified = {level for level, value in levels.items()
+                         if value >= TRACK_MIN or (averages[level][1] is not None and averages[level][1]>=10)}
             for level, notional in levels.items():
                 side, price = level
-                if notional < TRACK_MIN:
+                if level not in qualified:
                     continue
                 identity = density_id(exchange, symbol, side, price)
                 row = self.rows.get(identity)
@@ -320,6 +330,7 @@ class DensityMonitor:
                     row.update(status='active', last_seen=source, notional=notional, misses=0)
                     row['age_seconds'] = max(0, source-row['continuous_since'])
                     row['stable'] = row['age_seconds'] >= STABLE_SECONDS
+                row.update(baseline_notional=averages[level][0], size_multiple=averages[level][1], baseline_levels=averages[level][2])
                 row['distance_pct'] = float(abs(decimal(price)/mid-1)*100)
                 row['timestamp_origin'] = packet.get('timestamp_origin', 'exchange')
                 self.rows.move_to_end(identity)
@@ -327,7 +338,7 @@ class DensityMonitor:
                 if (row['exchange'], row['symbol']) != key:
                     continue
                 level = (row['side'], row['price_text'])
-                if levels.get(level, 0) >= TRACK_MIN:
+                if level in qualified:
                     continue
                 price = decimal(row['price_text'])
                 covered = (bid_min <= price < mid if row['side'] == 'bid' else mid < price <= ask_max)

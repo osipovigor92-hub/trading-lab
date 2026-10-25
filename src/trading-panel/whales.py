@@ -117,12 +117,14 @@ class WhaleMonitor:
                 identity=row.get('id')
                 if not isinstance(identity,str):continue
                 active=row.get('status')=='active' and numeric(row.get('last_seen')) and -2<=now-row['last_seen']<=25
-                qualifies=(active and numeric(row.get('notional')) and row['notional']>=FLOOR and
+                qualifies=(active and numeric(row.get('notional')) and numeric(row.get('size_multiple')) and row['size_multiple']>=10 and
                            numeric(row.get('distance_pct')) and row['distance_pct']<=1 and
                            numeric(row.get('age_seconds')) and row['age_seconds']>=10)
                 if qualifies and not self.walls.get(identity,False):
                     self.walls[identity]=True
                     self._emit('large_wall',dict(row,time=row['last_seen']),now)
+                elif active and numeric(row.get('size_multiple')) and row['size_multiple']<10:
+                    self.walls[identity]=False
                 elif row.get('status')=='missing' and self.walls.get(identity,False) and identity in missing:
                     self.walls[identity]=False
                     self._emit('wall_missing',dict(row,time=missing[identity]['observed_at']),now)

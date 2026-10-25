@@ -41,6 +41,17 @@ class DensityTests(unittest.TestCase):
     def row(self):
         return next(row for row in self.monitor.snapshot()['rows'] if row['id'] == self.identity)
 
+    def test_relative_wall_below_absolute_floor_and_side_baseline(self):
+        bids=[[str(100-i*.01), 1] for i in range(21)]
+        bids[0][1]=12
+        asks=[[str(101+i*.01), 1000] for i in range(21)]
+        self.observe(book(0,bids,asks))
+        row=self.row()
+        self.assertLess(row['notional'],50000)
+        self.assertGreaterEqual(row['size_multiple'],10)
+        self.assertEqual(row['baseline_levels'],20)
+        self.assertAlmostEqual(row['baseline_notional'],sum(float(p)*q for p,q in bids[1:])/20)
+
     def test_chart_overlay_adds_bounded_targets_without_replacing_monitor_scope(self):
         self.monitor.request(exchanges='bybit', symbols='BTCUSDT', watch='bybit:BTCUSDT')
         packet = self.monitor.request(exchanges='binance', symbols='ETHUSDT', watch='binance:ETHUSDT', overlay=True)
