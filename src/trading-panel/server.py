@@ -11,6 +11,8 @@ from manual_paper import ManualPaper
 from exchange_data import get_exchange_data
 from densities import DensityMonitor
 
+from favorites import Favorites
+FAVORITES = Favorites("/var/lib/trading-manual-paper/favorites.json")
 from whales import WhaleMonitor
 ROOT = Path("/opt/trading-panel")
 STATE = Path("/var/lib/trading-bot/state.json")
@@ -23,6 +25,7 @@ EXCHANGE_DATA = get_exchange_data()
 DENSITIES = DensityMonitor(EXCHANGE_DATA, background=__name__ == '__main__')
 WHALES = WhaleMonitor(MARKET, DENSITIES, state_path=Path('/var/lib/trading-manual-paper/whales.json'), background=__name__ == '__main__')
 FILES = {
+    "/favorites.js": ("favorites.js", "text/javascript; charset=utf-8"),
     "/lightweight-charts-5.2.1.js": ("lightweight-charts-5.2.1.js", "text/javascript; charset=utf-8"),
     "/exchange-chart.js": ("exchange-chart.js", "text/javascript; charset=utf-8"),
     "/chart-stream.js": ("chart-stream.js", "text/javascript; charset=utf-8"),
@@ -121,7 +124,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path == "/api/whales":
+            if path == "/api/favorites":
+                data = dict(FAVORITES.snapshot(), token=control_client.TOKEN)
+                self.send(200, json.dumps(data, ensure_ascii=False).encode(), "application/json")
+            elif path == "/api/whales":
                 if urlsplit(self.path).query:
                     self.api_error(400, 'Invalid query')
                     return
@@ -241,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self.send(503, b'{"error":"Controller unavailable"}', 'application/json')
             return
-        if self.path not in ("/api/models-control", "/api/manual-paper"):
+        if self.path not in ("/api/models-control", "/api/manual-paper", "/api/favorites"):
             self.send(404, b'{"error":"Not found"}', "application/json")
             return
         if not control_client.authorized(self.headers):
@@ -249,15 +255,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 4096 or self.headers.get("Transfer-Encoding"):
+            if not 0 < length <= (16384 if self.path == "/api/favorites" else 4096) or self.headers.get("Transfer-Encoding"):
                 raise ValueError("Invalid request size")
             command = json.loads(self.rfile.read(length))
-            result = (MANUAL.command(command) if self.path == '/api/manual-paper' else
+            result = (FAVORITES.command(command) if self.path == "/api/favorites" else
+                      MANUAL.command(command) if self.path == '/api/manual-paper' else
                       control_client.call(dict(op="command", command=command)))
             self.send(202 if result.get("status") == "accepted" else 409,
                       json.dumps(result, ensure_ascii=False, allow_nan=False).encode(), "application/json")
         except (ValueError, TypeError, OverflowError) as exc:
-            if self.path == '/api/manual-paper':
+            if self.path in ('/api/manual-paper', '/api/favorites'):
                 self.api_error(409, str(exc))
             else:
                 self.send(400, b'{"error":"Invalid command"}', "application/json")
@@ -268,3 +275,4 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     print("Panel: http://127.0.0.1:8787", flush=True)
     ThreadingHTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
+

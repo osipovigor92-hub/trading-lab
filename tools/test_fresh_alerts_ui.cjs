@@ -1,3 +1,4 @@
+const {resetFavorites}=require('./ui_favorites.cjs');
 /* Offline transition feed, source failures, reload and request-generation checks. */
 const {chromium}=require('playwright'),{spawn}=require('node:child_process'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18796;
@@ -29,8 +30,9 @@ function currentAssistant(kind,symbol,now,mode){
   await until(()=>fetch(`http://127.0.0.1:${port}/`).then(r=>r.ok).catch(()=>false),'preview');
   browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
   for(const width of widths){
+   await resetFavorites(`http://127.0.0.1:${port}`);
    const page=await browser.newPage({viewport:{width,height:950}}),errors=[],posts=[],failedRequests=[],scriptResponses=[];let mode='normal',events=Object.keys(labels).map((k,i)=>event(k,i+1,['BTCUSDT','ETHUSDT','SOLUSDT','ONDOUSDT','LINKUSDT'][i])),cursor=5,delay=false,modernPhase=false,clockOffset=0,storageError=false;
-   page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST')posts.push(r.url());});
+   page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname!=='/api/favorites')posts.push(r.url());});
    page.on('requestfailed',r=>failedRequests.push({url:r.url(),error:r.failure()?.errorText}));page.on('response',r=>{if(r.request().resourceType()==='script')scriptResponses.push({url:r.url(),status:r.status()});});
    await page.addInitScript(()=>{window.alertBeeps=0;window.alertNotifications=[];window.permissionRequests=0;window.alertClockOffset=0;const actualNow=Date.now.bind(Date);Date.now=()=>actualNow()+window.alertClockOffset;
     if(!localStorage.getItem('lab-alert-history-v2'))localStorage.setItem('lab-alert-history-v2',JSON.stringify({events:[{time:Date.now()/1000-300,text:'B · сохранённое наблюдение',tone:'neutral'}],states:[['B:BTCUSDT','entry:LONG']]}));
@@ -119,3 +121,4 @@ function currentAssistant(kind,symbol,now,mode){
   console.log('Fresh alerts UI passed: '+widths.join('/')+', LONG/SHORT recommendations, direction filters, current-row/event expiry independence, no legacy/watch/pending recommendations, notifications/dedup, source failure, retained DOM/history/reload/clear, late filter response and coin card.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');}
 })().catch(e=>{console.error(e);process.exitCode=1;});
+

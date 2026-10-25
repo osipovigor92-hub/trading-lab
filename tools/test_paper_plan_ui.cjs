@@ -11,7 +11,7 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
   browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});
   for(const width of [1280,390,320]){
    const page=await browser.newPage({viewport:{width,height:1100}}),errors=[],posts=[];let mode='ready',revision=0;const setMode=next=>{mode=next;revision++;};
-   page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST')posts.push(r.url());});
+   page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname!=='/api/favorites')posts.push(r.url());});
    await page.route(/\/api\/(paper|model-b|research)(?:\?|$)/,async route=>{try{const res=await route.fetch(),data=await res.json();data.position=null;if(data.models)for(const model of Object.values(data.models))model.position=null;await route.fulfill({response:res,json:data});}catch{try{await route.abort();}catch{}}});
    await page.route(/\/api\/(screener|market-chart|market-book|market-selection)(?:\?|$)/,async route=>{
     try{
@@ -63,3 +63,4 @@ async function until(predicate){const end=Date.now()+15000;while(Date.now()<end)
   console.log('PAPER plan UI passed: 1280/390/320, four timeframes, LONG/SHORT, entry/wait/cancel, inputs/persistence, partial/stale/error data and delayed coin switch');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
+

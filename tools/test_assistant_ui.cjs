@@ -1,3 +1,4 @@
+const {resetFavorites}=require('./ui_favorites.cjs');
 /* Real browser behavior over isolated public-data fixtures and a temporary PAPER ledger. */
 const {chromium}=require('playwright'),{spawn}=require('node:child_process'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18797;
@@ -17,8 +18,9 @@ async function go(page,key,width){
   await until(()=>fetch(`http://127.0.0.1:${port}/`).then(response=>response.ok).catch(()=>false),'preview not ready');
   browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
   for(const width of [1280,390,320]){
+   await resetFavorites(`http://127.0.0.1:${port}`);
    const page=await browser.newPage({viewport:{width,height:950}}),errors=[],requests=[],posts=[];let changed=false,manualOffline=false,manualStale=false,dropReply=false;
-   page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{const url=new URL(request.url());if(url.pathname.startsWith('/api/'))requests.push(url.pathname+url.search);if(request.method()==='POST')posts.push({path:url.pathname,body:request.postDataJSON(),token:request.headers()['x-lab-control']});});
+   page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{const url=new URL(request.url());if(url.pathname.startsWith('/api/'))requests.push(url.pathname+url.search);if(request.method()==='POST'&&url.pathname!=='/api/favorites')posts.push({path:url.pathname,body:request.postDataJSON(),token:request.headers()['x-lab-control']});});
    await page.addInitScript(()=>{if(!sessionStorage.getItem('assistant-test-initialized')){sessionStorage.setItem('assistant-test-initialized','yes');sessionStorage.setItem('lab-tab','grid');localStorage.setItem('lab-start-page','research');}});
    await page.route('**/api/screener',async route=>{const response=await route.fetch(),data=await response.json();if(changed)data.rows=data.rows.map(row=>({...row,price:row.symbol==='LINKUSDT'?12345:row.price,turnover:row.symbol==='LINKUSDT'?1e10:row.turnover}));await route.fulfill({response,json:data});});
    await page.route('**/api/manual-paper',async route=>{
@@ -62,3 +64,4 @@ async function go(page,key,width){
   console.log(navigationOnly?'Assistant navigation passed: 1280/390/320, both navigation selections match visible pages with immediate accent feedback, no overflow or browser errors.':'Assistant UI passed: 1280/390/320, lean navigation/network, fixed ordering, watch/search/reload, risk-to-PAPER review without execution, PAPER auth/retry/open/close/durable storage/stale/offline recovery.');
  }catch(error){console.error(log);throw error;}finally{if(browser)await browser.close();server.kill('SIGTERM');}
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

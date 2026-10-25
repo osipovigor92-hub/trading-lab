@@ -14,6 +14,8 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 PANEL = ROOT/'src/trading-panel'
 sys.path.insert(0, str(PANEL))
+from favorites import Favorites
+FAVORITES = Favorites()
 import selection
 from market_alerts import ASSISTANT_KINDS, MarketAlerts
 from manual_paper import ManualPaper
@@ -355,6 +357,8 @@ class Handler(BaseHTTPRequestHandler):
         data=fixtures()
         if path == '/api/whales':
             body=json.dumps(dict(status='ok',updated=time.time(),epoch='preview',cursor=0,events=[],targets=[],coverage={})).encode();kind='application/json; charset=utf-8'
+        elif path == '/api/favorites':
+            body=json.dumps(dict(FAVORITES.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path == '/api/manual-paper':
             body=json.dumps(dict(MANUAL.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path in ('/api/exchange-screener','/api/exchange-chart','/api/densities'):
@@ -392,15 +396,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers();self.wfile.write(body)
 
     def do_POST(self):
-        if self.path not in ('/api/models-control','/api/manual-paper'):
+        if self.path not in ('/api/models-control','/api/manual-paper','/api/favorites'):
             self.send_error(404);return
         if self.headers.get('X-Lab-Control') != CONTROL.token or self.headers.get('Content-Type')!='application/json':
             self.send_error(403);return
         try:
             length=int(self.headers.get('Content-Length', '0'))
-            if not 0 < length <= 4096: raise ValueError('Invalid length')
+            if not 0 < length <= (16384 if self.path == "/api/favorites" else 4096): raise ValueError('Invalid length')
             command=json.loads(self.rfile.read(length))
-            value=(MANUAL.command(command) if self.path=='/api/manual-paper' else CONTROL.command(command))
+            value=(FAVORITES.command(command) if self.path == "/api/favorites" else MANUAL.command(command) if self.path=='/api/manual-paper' else CONTROL.command(command))
             status=202
         except (ValueError, KeyError, TypeError) as exc:
             value=dict(status='error', error=str(exc));status=409
@@ -416,3 +420,4 @@ if __name__=='__main__':
     PAPER_TEST=args.paper_test
     print(f'DEMO: http://127.0.0.1:{args.port}',flush=True)
     ThreadingHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()
+
