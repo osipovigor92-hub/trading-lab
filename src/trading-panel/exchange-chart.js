@@ -214,6 +214,10 @@
     }
     function updateLevels(settings) {
       const wanted=new Map();
+      for(const level of (settings.autoLevels||[]).slice(0,6)){
+        if(!finite(level.price)||level.price<=0||!['support','resistance'].includes(level.type))continue;
+        wanted.set('auto:'+level.id,{price:level.price,color:level.type==='support'?'#59d5a1':'#f1848b',lineWidth:2,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true,title:'Авто '+(level.interval==='60'?'1ч':'15м')+' · '+level.touches+' кас.'});
+      }
       for (const level of (settings.levels||[]).slice(0,12)) {
         if (!finite(level.price)||level.price<=0||!['support','resistance'].includes(level.type)) continue;
         wanted.set('manual:'+level.id,{price:level.price,color:level.type==='support'?'#a78bcc':'#e9bc68',lineWidth:2,lineStyle:L.LineStyle.Solid,axisLabelVisible:true,title:level.type==='support'?'Подд.':'Сопр.'});
@@ -337,3 +341,4 @@
   }
   scope.LabExchangeChart={create};
 })(typeof window==='undefined'?globalThis:window);
+

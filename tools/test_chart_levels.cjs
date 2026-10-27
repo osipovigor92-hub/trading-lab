@@ -27,3 +27,15 @@ require('node:test')('level IDs work on HTTP without randomUUID',()=>{
  assert.equal(new Set(ids).size,100);
  assert.equal(cleanManual([{id:ids[0],type:'support',price:10}]).length,1);
 });
+test('automatic levels require repeated confirmed pivots and current closed candles',()=>{
+ const {autoLevels}=require('../src/trading-panel/chart-levels.js');
+ const end=1800000000,step=900;
+ const candles=Array.from({length:40},(_,i)=>({t:end-(40-i)*step,open:100,close:100,low:i%6===2?95:99,high:i%6===4?105:101}));
+ const p={status:'ok',interval:'15',updated:end+10,candle_end:end,candles};
+ const result=autoLevels(p,end+10);
+ assert.ok(result.some(l=>l.type==='support'&&l.price===95&&l.touches>=2));
+ assert.ok(result.some(l=>l.type==='resistance'&&l.price===105&&l.touches>=2));
+ assert.deepEqual(autoLevels({...p,status:'pending'},end+10),[]);
+ assert.deepEqual(autoLevels(p,end+100),[]);
+ assert.deepEqual(autoLevels({...p,candles:[...candles,{...candles[0],t:end}]},end+10),[]);
+});
