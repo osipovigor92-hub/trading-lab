@@ -17,3 +17,13 @@ test('density overlays are bounded to the three largest levels on each side',()=
 test('manual annotation storage rejects broken types, IDs and prices and has a hard limit',()=>{
  const valid={id:'one',type:'resistance',price:101};assert.deepEqual(cleanManual([valid,{...valid,price:NaN},{...valid,type:'order'},{...valid,id:'<script>'},{...valid,price:-1}]),[valid]);assert.equal(cleanManual(Array.from({length:30},(_,i)=>({...valid,id:String(i)}))).length,12);assert.deepEqual(cleanManual({}),[]);
 });
+
+
+require('node:test')('level IDs work on HTTP without randomUUID',()=>{
+ const assert=require('node:assert/strict'),{levelId,cleanManual}=require('../src/trading-panel/chart-levels.js');
+ const crypto=require('node:crypto').webcrypto;
+ const source={getRandomValues:crypto.getRandomValues.bind(crypto)};
+ const ids=Array.from({length:100},()=>levelId(source));
+ assert.equal(new Set(ids).size,100);
+ assert.equal(cleanManual([{id:ids[0],type:'support',price:10}]).length,1);
+});

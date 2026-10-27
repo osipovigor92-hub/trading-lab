@@ -16,7 +16,11 @@
   }
   return result;
  }
- const api={cleanManual,densityLevels};if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;
+ function levelId(cryptoApi=scope.crypto){
+  if(typeof cryptoApi?.randomUUID==='function')return cryptoApi.randomUUID();
+  return Array.from(cryptoApi.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
+ }
+ const api={cleanManual,densityLevels,levelId};if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;
  function create({tools,after,widget,onChange}){
   const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
   const button=(text,action)=>{const b=el('button','screener-order',text);b.type='button';b.addEventListener('click',action);return b;};
@@ -33,7 +37,7 @@
   const hint=el('p','chart-level-hint',''),list=el('div','chart-manual-levels');hint.setAttribute('role','status');panel.append(hint,list,el('p','muted','Ручные уровни сохраняются для этой монеты и биржи. Это ваши отметки.'));
   const densityStatus=el('p','chart-density-status');densityStatus.setAttribute('role','status');densityStatus.hidden=true;after.after(densityStatus,panel);
   function persist(){if(!source)return;stored.delete(pair(source));stored.set(pair(source),manual);while(stored.size>48)stored.delete(stored.keys().next().value);try{localStorage.setItem(STORE,JSON.stringify(Object.fromEntries(stored)));}catch{hint.textContent='Уровни действуют до закрытия страницы · хранилище недоступно';}}
-  function addPrice(value){if(!source||!positive(value)){input.setAttribute('aria-invalid','true');hint.textContent='Введите цену больше нуля.';return;}if(manual.length>=12){hint.textContent='Уже 12 уровней. Удалите ненужный, чтобы добавить новый.';return;}input.removeAttribute('aria-invalid');manual.push({id:crypto.randomUUID(),type:type.value,price:Number(value.toPrecision(10))});drawing=false;input.value='';persist();render();onChange();}
+  function addPrice(value){if(!source||!positive(value)){input.setAttribute('aria-invalid','true');hint.textContent='Введите цену больше нуля.';return;}if(manual.length>=12){hint.textContent='Уже 12 уровней. Удалите ненужный, чтобы добавить новый.';return;}input.removeAttribute('aria-invalid');manual.push({id:levelId(),type:type.value,price:Number(value.toPrecision(10))});drawing=false;input.value='';persist();render();onChange();}
   form.addEventListener('submit',event=>{event.preventDefault();const text=input.value.trim().replace(',','.');addPrice(/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text)?Number(text):NaN);});
   function render(){
    panel.hidden=!editorOpen;levels.setAttribute('aria-expanded',String(editorOpen));levels.textContent='Уровни'+(manual.length?' · '+manual.length:'');densities.setAttribute('aria-pressed',String(densityEnabled));densities.classList.toggle('selected',densityEnabled);draw.setAttribute('aria-pressed',String(drawing));draw.textContent=drawing?'Отменить нанесение':'Нанести кликом';widget.classList.toggle('is-drawing-level',drawing);
@@ -57,3 +61,4 @@
  }
  scope.LabChartLevels={...api,create};
 })(typeof window==='undefined'?globalThis:window);
+
