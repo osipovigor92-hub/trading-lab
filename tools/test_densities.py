@@ -41,6 +41,28 @@ class DensityTests(unittest.TestCase):
     def row(self):
         return next(row for row in self.monitor.snapshot()['rows'] if row['id'] == self.identity)
 
+    def test_catalogs_cannot_starve_books_and_completed_books_are_harvested(self):
+        calls=[]
+        class BudgetAdapter:
+            ready=False
+            def exchange_snapshot(adapter, exchange):
+                calls.append(('catalog',exchange))
+                return dict(status='pending', updated=0)
+            def book_snapshot(adapter, exchange, symbol):
+                calls.append(('book',symbol))
+                return dict(status='pending', updated=0)
+            def peek_book(adapter, exchange, symbol):
+                return book(self.now, exchange=exchange, symbol=symbol) if adapter.ready else dict(status='pending', updated=0)
+        adapter=BudgetAdapter();monitor=DensityMonitor(adapter,clock=lambda:self.now)
+        monitor.request(watch='bybit:BTCUSDT,bybit:ETHUSDT,bybit:SOLUSDT')
+        first=[]
+        for tick in range(10):
+            self.now=tick;calls.clear();monitor.tick();first.append(calls[0])
+        self.assertEqual({v for kind,v in first if kind=='catalog'},set(EXCHANGES))
+        self.assertTrue(all(first[i][0]=='book' for i in range(1,10,2)))
+        adapter.ready=True;self.now=10;monitor.tick()
+        self.assertEqual(monitor.snapshot()['coverage']['scanned'],3)
+
     def test_relative_wall_below_absolute_floor_and_side_baseline(self):
         bids=[[str(100-i*.01), 1] for i in range(21)]
         bids[0][1]=12
@@ -326,3 +348,4 @@ class DensityTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

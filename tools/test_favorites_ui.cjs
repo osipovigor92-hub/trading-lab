@@ -25,7 +25,25 @@ const ready=new Promise(resolve=>server.stdout.once('data',resolve));
   await until(p,()=>document.querySelector('#favorites-sync-status')?.textContent.includes('недоступна'));
   assert.ok(await p.evaluate(()=>JSON.parse(localStorage.getItem('lab-favorites-outbox')).length));
   await p.unroute('**/api/favorites');await has(m,keys[0],'SOLUSDT');
+  let rejectedId;
+  await p.route('**/api/favorites',async r=>{
+   if(r.request().method()!=='POST')return r.continue();
+   const command=r.request().postDataJSON();rejectedId??=command.id;
+   if(command.id===rejectedId)return r.fulfill({status:409,json:{status:'error',error:'Лимит избранного'}});
+   return r.continue();
+  });
+  await change(p,'XRPUSDT',true);
+  await until(p,()=>document.querySelector('#favorites-sync-status')?.textContent.includes('Лимит'));
+  await change(p,'XRPUSDT',false);
+  await until(p,()=>document.querySelector('#favorites-sync-status')?.textContent.includes('синхронизировано'));
+  assert.equal(await p.evaluate(()=>JSON.parse(localStorage.getItem('lab-favorites-outbox')).length),0);
+  await has(m,keys[0],'XRPUSDT',false);await p.unroute('**/api/favorites');
+  await p.route('**/api/favorites',r=>r.request().method()==='POST'?r.fulfill({status:409,json:{status:'error',error:'Лимит избранного'}}):r.continue());
+  await change(p,'DOGEUSDT',true);
+  await p.getByRole('button',{name:'Отменить несохранённые изменения и загрузить общее избранное'}).click();
+  await has(p,keys[0],'DOGEUSDT',false);await has(p,keys[0],'SOLUSDT');
+  await p.unroute('**/api/favorites');
   assert.deepEqual(errors,[]);assert.ok(writes.length>0);assert.ok(writes.every(path=>path==='/api/favorites'));
-  console.log('PASS: empty phone first, migration of three lists, PC/phone add and remove, reload, offline retry; only preference POSTs.');
+  console.log('PASS: empty phone first, migration of three lists, PC/phone add and remove, reload, offline retry; 409 queue recovery, explicit server restore; only preference POSTs.');
  }finally{await browser?.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -1,3 +1,4 @@
+const {resetFavorites}=require('./ui_favorites.cjs');
 /* Density UI contract: public source identities, retained outage state, truthful continuity. */
 const {chromium}=require('playwright'),{spawn}=require('node:child_process'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18798,names={market:'Скринер',densities:'Плотности',alerts:'Алерты',positions:'Позиции',settings:'Настройки'};
@@ -10,8 +11,9 @@ function fixture(disappeared=false,stale=false){const now=Date.now()/1000,rows=[
   await until(()=>fetch(`http://127.0.0.1:${port}/`).then(response=>response.ok).catch(()=>false),'preview not ready');
   browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
   for(const width of [1280,390,320]){
+   await resetFavorites(`http://127.0.0.1:${port}`);
    const page=await browser.newPage({viewport:{width,height:950}}),errors=[],requests=[],commands=[],monitorReads={};let offline=false,stale=false,disappeared=false,holdResponse=false,releaseHeld=null;
-   page.on('pageerror',error=>errors.push(error.message));page.on('request',r=>{const path=new URL(r.url()).pathname;monitorReads[path]=(monitorReads[path]||0)+1;});await page.addInitScript(()=>localStorage.setItem('lab-start-page','settings'));page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/densities')requests.push(url);if(request.method()!=='GET')commands.push(url.pathname);});
+   page.on('pageerror',error=>errors.push(error.message));page.on('request',r=>{const path=new URL(r.url()).pathname;monitorReads[path]=(monitorReads[path]||0)+1;});await page.addInitScript(()=>localStorage.setItem('lab-start-page','settings'));page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/densities')requests.push(url);if(request.method()!=='GET'&&url.pathname!=='/api/favorites')commands.push(url.pathname);});
    if(width===320)await page.addInitScript(()=>{if(!sessionStorage.getItem('density-storage-tested')){localStorage.setItem('lab-density-filters-v1','[]');localStorage.setItem('lab-density-watch-v1','{}');sessionStorage.setItem('density-storage-tested','yes');}});
    if(width===390)await page.addInitScript(()=>{if(!sessionStorage.getItem('density-storage-tested')){localStorage.setItem('lab-density-filters-v1',JSON.stringify({include:{bad:true},min:'bad',distanceMax:'bad',levels:'99',sort:'bad',exchanges:null}));sessionStorage.setItem('density-storage-tested','yes');}});
    await page.route('**/api/densities?*',async route=>{if(holdResponse)await new Promise(resolve=>releaseHeld=resolve);return offline?route.fulfill({status:502,contentType:'text/html',body:'<html>Temporary public API error</html>'}):route.fulfill({json:fixture(disappeared,stale)});});
@@ -42,3 +44,4 @@ function fixture(disappeared=false,stale=false){const now=Date.now()/1000,rows=[
   console.log('Densities UI passed: 1280/390/320, five exchange filters, ordering/per-coin limits, radar, source-preserving watch/chart events, outage/stale continuity/history, persistence, background reads before opening pages, no trading commands.');
  }catch(error){console.error(log);throw error;}finally{if(browser)await browser.close();server.kill('SIGTERM');}
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

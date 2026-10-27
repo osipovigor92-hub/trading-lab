@@ -34,7 +34,10 @@ class FavoritesTests(unittest.TestCase):
             with self.assertRaises(ValueError):store.command(huge)
             with patch('favorites.write', side_effect=OSError('disk full')):
                 with self.assertRaises(OSError):store.command(command(3, 'ETHUSDT'))
-            self.assertEqual(old, store.snapshot())
+            current=store.snapshot()
+            self.assertEqual(current['storage_error'],'disk full')
+            current['storage_error']=None
+            self.assertEqual(old, current)
 
     def test_corrupt_storage_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as folder:

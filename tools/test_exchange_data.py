@@ -934,6 +934,22 @@ class AdapterTests(unittest.TestCase):
         self.assertGreater(recovered["updated"], original["updated"])
         self.assertEqual(recovered["candle_end"], original["candle_end"])
 
+    def test_nonchart_fifo_runs_waiting_book_without_another_browser_poll(self):
+        jobs=[]
+        with patch.object(self.adapter._pool,'submit',side_effect=lambda *args:jobs.append(args)), patch.object(self.adapter,'fetch_catalog',return_value=dict(status='ok',updated=1000,source_ts=1000,rows=[])):
+            self.adapter.exchange_snapshot('bybit')
+            self.adapter.book_snapshot('bybit','BTCUSDT')
+            self.adapter.exchange_snapshot('binance')
+            self.adapter.book_snapshot('bybit','BTCUSDT')
+            self.assertEqual(len(jobs),1)
+            self.assertEqual(len(self.adapter._nonchart_waiting),2)
+            self.adapter.peek_book('bybit','ETHUSDT')
+            self.assertEqual(len(self.adapter._nonchart_waiting),2,'harvesting must not queue requests')
+            fn,*args=jobs[0];fn(*args)
+            self.assertEqual(len(jobs),2)
+            self.assertEqual(jobs[1][1:3],('book',('bybit','BTCUSDT')))
+            self.assertEqual(self.adapter._nonchart_outstanding,1)
+
     def test_snapshots_return_immediately_and_pool_and_queue_are_bounded(self):
         release, active = threading.Event(), threading.Event()
         def request(exchange, path, params):
@@ -973,3 +989,4 @@ class AdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

@@ -57,6 +57,12 @@ class ManualHTTPTests(unittest.TestCase):
                 with request(favorite, path='/api/favorites') as response:
                     self.assertEqual(response.status, 202)
                     self.assertEqual(json.load(response)['groups']['lab-favorites-v1'], ['BTCUSDT'])
+                with patch.object(market, '_alert_cache', return_value={}, create=True), patch.object(module.DENSITIES, 'request') as changed_scope:
+                    with urlopen(Request(base+'/api/monitor-health',headers={'Host':'127.0.0.1:8787'})) as response:
+                        health=json.load(response)
+                        self.assertEqual(health['favorites']['counts']['lab-favorites-v1'],1)
+                        self.assertNotIn('token',json.dumps(health))
+                        changed_scope.assert_not_called()
                 self.assertIsNone(engine.snapshot()['position'])
                 with request(command) as response:
                     self.assertEqual(response.status, 202)

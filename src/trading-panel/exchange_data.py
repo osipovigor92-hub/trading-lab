@@ -128,6 +128,7 @@ class ExchangeData:
         self._instrument_locks = {ex: threading.Lock() for ex in EXCHANGES}
         self._outstanding = 0
         self._nonchart_outstanding = 0
+        self._nonchart_waiting = OrderedDict()
         self._closed = False
 
     def close(self):
@@ -588,6 +589,25 @@ class ExchangeData:
                 packet.update(bids=[], asks=[], price=None, coverage={"bid_min": None, "ask_max": None})
         return packet
 
+    def _drain_nonchart(self):
+        """FIFO admission under _lock; no extra workers or HTTP concurrency."""
+        while self._nonchart_waiting and not self._closed and self._nonchart_outstanding < 1 and self._outstanding < 4:
+            (kind, key), entry = self._nonchart_waiting.popitem(last=False)
+            if (self._cache[kind].get(key) is not entry or entry['pending'] or
+                    self._clock() < max(entry['expires'], entry['retry'])):
+                continue
+            entry['pending'] = True
+            self._outstanding += 1
+            self._nonchart_outstanding += 1
+            try:
+                self._pool.submit(self._run, kind, key, entry)
+            except RuntimeError:
+                entry['pending'] = False
+                self._outstanding -= 1
+                self._nonchart_outstanding -= 1
+                entry['error'] = 'market service closed'
+                break
+
     def _run(self, kind, key, entry):
         try:
             method = {"catalog": self.fetch_catalog, "chart": self.fetch_chart, "book": self.fetch_book}[kind]
@@ -610,8 +630,9 @@ class ExchangeData:
                 self._outstanding -= 1
                 if kind != "chart":
                     self._nonchart_outstanding -= 1
+                self._drain_nonchart()
 
-    def _snapshot(self, kind, key, *, live=False):
+    def _snapshot(self, kind, key, *, live=False, schedule=True):
         with self._lock:
             now = self._clock()
             entries = self._cache[kind]
@@ -645,8 +666,14 @@ class ExchangeData:
             # Density scans share these workers. Reserve one executing worker and three of the existing
             # four admission slots for visible charts, without increasing HTTP
             # concurrency or allowing an unbounded queue.
+            if schedule and kind != 'chart' and not fresh and not entry['pending'] and now >= entry['retry'] and not self._closed:
+                # Repeated snapshots preserve the original queue position.
+                self._nonchart_waiting.setdefault((kind, key), entry)
+                while len(self._nonchart_waiting) > 96:
+                    self._nonchart_waiting.popitem(last=False)
+                self._drain_nonchart()
             admitted = self._outstanding < 4 and (kind == "chart" or self._nonchart_outstanding < 1)
-            if not fresh and not entry["pending"] and now >= entry["retry"] and admitted and not self._closed:
+            if schedule and kind == "chart" and not fresh and not entry["pending"] and now >= entry["retry"] and admitted and not self._closed:
                 entry["pending"] = True
                 self._outstanding += 1
                 if kind != "chart":
@@ -699,6 +726,10 @@ class ExchangeData:
     def chart_snapshot(self, exchange, symbol, interval, *, live=False):
         return self._snapshot("chart", (_exchange(exchange), _symbol(symbol), _interval(interval)), live=live)
 
+    def peek_book(self, exchange, symbol):
+        """Read completed cache work without issuing or queuing network requests."""
+        return self._snapshot("book", (_exchange(exchange), _symbol(symbol)), schedule=False)
+
     def book_snapshot(self, exchange, symbol):
         return self._snapshot("book", (_exchange(exchange), _symbol(symbol)))
 
@@ -713,3 +744,4 @@ def get_exchange_data():
         if _shared is None:
             _shared = ExchangeData()
         return _shared
+
