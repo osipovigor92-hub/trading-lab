@@ -86,7 +86,7 @@ function currentAssistant(kind,symbol,now,mode){
    const retained=await history.locator('.fresh-event').count();mode='late';await page.waitForTimeout(2300);assert.equal(await history.locator('.fresh-event').count(),retained,'old cursor response rejected');assert.doesNotMatch(await feed.textContent(),/OLDUSDT/);
    mode='normal';delay=true;await page.evaluate(()=>document.dispatchEvent(new CustomEvent('lab-tab',{detail:'alerts'})));await page.waitForTimeout(100);
    await page.evaluate(()=>{localStorage.setItem('lab-selection-v1',JSON.stringify({rvol_min:1.5}));document.dispatchEvent(new CustomEvent('lab-selection-changed'));});
-   await until(()=>feed.textContent().then(t=>t.includes('ETHUSDT')),'new filter generation');assert.doesNotMatch(await history.textContent(),/OLDUSDT/);
+   await until(()=>feed.locator('.fresh-event[data-id="ui:20"][data-live="true"]').count().then(n=>n===1),'new filter generation');assert.doesNotMatch(await history.textContent(),/OLDUSDT/);
    await page.locator('.fresh-alert-history>summary').click();await page.getByRole('button',{name:'Звук: выключен',exact:true}).click();const beepsBeforeClear=await page.evaluate(()=>alertBeeps);
    await page.getByRole('button',{name:'Очистить историю',exact:true}).click();await page.waitForTimeout(2200);assert.equal(await history.locator('.fresh-event').count(),0,'clear keeps duplicate cursor');
    assert.equal(await feed.locator('.fresh-event').count(),1,'clear removes archive but keeps the active event');assert.equal(await feed.locator('.fresh-event[data-id="ui:20"][data-live="true"]').count(),1);

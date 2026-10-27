@@ -118,6 +118,17 @@ class MarketTests(unittest.TestCase):
             self.assertEqual(len(running),2)
         finally:cache.close()
 
+    def test_book_admission_alternates_with_candle_warmup(self):
+        cache=market.MarketData(clock=lambda:0)
+        cache.selection_until=100;cache.selection_watch=['BTCUSDT','ETHUSDT']
+        try:
+            with patch.object(cache,'get',return_value={}) as get:
+                cache._selection_tick()
+                self.assertEqual(get.call_args_list[0].args[0],'chart')
+                get.reset_mock();cache._selection_tick()
+                self.assertEqual(get.call_args_list[0].args,('book','ETHUSDT'))
+        finally:cache.close()
+
     def test_new_minute_invalidates_chart_ttl_without_waiting_25_seconds(self):
         mono=[0];wall=[1499];calls=[]
         cache=market.MarketData(clock=lambda:mono[0])
@@ -244,3 +255,4 @@ class MarketTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+

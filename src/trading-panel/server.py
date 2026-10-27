@@ -124,7 +124,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path == "/api/favorites":
+            if path == "/api/monitor-health":
+                now = time.time()
+                packets = MARKET._alert_cache()
+                feeds = [dict(kind=key[0], symbol=key[1], interval=key[2],
+                              status=value.get('status'), updated=value.get('updated'),
+                              age_seconds=round(now-value['updated'], 1) if isinstance(value.get('updated'), (int, float)) else None,
+                              error=value.get('refresh_error') or value.get('error'))
+                         for key, value in packets.items()]
+                density = DENSITIES.snapshot()
+                favorites = FAVORITES.snapshot()
+                data = dict(updated=now, feeds=feeds,
+                            densities={k:density.get(k) for k in ('status','coverage','exchanges','error')},
+                            favorites=dict(status=favorites['status'], error=favorites['error'], storage_error=favorites.get('storage_error'),
+                                           revision=favorites['revision'], counts={k:len(v) for k,v in favorites['groups'].items()}))
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), "application/json")
+            elif path == "/api/favorites":
                 data = dict(FAVORITES.snapshot(), token=control_client.TOKEN)
                 self.send(200, json.dumps(data, ensure_ascii=False).encode(), "application/json")
             elif path == "/api/whales":
@@ -268,7 +283,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.api_error(409, str(exc))
             else:
                 self.send(400, b'{"error":"Invalid command"}', "application/json")
-        except (OSError, sqlite3.Error):
+        except (OSError, sqlite3.Error) as exc:
+            if self.path == '/api/favorites':
+                self.api_error(503, 'Не удалось сохранить избранное: ' + str(exc)[:180])
+                return
             self.api_error(503, 'Хранилище или контроллер недоступны; повторите после обновления')
 
 

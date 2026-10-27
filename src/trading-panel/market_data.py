@@ -459,6 +459,10 @@ class MarketData:
             if self.focus_symbol and self.clock() < self.focus_until:
                 watch = [self.focus_symbol] + [s for s in watch if s != self.focus_symbol]
             self.selection_cursor += 1
+        # Alternate first admission so closed-minute refreshes cannot starve
+        # order books. The existing two-job/one-nonchart limits still apply.
+        if self.selection_cursor % 2 == 0 and symbol:
+            self.get('book', symbol)
         # Fill available slots now; do not add a one-second delay per coin.
         for watched in watch:
             self.get('chart', watched, '1')
@@ -560,3 +564,4 @@ class MarketData:
         if self.prefetcher:
             self.prefetcher.join(timeout=2)
         self.pool.shutdown(wait=True)
+

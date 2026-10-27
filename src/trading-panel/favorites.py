@@ -22,6 +22,7 @@ class Favorites:
         self.path = Path(path) if path else None
         self.lock = threading.RLock()
         self.error = None
+        self.last_write_error = None
         self.state = dict(revision=0, groups={key: [] for key in LIMITS}, commands={})
         try:
             if self.path and self.path.is_symlink():
@@ -46,6 +47,7 @@ class Favorites:
     def snapshot(self):
         with self.lock:
             return dict(status='unavailable' if self.error else 'ok', error=self.error,
+                        storage_error=self.last_write_error,
                         revision=self.state['revision'], groups=copy.deepcopy(self.state['groups']))
 
     def command(self, command):
@@ -82,6 +84,11 @@ class Favorites:
             state['commands'][command['id']] = digest
             state['commands'] = dict(list(state['commands'].items())[-256:])
             if self.path:
-                write(self.path, json.dumps(state, ensure_ascii=False))
+                try:
+                    write(self.path, json.dumps(state, ensure_ascii=False))
+                except OSError as exc:
+                    self.last_write_error = str(exc)[:180]
+                    raise
+                self.last_write_error = None
             self.state = state
             return dict(self.snapshot(), status='accepted')

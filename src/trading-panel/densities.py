@@ -97,6 +97,7 @@ class DensityMonitor:
         self.overlay_watch = {}
         self.targets = []
         self.cursor = 0
+        self.catalog_cursor = 0
         self.sequence = 0
         self.epoch = uuid.uuid4().hex
         self.state_path = Path(state_path) if state_path is not None else None
@@ -177,25 +178,50 @@ class DensityMonitor:
         now = self.clock()
         with self.lock:
             selected = list(dict.fromkeys(self.selected + [venue for venue, until in self.overlay_watch.items() if until > now]))
-        packets = {}
-        for exchange in selected:
-            try:
-                packets[exchange] = self.adapter.exchange_snapshot(exchange)
-            except Exception as exc:
-                packets[exchange] = dict(status='error', updated=0, error=str(exc)[:160])
+        # Rotate catalogs and alternate admission priority. A five-second catalog
+        # TTL must not monopolize the one shared non-chart worker forever.
         with self.lock:
-            self.catalogs.update(packets)
+            turn = self.catalog_cursor
+            self.catalog_cursor += 1
+        if selected:
+            offset = turn % len(selected)
+            selected = selected[offset:] + selected[:offset]
+        def catalogs():
+            packets = {}
+            for exchange in selected:
+                try:
+                    packets[exchange] = self.adapter.exchange_snapshot(exchange)
+                except Exception as exc:
+                    packets[exchange] = dict(status='error', updated=0, error=str(exc)[:160])
+            with self.lock:
+                self.catalogs.update(packets)
+                self._targets()
+        if turn % 2 == 0:
+            catalogs()
+        with self.lock:
             self._targets()
             self._expire(now)
             count = min(2, len(self.targets))
             pairs = [self.targets[(self.cursor+index) % len(self.targets)] for index in range(count)]
             self.cursor += count
+            targets = list(self.targets)
         for exchange, symbol in pairs:
             try:
                 packet = self.adapter.book_snapshot(exchange, symbol)
             except Exception as exc:
                 packet = dict(status='error', updated=0, error=str(exc)[:160])
             self.observe(exchange, symbol, packet, now)
+        if turn % 2:
+            catalogs()
+        # Harvest already completed books every second, not once per 20-pair
+        # rotation. This adds no network requests and preserves source ages.
+        if hasattr(self.adapter, 'peek_book'):
+            for exchange, symbol in targets:
+                try:
+                    packet = self.adapter.peek_book(exchange, symbol)
+                except Exception:
+                    continue
+                self.observe(exchange, symbol, packet, now)
 
     def _record(self, row, now, reason):
         self.sequence += 1
@@ -447,3 +473,4 @@ class DensityMonitor:
             self.thread.join(timeout=2)
         with self.lock:
             self._save(force=True)
+
