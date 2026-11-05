@@ -39,3 +39,20 @@ test('automatic levels require repeated confirmed pivots and current closed cand
  assert.deepEqual(autoLevels(p,end+100),[]);
  assert.deepEqual(autoLevels({...p,candles:[...candles,{...candles[0],t:end}]},end+10),[]);
 });
+test('strategy overlays isolate sources and mark expired signals as history',()=>{
+ const {strategyLevels}=require('../src/trading-panel/chart-levels.js');
+ const event={...source,strategy:'level_break',timeframe:'1',id:'s1',side:'long',signal_price:100,stop:99,target:102,closed_at:now-10,expires:now+50};
+ const p={status:'ok',updated:now,events:[event,{...event,id:'other',exchange:'binance'}]};
+ assert.equal(strategyLevels(p,source,now).length,3);
+ assert.equal(strategyLevels(p,source,now)[0].historical,false);
+ assert.equal(strategyLevels({...p,updated:now+60},source,now+60)[0].historical,true);
+ assert.deepEqual(strategyLevels(p,source,now+60),[]);
+ assert.deepEqual(strategyLevels(p,{...source,symbol:'ETHUSDT'},now),[]);
+ assert.deepEqual(strategyLevels({...p,events:[{...event,stop:101}]},source,now),[]);
+});
+test('strategy arrow timestamp points to the confirming minute candle',()=>{
+ const {strategyLevels}=require('../src/trading-panel/chart-levels.js');
+ const e={...source,strategy:'level_break',timeframe:'1',id:'s',side:'short',signal_price:100,stop:101,target:98,closed_at:now-10,expires:now+50};
+ const entry=strategyLevels({status:'ok',updated:now,events:[e]},source,now).find(l=>l.kind==='entry');
+ assert.equal(entry.time,e.closed_at-60);assert.equal(entry.side,'short');
+});

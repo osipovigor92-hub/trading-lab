@@ -98,6 +98,8 @@
       priceLineVisible:true,lastValueVisible:true,priceLineStyle:L.LineStyle.Dashed,
       priceFormat:{type:'custom',formatter:number,minMove:.00000001}
     });
+    const strategyMarkers=typeof L.createSeriesMarkers==='function'?L.createSeriesMarkers(candles,[]):null;
+    let markerSignature='';
     plot.append(watermark,empty);
     let source='', period=PERIODS[String(options.interval)]||300, bars=[], byTime=new Map(), selectedTime=null;
     let volume=null, indicatorLines=[], disposed=false, confirmed=false, updating=false;
@@ -214,6 +216,13 @@
     }
     function updateLevels(settings) {
       const wanted=new Map();
+      const markers=period===60?(settings.strategyLevels||[]).filter(l=>l.kind==='entry'&&finite(l.time)&&byTime.has(l.time)&&['long','short'].includes(l.side)).slice(0,1).map(l=>({time:l.time,position:l.side==='long'?'belowBar':'aboveBar',shape:l.side==='long'?'arrowUp':'arrowDown',color:l.color,text:(l.historical?'История ':'')+l.side.toUpperCase()})):[];
+      const signature=JSON.stringify(markers);if(signature!==markerSignature){strategyMarkers?.setMarkers(markers);markerSignature=signature;}
+
+      for(const level of (settings.strategyLevels||[]).slice(0,3)){
+        if(!finite(level.price)||level.price<=0||typeof level.title!=='string')continue;
+        wanted.set('signal:'+level.id,{price:level.price,color:level.color,lineWidth:2,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true,title:level.title});
+      }
       for(const level of (settings.autoLevels||[]).slice(0,6)){
         if(!finite(level.price)||level.price<=0||!['support','resistance'].includes(level.type))continue;
         wanted.set('auto:'+level.id,{price:level.price,color:level.type==='support'?'#59d5a1':'#f1848b',lineWidth:2,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true,title:'Авто '+(level.interval==='60'?'1ч':'15м')+' · '+level.touches+' кас.'});
@@ -331,7 +340,7 @@
       observer.disconnect();
       chart.unsubscribeCrosshairMove(crosshair); chart.unsubscribeClick(click); chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishViewport);
       host.removeEventListener('keydown',keydown); plot.removeEventListener('pointerdown',focus);
-      chart.remove(); disposed=true; host.replaceChildren(); delete host.labExchangeChart;
+      strategyMarkers?.detach();chart.remove(); disposed=true; host.replaceChildren(); delete host.labExchangeChart;
     }
     const api={setPacket,setLive,reset,dispose,resize,zoom,pan,getViewport,fitLevels,getLevels:()=>[...priceLines].map(([id,line])=>({id,...line.options()})),priceToCoordinate:value=>candles.priceToCoordinate(value)};
     host.labExchangeChart=api;

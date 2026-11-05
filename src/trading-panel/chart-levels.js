@@ -39,13 +39,23 @@
   if(typeof cryptoApi?.randomUUID==='function')return cryptoApi.randomUUID();
   return Array.from(cryptoApi.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
  }
- const api={cleanManual,densityLevels,levelId,autoLevels};if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;
+ function strategyLevels(packet,source,now=Date.now()/1000){
+  if(!source||packet?.status!=='ok'||!fresh(packet.updated,now,15)||!Array.isArray(packet.events))return [];
+  const events=packet.events.filter(e=>e&&e.exchange===source.exchange&&e.symbol===source.symbol&&e.strategy==='level_break'&&e.timeframe==='1'&&['long','short'].includes(e.side)&&typeof e.id==='string'&&e.id.length<=200&&[e.signal_price,e.stop,e.target].every(positive)&&finite(e.closed_at)&&e.closed_at<=now&&now-e.closed_at<=86400&&finite(e.expires)&&e.expires>e.closed_at&&(e.side==='long'?e.stop<e.signal_price&&e.target>e.signal_price:e.stop>e.signal_price&&e.target<e.signal_price));
+  const e=events.sort((a,b)=>b.closed_at-a.closed_at)[0];if(!e)return [];
+  const historical=Boolean(e.outcome)||now>e.expires||(packet.state!==undefined&&(packet.state!=='monitoring'||!packet.coverage?.some(r=>r.symbol===e.symbol&&r.status!=='blocked'))),prefix=(historical?'История ':'')+e.side.toUpperCase()+' 1м · ';
+  return [['entry',e.signal_price,'Сигнал','#55cee9'],['stop',e.stop,'Стоп','#f1848b'],['target',e.target,'Цель','#59d5a1']].map(([kind,price,label,color])=>({id:e.id+':'+kind,kind,side:e.side,time:e.closed_at-60,price,title:prefix+label,color:historical?'#a7b3be':color,historical}));
+ }
+ const api={cleanManual,densityLevels,levelId,autoLevels,strategyLevels};if(typeof module!=='undefined')module.exports=api;if(typeof document==='undefined')return;
  function create({tools,after,widget,onChange}){
   const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
   const button=(text,action)=>{const b=el('button','screener-order',text);b.type='button';b.addEventListener('click',action);return b;};
   let saved;try{saved=JSON.parse(localStorage.getItem(STORE));}catch{}saved=saved&&typeof saved==='object'&&!Array.isArray(saved)?saved:{};
   const stored=new Map(Object.entries(saved).filter(([key])=>/^(bybit|binance|okx|gate|bitget):[A-Z0-9]{1,28}USDT$/.test(key)).slice(-48).map(([key,value])=>[key,cleanManual(value)]));
   let source=null,manual=[],densityPacket=null,densityError='',densityEnabled=false,drawing=false,editorOpen=false,revision=0,inFlight=null,lastRead=0;
+  let strategyPacket=null,strategyEnabled=false;
+  const signals=button('Сигналы',()=>{strategyEnabled=!strategyEnabled;signals.setAttribute('aria-pressed',String(strategyEnabled));onChange();});signals.setAttribute('aria-pressed','false');tools.append(signals);
+  document.addEventListener('lab-strategy-signals',e=>{strategyPacket=e.detail;if(source?.isOpen()&&strategyEnabled)onChange();});
   let autoEnabled=false,autoPackets=[],autoBusy=false,autoRead=0,autoError='';
   const auto=button('Автоуровни',()=>{autoEnabled=!autoEnabled;autoRead=0;render();onChange();poll(true);});auto.setAttribute('aria-pressed','false');tools.append(auto);
   const autoStatus=el('p','chart-density-status');autoStatus.hidden=true;after.after(autoStatus);
@@ -96,7 +106,7 @@
   function open(next){revision++;autoPackets=[];autoRead=0;autoError="";inFlight?.abort();inFlight=null;source=next;manual=cleanManual(stored.get(pair(source)));drawing=false;input.value='';lastRead=0;densityError='';densityPacket=null;if(next.density){densityEnabled=true;densityPacket={updated:next.density.last_seen,status:'partial',rows:[{...next.density,exchange:next.exchange,symbol:next.symbol}]};}render();poll(true);}
   function close(){revision++;inFlight?.abort();inFlight=null;source=null;drawing=false;widget.classList.remove('is-drawing-level');}
   widget.addEventListener('keydown',event=>{if(event.key==='Escape'&&drawing){event.preventDefault();event.stopPropagation();drawing=false;render();}});
-  return {open,close,poll,render,settings:()=>({autoLevels:autoEnabled?automatic():[],levels:manual,densities:densityEnabled?densityLevels(densityPacket,source):[]}),placePrice:value=>{if(drawing)addPrice(value);}};
+  return {open,close,poll,render,settings:()=>({strategyLevels:strategyEnabled?strategyLevels(strategyPacket,source):[],autoLevels:autoEnabled?automatic():[],levels:manual,densities:densityEnabled?densityLevels(densityPacket,source):[]}),placePrice:value=>{if(drawing)addPrice(value);}};
  }
  scope.LabChartLevels={...api,create};
 })(typeof window==='undefined'?globalThis:window);

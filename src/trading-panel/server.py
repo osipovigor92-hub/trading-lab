@@ -26,7 +26,10 @@ EXCHANGE_DATA = get_exchange_data()
 # Read-only observations restart their continuous-age clock after service restart.
 DENSITIES = DensityMonitor(EXCHANGE_DATA, background=__name__ == '__main__')
 WHALES = WhaleMonitor(MARKET, DENSITIES, state_path=Path('/var/lib/trading-manual-paper/whales.json'), background=__name__ == '__main__')
+from strategy_monitor import StrategyMonitor
+STRATEGIES = StrategyMonitor(EXCHANGE_DATA, FAVORITES, BOTS, "/var/lib/trading-manual-paper/strategy-signals.json", background=__name__ == "__main__")
 FILES = {
+    "/strategy-alerts.js": ("strategy-alerts.js", "text/javascript; charset=utf-8"),
     "/bots.js": ("bots.js", "text/javascript; charset=utf-8"),
     "/bots.css": ("bots.css", "text/css; charset=utf-8"),
     "/favorites.js": ("favorites.js", "text/javascript; charset=utf-8"),
@@ -143,6 +146,8 @@ class Handler(BaseHTTPRequestHandler):
                             favorites=dict(status=favorites['status'], error=favorites['error'], storage_error=favorites.get('storage_error'),
                                            revision=favorites['revision'], counts={k:len(v) for k,v in favorites['groups'].items()}))
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), "application/json")
+            elif path == "/api/strategy-signals":
+                self.send(200, json.dumps(STRATEGIES.snapshot(), ensure_ascii=False, allow_nan=False).encode(), "application/json")
             elif path == "/api/bots":
                 data = dict(BOTS.snapshot(), token=control_client.TOKEN)
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), "application/json")

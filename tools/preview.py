@@ -359,6 +359,8 @@ class Handler(BaseHTTPRequestHandler):
         data=fixtures()
         if path == '/api/whales':
             body=json.dumps(dict(status='ok',updated=time.time(),epoch='preview',cursor=0,events=[],targets=[],coverage={})).encode();kind='application/json; charset=utf-8'
+        elif path == '/api/strategy-signals':
+            body=json.dumps(dict(status='ok',state='not_configured',updated=time.time(),events=[],coverage=[],monitored=0,ready=0)).encode();kind='application/json; charset=utf-8'
         elif path == '/api/bots':
             body=json.dumps(dict(BOTS.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path == '/api/favorites':
