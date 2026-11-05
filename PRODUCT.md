@@ -83,3 +83,9 @@ The live-chart extension passed functional browser checks at 1280/390/320px for 
 ## Continuous observation
 
 Screener catalogs, chart history and streams, density observations and alert polling start without first visiting their pages and continue across navigation. Background public GETs use an explicit endpoint allowlist; commands keep their existing visibility behavior. Hidden charts retain received samples without repainting. Browser suspension and network outages remain reflected by original freshness proof. The price line retains its number but no longer has the “Цена сейчас” title.
+
+
+## Bot builder — work in progress, November 2026
+The new Bots page contains a catalog of ten strategy templates and a configuration form inspired by the user's Diops references. These are drafts, not executable bots. `/api/bots` persists one configuration per strategy with revision conflict protection; saving requires the existing control authorization. No strategy runner or market-wide subscription is added. Statistics remain unavailable until an actual PAPER journal is integrated. No timer replaces the form. Remaining work: strategy-specific rules, execution engine, fees/slippage, journal statistics, browser verification, deployment.
+
+The first pure signal evaluator now lives in `bot_signals.py`: level breakout, long/short, preceding-close crossing, volume against the prior 20 bars, 75-second packet freshness, exact closed boundary, contiguous candles, source identity and pre-signal level confirmation. It returns a deterministic event key for future persistent deduplication. Eight isolated tests pass. It is not yet wired to an autonomous runner or the manual PAPER ledger; no execution readiness flag has changed.

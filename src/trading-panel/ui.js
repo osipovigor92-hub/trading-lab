@@ -3,6 +3,7 @@
  'use strict';
  const ns='http://www.w3.org/2000/svg';
  const paths={
+  bots:['M4 5h16','M4 12h16','M4 19h16','M8 3v4','M16 10v4','M10 17v4'],
   overview:['M4 4h6v16H4z','M14 4h6v6h-6z','M14 14h6v6h-6z'],
   market:['M21 21l-5-5','M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13'],
   densities:['M4 4v16h16','M7 7h6','M7 11h11','M7 15h8','M17 7h3','M18 15h2'],
@@ -68,3 +69,4 @@
  }
  scope.LabUI={icon,brand,coin,syncChildren};
 })(typeof window==='undefined'?globalThis:window);
+

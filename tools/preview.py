@@ -14,6 +14,8 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 PANEL = ROOT/'src/trading-panel'
 sys.path.insert(0, str(PANEL))
+from bot_builder import BotBuilder
+BOTS = BotBuilder()
 from favorites import Favorites
 FAVORITES = Favorites()
 import selection
@@ -357,6 +359,8 @@ class Handler(BaseHTTPRequestHandler):
         data=fixtures()
         if path == '/api/whales':
             body=json.dumps(dict(status='ok',updated=time.time(),epoch='preview',cursor=0,events=[],targets=[],coverage={})).encode();kind='application/json; charset=utf-8'
+        elif path == '/api/bots':
+            body=json.dumps(dict(BOTS.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path == '/api/favorites':
             body=json.dumps(dict(FAVORITES.snapshot(),token=CONTROL.token),ensure_ascii=False).encode();kind='application/json; charset=utf-8'
         elif path == '/api/manual-paper':
@@ -396,7 +400,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers();self.wfile.write(body)
 
     def do_POST(self):
-        if self.path not in ('/api/models-control','/api/manual-paper','/api/favorites'):
+        if self.path not in ('/api/models-control','/api/manual-paper','/api/favorites','/api/bots'):
             self.send_error(404);return
         if self.headers.get('X-Lab-Control') != CONTROL.token or self.headers.get('Content-Type')!='application/json':
             self.send_error(403);return
@@ -404,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
             length=int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= (16384 if self.path == "/api/favorites" else 4096): raise ValueError('Invalid length')
             command=json.loads(self.rfile.read(length))
-            value=(FAVORITES.command(command) if self.path == "/api/favorites" else MANUAL.command(command) if self.path=='/api/manual-paper' else CONTROL.command(command))
+            value=(BOTS.command(command) if self.path == "/api/bots" else FAVORITES.command(command) if self.path == "/api/favorites" else MANUAL.command(command) if self.path=='/api/manual-paper' else CONTROL.command(command))
             status=202
         except (ValueError, KeyError, TypeError) as exc:
             value=dict(status='error', error=str(exc));status=409

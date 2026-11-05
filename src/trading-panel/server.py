@@ -11,6 +11,8 @@ from manual_paper import ManualPaper
 from exchange_data import get_exchange_data
 from densities import DensityMonitor
 
+from bot_builder import BotBuilder
+BOTS = BotBuilder("/var/lib/trading-manual-paper/bots.json")
 from favorites import Favorites
 FAVORITES = Favorites("/var/lib/trading-manual-paper/favorites.json")
 from whales import WhaleMonitor
@@ -25,6 +27,8 @@ EXCHANGE_DATA = get_exchange_data()
 DENSITIES = DensityMonitor(EXCHANGE_DATA, background=__name__ == '__main__')
 WHALES = WhaleMonitor(MARKET, DENSITIES, state_path=Path('/var/lib/trading-manual-paper/whales.json'), background=__name__ == '__main__')
 FILES = {
+    "/bots.js": ("bots.js", "text/javascript; charset=utf-8"),
+    "/bots.css": ("bots.css", "text/css; charset=utf-8"),
     "/favorites.js": ("favorites.js", "text/javascript; charset=utf-8"),
     "/lightweight-charts-5.2.1.js": ("lightweight-charts-5.2.1.js", "text/javascript; charset=utf-8"),
     "/exchange-chart.js": ("exchange-chart.js", "text/javascript; charset=utf-8"),
@@ -138,6 +142,9 @@ class Handler(BaseHTTPRequestHandler):
                             densities={k:density.get(k) for k in ('status','coverage','exchanges','error')},
                             favorites=dict(status=favorites['status'], error=favorites['error'], storage_error=favorites.get('storage_error'),
                                            revision=favorites['revision'], counts={k:len(v) for k,v in favorites['groups'].items()}))
+                self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), "application/json")
+            elif path == "/api/bots":
+                data = dict(BOTS.snapshot(), token=control_client.TOKEN)
                 self.send(200, json.dumps(data, ensure_ascii=False, allow_nan=False).encode(), "application/json")
             elif path == "/api/favorites":
                 data = dict(FAVORITES.snapshot(), token=control_client.TOKEN)
@@ -262,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self.send(503, b'{"error":"Controller unavailable"}', 'application/json')
             return
-        if self.path not in ("/api/models-control", "/api/manual-paper", "/api/favorites"):
+        if self.path not in ("/api/models-control", "/api/manual-paper", "/api/favorites", "/api/bots"):
             self.send(404, b'{"error":"Not found"}', "application/json")
             return
         if not control_client.authorized(self.headers):
@@ -273,13 +280,13 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= (16384 if self.path == "/api/favorites" else 4096) or self.headers.get("Transfer-Encoding"):
                 raise ValueError("Invalid request size")
             command = json.loads(self.rfile.read(length))
-            result = (FAVORITES.command(command) if self.path == "/api/favorites" else
+            result = (BOTS.command(command) if self.path == "/api/bots" else FAVORITES.command(command) if self.path == "/api/favorites" else
                       MANUAL.command(command) if self.path == '/api/manual-paper' else
                       control_client.call(dict(op="command", command=command)))
             self.send(202 if result.get("status") == "accepted" else 409,
                       json.dumps(result, ensure_ascii=False, allow_nan=False).encode(), "application/json")
         except (ValueError, TypeError, OverflowError) as exc:
-            if self.path in ('/api/manual-paper', '/api/favorites'):
+            if self.path in ('/api/manual-paper', '/api/favorites', '/api/bots'):
                 self.api_error(409, str(exc))
             else:
                 self.send(400, b'{"error":"Invalid command"}', "application/json")
