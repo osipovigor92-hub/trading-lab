@@ -55,7 +55,10 @@ function currentAssistant(kind,symbol,now,mode){
     await route.fulfill({contentType:'application/json',json:packet});
    });
    try{
-    await page.goto(`http://127.0.0.1:${port}/`);await until(()=>page.locator('.screener-events .screener-event[data-id]').count().then(n=>n>=1),'compact feed');
+    await page.goto(`http://127.0.0.1:${port}/`);
+    // The compact feed is drawn only in the active table view.
+    await page.getByRole('button',{name:'Таблица',exact:true}).click();
+    await page.locator('.screener-events .screener-event[data-id]').first().waitFor({state:'visible'});
     await page.getByRole('button',{name:'Алерты',exact:true}).click();
    }catch(error){
     const state=await page.evaluate(()=>({url:location.href,readyState:document.readyState,title:document.title,navigationReady:!!window.LabNavigation,bodyText:document.body?.innerText.slice(0,2500),alertsButtons:Array.from(document.querySelectorAll('button[aria-controls="page-alerts"]')).map(button=>({label:button.getAttribute('aria-label'),text:button.textContent,visible:!!button.getClientRects().length})),mobileNavigation:Array.from(document.querySelectorAll('.mobile-nav')).map(nav=>({display:getComputedStyle(nav).display,html:nav.outerHTML.slice(0,1800)}))})).catch(e=>({diagnosticError:e.message}));
