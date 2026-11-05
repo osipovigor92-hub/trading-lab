@@ -11,7 +11,10 @@ async function retainedProofPhase(browser){
  const settle=()=>{for(const [id,due]of pending)if(now>=due){receipts.set(id,due);pending.delete(id);}};
  const send=async(route,packet)=>{lastTraffic=Date.now();active++;peak=Math.max(peak,active);try{await route.fulfill({json:packet});}finally{active--;lastTraffic=Date.now();}};
  try{
-  await page.clock.install({time:new Date(now*1000)});
+  // Freeze before navigation so real route-handling time cannot start an
+  // extra poll between deterministic two-second advances.
+  await page.clock.install({time:new Date((now-60)*1000)});
+  await page.clock.pauseAt(new Date(now*1000));
   await page.addInitScript(()=>{localStorage.setItem('lab-screener-view-v1',JSON.stringify('table'));class QuietSocket{constructor(){this.readyState=0;}close(){this.readyState=3;}send(){}}window.WebSocket=QuietSocket;});
   page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{assert.ok(request.url().startsWith(`http://127.0.0.1:${port}/`),'phase uses only local synthetic routes');if(request.method()!=='GET')commands.push(request.url());});
   await page.route(`http://127.0.0.1:${port}/`,async route=>{const response=await route.fetch();await route.fulfill({response,body:(await response.text()).replace(' data-demo="true"','')});});
