@@ -10,11 +10,19 @@
   }),utcTime=new Intl.DateTimeFormat('ru-RU',{timeZone:'UTC',hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const utc = t => utcDate.format(t*1000)+' UTC';
   const candlePoint = ({time,open,high,low,close})=>({time,open,high,low,close});
+  const ALERT_LABELS={support:'Поддержка',resistance:'Сопротивление',breakout_up:'Граница пробоя вверх',breakout_down:'Граница пробоя вниз',price:'Цена при алерте',none:'Уровень не сохранён'};
+  function alertOverlay(value){
+    if(!value||typeof value.kind!=='string'||!Object.hasOwn(ALERT_LABELS,value.kind))return null;
+    const {kind,low,high}=value,time=finite(value.time)&&value.time>0&&value.time<=8640000000000?value.time:null;
+    if(kind==='none')return {kind,time,label:ALERT_LABELS[kind]};
+    if(!finite(low)||!finite(high)||low<=0||high<low||high>1e12||!['support','resistance'].includes(kind)&&low!==high)return null;
+    return {kind,low,high,time,label:ALERT_LABELS[kind]};
+  }
   function palette(){
     const style=scope.getComputedStyle?.(document.documentElement);
     const tokens={bg:'#101214',text:'#a7b3be',grid:'#2a2d31',cursor:'#69737e',up:'#26a69a',down:'#ef5350',live:'#55cee9',
       'ema-fast':'#4bd0f5','ema-slow':'#a78bcc',vwap:'#e9bc68',support:'#a78bcc',resistance:'#e9bc68',
-      'density-bid':'#59d5a1','density-ask':'#f1848b',unconfirmed:'#a7b3be'};
+      'density-bid':'#59d5a1','density-ask':'#f1848b',unconfirmed:'#a7b3be',alert:'#f6a954'};
     return Object.fromEntries(Object.entries(tokens).map(([key,fallback])=>[key,style?.getPropertyValue('--chart-'+key).trim()||fallback]));
   }
   function barsFrom(packet, period) {
@@ -246,6 +254,12 @@
         const amount=finite(level.notional)?Math.round(level.notional/1000)+'к':'';
         wanted.set('density:'+level.id,{price:level.price,color:level.confirmed?colors['density-'+level.side]:colors.unconfirmed,lineWidth:1,lineStyle:L.LineStyle.Dotted,axisLabelVisible:true,title:(level.confirmed?'':'? ')+(level.side==='bid'?'Пок. ':'Прод. ')+amount});
       }
+      const alert=alertOverlay(settings.alert);
+      if(alert&&alert.kind!=='none'){
+        const line=(key,price,title)=>wanted.set('alert:'+key,{price,color:colors.alert,lineWidth:2,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true,title});
+        if(alert.low===alert.high)line('price',alert.low,alert.kind==='price'?alert.label:'Алерт: '+alert.label.toLowerCase());
+        else {line('low',alert.low,'Алерт: низ зоны');line('high',alert.high,'Алерт: верх зоны');}
+      }
       for (const [key,line] of priceLines) if (!wanted.has(key)) {candles.removePriceLine(line);priceLines.delete(key);}
       for (const [key,options] of wanted) {
         const existing=priceLines.get(key);
@@ -254,14 +268,18 @@
       }
       host.dataset.chartManualLevels=String([...wanted.keys()].filter(key=>key.startsWith('manual:')).length);
       host.dataset.chartDensityLevels=String([...wanted.keys()].filter(key=>key.startsWith('density:')).length);
+      host.dataset.chartAlertLevels=String([...wanted.keys()].filter(key=>key.startsWith('alert:')).length);
     }
-    function fitLevels() {
-      if (disposed||!bars.length||!priceLines.size) return;
+    function fitLevels(scope) {
+      if (disposed||!bars.length||!priceLines.size) return false;
+      const lines=[...priceLines].filter(([key])=>scope!=='alert'||key.startsWith('alert:')).map(([,line])=>line);
+      if(!lines.length)return false;
       const range=chart.timeScale().getVisibleLogicalRange();
       const visible=bars.filter((_,i)=>!range||i>=Math.floor(range.from)&&i<=Math.ceil(range.to));
-      const values=[...visible.flatMap(b=>[b.low,b.high]),...priceLines.values()].map(v=>typeof v==='number'?v:v.options().price);
+      const values=[...(visible.length?visible:bars.slice(-90)).flatMap(b=>[b.low,b.high]),...lines.map(line=>line.options().price)];
       const low=Math.min(...values),high=Math.max(...values),padding=Math.max(high-low,high*.001)*.1;
       candles.priceScale().setVisibleRange({from:Math.max(low*.5,low-padding),to:high+padding});
+      return true;
     }
     function setPacket(packet, settings={}) {
       if (disposed) return;
@@ -319,7 +337,7 @@
       if (indicatorLines.length && (barsChanged || indicatorsCreated)) {
         const all=indicatorData(bars); ['ema20','ema50','vwap60'].forEach((key,i)=>syncSeries(indicatorLines[i],all[key],indicatorValues[key]));indicatorValues=all;
       }
-      levelSettings={levels:settings.levels,densities:settings.densities};updateLevels(levelSettings);
+      levelSettings={levels:settings.levels,densities:settings.densities,alert:settings.alert};updateLevels(levelSettings);
       // The same REST candle window may be polled while a live sample expires.
       // Re-evaluate its own stamps without re-submitting closed auxiliary series.
       if (!barsChanged) setLive(liveView);
@@ -361,11 +379,12 @@
       host.removeEventListener('keydown',keydown); plot.removeEventListener('pointerdown',focus);
       chart.remove(); disposed=true; host.replaceChildren(); delete host.labExchangeChart;
     }
-    const api={setPacket,setLive,reset,dispose,resize,zoom,pan,getViewport,fitLevels,getLevels:()=>[...priceLines].map(([id,line])=>({id,...line.options()})),priceToCoordinate:value=>candles.priceToCoordinate(value)};
+    const clearAlert=()=>{if(levelSettings.alert){levelSettings={...levelSettings,alert:null};updateLevels(levelSettings);}};
+    const api={setPacket,setLive,reset,dispose,resize,zoom,pan,getViewport,fitLevels,clearAlert,restorePriceScale:()=>candles.priceScale().applyOptions({autoScale:true}),getLevels:()=>[...priceLines].map(([id,line])=>({id,...line.options()})),priceToCoordinate:value=>candles.priceToCoordinate(value)};
     host.labExchangeChart=api;
     host.dataset.chartEngine='lightweight-charts-'+L.version();
     setPacket(null,{confirmed:false,volume:options.volume,indicators:options.indicators});
     return api;
   }
-  scope.LabExchangeChart={create};
+  scope.LabExchangeChart={create,alertOverlay};
 })(typeof window==='undefined'?globalThis:window);

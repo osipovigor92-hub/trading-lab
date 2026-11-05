@@ -1,9 +1,23 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {observationFeed,currentEvents,consume,archive,signalDirection,recommendation,currentRecommendation,eventTitle}=require('../src/trading-panel/fresh-alerts.js');
+const {observationFeed,currentEvents,consume,archive,signalDirection,recommendation,currentRecommendation,eventTitle,alertChart}=require('../src/trading-panel/fresh-alerts.js');
 const event=(sequence=1)=>({id:'epoch:'+sequence,sequence,symbol:'BTCUSDT',kind:'ready',label:'Кандидат готов',detail:'Все проверки',time:1000,expires:1008,sources:{quote:1000,chart:1000,candle:980,book:1000,fetched:1000}});
 const packet=(events=[event()],cursor=1)=>({status:'ok',epoch:'epoch',scope:'filters',updated:1000,cursor,events});
 const signal=(kind='momentum_up')=>({...event(),kind,exchange:'bybit',setup:kind,signal_id:'BTCUSDT:'+kind+':1:960',candle_end:960,sources:{quote:1000,chart:1000,candle:960},
  recommendation:{direction:kind.endsWith('_up')?'LONG':'SHORT',setup:kind,exchange:'bybit',timeframe:'1',signal_id:'BTCUSDT:'+kind+':1:960',candle_end:960,expires:1008,reason:'EMA и объём подтверждены',invalidation:'Закрытие вернулось за EMA20'}});
+
+test('alert charts use the original zone or breakout boundary even after the alert expires',()=>{
+ const near={...event(),kind:'near_level',price:103,level:{side:'support',low:99.42,high:100.01}};
+ const [saved]=archive([],[near],1020);
+ assert.deepEqual(alertChart(saved),{exchange:'bybit',symbol:'BTCUSDT',interval:'1',alert:{kind:'support',low:99.42,high:100.01,time:1000}});
+ for(const kind of ['breakout_up','breakout_down'])assert.deepEqual(alertChart({...signal(kind),price:103,breakout_level:99.42}).alert,{kind,low:99.42,high:99.42,time:1000});
+});
+test('unrelated or missing levels are never invented from prose or old momentum context',()=>{
+ assert.deepEqual(alertChart({...signal(),breakout_level:99,price:103}).alert,{kind:'price',low:103,high:103,time:1000});
+ assert.equal(alertChart({...event(),kind:'near_level',detail:'Поддержка 99–100',level:{side:'support',low:100,high:99}}).alert.kind,'none');
+ assert.equal(alertChart({...event(),price:Infinity}).alert.kind,'none');
+ assert.equal(alertChart({...event(),symbol:'<script>'}),null);
+ assert.equal(alertChart({...event(),exchange:'okx'}),null);
+});
 
 test('only confirmed directional setups carry matching source-bound recommendations',()=>{
  for(const kind of ['breakout_up','momentum_up','breakout_down','momentum_down']){const s=signal(kind),direction=kind.endsWith('_up')?'LONG':'SHORT';assert.equal(signalDirection(kind),direction);assert.equal(recommendation(s,1000).direction,direction);assert.equal(eventTitle(s,true,1000),'Рекомендация '+direction);assert.equal(eventTitle(s,false,1000),direction+' · история');}

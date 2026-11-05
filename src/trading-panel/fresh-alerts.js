@@ -42,7 +42,19 @@
   const events=currentEvents(packet,now),active=new Set(events.map(e=>e.id));
   return archive(history,events,now).map(e=>({...e,live:active.has(e.id)}));
  }
- const api={observationFeed,currentEvents,consume,archive,kinds,signalDirection,recommendation,currentRecommendation,eventTitle};scope.LabMarketAlerts=api;
+ function alertChart(event){
+  if(!event||!kinds.includes(event.kind)||typeof event.symbol!=='string'||!/^[A-Z0-9]{2,24}USDT$/.test(event.symbol)||event.exchange!=null&&event.exchange!=='bybit')return null;
+  const price=n=>finite(n)&&n>0&&n<=1e12;
+  const zone=event.level;
+  let mark={kind:'none'};
+  if(event.kind==='near_level'&&zone&&['support','resistance'].includes(zone.side)&&price(zone.low)&&price(zone.high)&&zone.low<=zone.high)
+   mark={kind:zone.side,low:zone.low,high:zone.high};
+  else if(['breakout_up','breakout_down'].includes(event.kind)&&price(event.breakout_level))
+   mark={kind:event.kind,low:event.breakout_level,high:event.breakout_level};
+  else if(price(event.price))mark={kind:'price',low:event.price,high:event.price};
+  return {exchange:'bybit',symbol:event.symbol,interval:'1',alert:{...mark,time:event.time}};
+ }
+ const api={observationFeed,currentEvents,consume,archive,kinds,signalDirection,recommendation,currentRecommendation,eventTitle,alertChart};scope.LabMarketAlerts=api;
  if(typeof module!=='undefined')module.exports=api;
  if(typeof document==='undefined')return;
  document.addEventListener('DOMContentLoaded',()=>{
@@ -68,12 +80,20 @@
   const persist=()=>{try{localStorage.setItem(key,JSON.stringify({cursor,history}));}catch{note.textContent='Браузер запретил сохранение: история доступна до закрытия страницы. Уведомления требуют открытого браузера.';}};
   const query=()=>{let filters={};try{const values=JSON.parse(localStorage.getItem('lab-selection-v1')||'null');if(values&&typeof values==='object'&&!Array.isArray(values))for(const [k,v]of Object.entries(values))if(finite(v))filters[k]=v;}catch{}const search=(document.querySelector('[aria-label="Поиск монеты"]')?.value||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,24);let watch=[];try{const saved=JSON.parse(localStorage.getItem('lab-favorites-v1')||'[]');if(Array.isArray(saved))watch=[...new Set(saved.filter(s=>typeof s==='string'&&/^[A-Z0-9]{2,24}USDT$/.test(s)))].slice(0,8);}catch{}return new URLSearchParams({...filters,search,watch:watch.join(',')}).toString();};
   const openCoin=symbol=>document.dispatchEvent(new CustomEvent('lab-coin',{detail:{symbol,interval:'1'}}));
+  const eventCharts=new WeakMap();
+  function updateChartAction(row,event){
+   const action=row.querySelector('.fresh-event-chart'),target=alertChart(event);eventCharts.set(row,target);
+   if(action)action.hidden=!target;
+  }
   function updateEvent(row,e,historical){const now=Date.now()/1000,direction=signalDirection(e.kind),r=!historical?recommendation(e,now):null,saved=recommendation(e,e.time);row.dataset.kind=e.kind;row.dataset.id=e.id;row.dataset.live=String(!historical);row.dataset.direction=direction||'none';row.dataset.currentRecommendation=String(!!r);const badge=row.querySelector('.fresh-direction');badge.hidden=!direction;badge.textContent=eventTitle(e,!historical,now);row.querySelector('.fresh-kind').textContent=e.label;row.querySelector('.fresh-event-symbol').textContent=(direction?'Bybit · ':'')+e.symbol+(finite(e.score)?' · активность '+e.score+' / 100':'');row.querySelector('.fresh-event-detail').textContent=saved?.reason||e.detail;const invalidation=row.querySelector('.fresh-invalidation');invalidation.hidden=!saved;invalidation.textContent=saved?'Отмена: '+saved.invalidation:'';const price=row.querySelector('.fresh-event-price');price.hidden=!direction||!finite(e.price)||e.price<=0;price.textContent=!price.hidden?'Цена сигнала: '+e.price.toLocaleString('ru-RU',{maximumSignificantDigits:8})+' USDT · закрытые свечи 1м':'';row.querySelector('.fresh-event-proof').textContent='Наблюдение '+new Date(e.time*1000).toLocaleString('ru-RU')+(historical?' · история — сохранённое наблюдение':r?' · рекомендация подтверждена':' · свежесть проверена');}
   function eventRow(e,historical){const row=el('div','fresh-event'),body=el('div','fresh-event-body'),caption=el('div','fresh-event-caption');caption.append(el('strong','fresh-direction'),el('strong','fresh-kind kind-'+e.kind),el('time','muted',new Date(e.time*1000).toLocaleTimeString('ru-RU')));body.append(caption,el('b','fresh-event-symbol'),el('p','muted fresh-event-price'),el('p','muted fresh-event-detail'),el('p','fresh-invalidation'),el('small','muted fresh-event-proof'));row.append(body);updateEvent(row,e,historical);
-   {const button=el('button','secondary-button','Карточка монеты');button.type='button';button.setAttribute('aria-label','Карточка '+e.symbol);button.addEventListener('click',()=>openCoin(e.symbol));const actions=el('div','fresh-event-actions'),watch=el('button','secondary-button','Наблюдать');watch.type='button';watch.dataset.watchSymbol=e.symbol;watch.setAttribute('aria-label','Наблюдать '+e.symbol);watch.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('lab-watch',{detail:{symbol:e.symbol}})));actions.append(button,watch);row.append(actions);}return row;}
+   {const button=el('button','secondary-button','Карточка монеты');button.type='button';button.setAttribute('aria-label','Карточка '+e.symbol);button.addEventListener('click',()=>openCoin(e.symbol));const actions=el('div','fresh-event-actions'),watch=el('button','secondary-button','Наблюдать');watch.type='button';watch.dataset.watchSymbol=e.symbol;watch.setAttribute('aria-label','Наблюдать '+e.symbol);watch.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('lab-watch',{detail:{symbol:e.symbol}})));
+    const graph=el('button','secondary-button fresh-event-chart');graph.type='button';graph.setAttribute('aria-label','График алерта '+e.symbol);graph.append(scope.LabUI.icon('chart'),el('span','','График'));
+    graph.addEventListener('click',()=>{const target=eventCharts.get(row);if(target)document.dispatchEvent(new CustomEvent('lab-exchange-chart',{detail:target}));});
+    actions.append(graph,button,watch);row.append(actions);updateChartAction(row,e);}return row;}
   function patchEvents(host,events){
    const keep=new Set(events.map(e=>e.id));for(const child of [...host.children])if(!keep.has(child.dataset.id))child.remove();
-   for(const [i,e]of events.entries()){let row=[...host.children].find(n=>n.dataset.id===e.id);if(!row){row=eventRow(e,!e.live);host.insertBefore(row,host.children[i]||null);}else{updateEvent(row,e,!e.live);if(host.children[i]!==row)host.insertBefore(row,host.children[i]||null);}}
+   for(const [i,e]of events.entries()){let row=[...host.children].find(n=>n.dataset.id===e.id);if(!row){row=eventRow(e,!e.live);host.insertBefore(row,host.children[i]||null);}else{updateEvent(row,e,!e.live);updateChartAction(row,e);if(host.children[i]!==row)host.insertBefore(row,host.children[i]||null);}}
   }
   function updateWatchButtons(){let saved=[];try{saved=JSON.parse(localStorage.getItem('lab-favorites-v1')||'[]');}catch{}if(!Array.isArray(saved))saved=[];for(const button of page.querySelectorAll('[data-watch-symbol]')){const on=saved.includes(button.dataset.watchSymbol);button.textContent=on?'В наблюдении':'Наблюдать';button.setAttribute('aria-pressed',String(on));}}
   function render(){const now=Date.now()/1000,events=error?[]:currentEvents(packet,now),observations=observationFeed(history,error?null:packet,now),visible=observations.filter(e=>(filter.value==='all'||e.kind===filter.value)&&(directionFilter.value==='all'||(signalDirection(e.kind)||'none')===directionFilter.value)),connected=!error&&packet?.status==='ok'&&fresh(packet.updated,now,5);

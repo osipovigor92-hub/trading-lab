@@ -4,7 +4,7 @@
  --chart-bg:#101214;--chart-grid:#2a2d31;--chart-text:#a7b3be;--chart-axis:#343d46;
  --chart-cursor:#69737e;--chart-up:#26a69a;--chart-down:#ef5350;--chart-live:#55cee9;
  --chart-ema-fast:#4bd0f5;--chart-ema-slow:#a78bcc;--chart-vwap:#e9bc68;
- --chart-support:#a78bcc;--chart-resistance:#e9bc68;--chart-density-bid:#59d5a1;--chart-density-ask:#f1848b;--chart-unconfirmed:#a7b3be;
+ --chart-support:#a78bcc;--chart-resistance:#e9bc68;--chart-density-bid:#59d5a1;--chart-density-ask:#f1848b;--chart-unconfirmed:#a7b3be;--chart-alert:#f6a954;
 }
 :root[data-theme=light]{
  color-scheme:light;--bg:#f1f5f8;--panel:#fff;--panel-raised:#eaf0f5;--line:#c8d4df;--text:#182734;--muted:#475b6e;
@@ -14,7 +14,7 @@
  --chart-bg:#fbfdff;--chart-grid:#d9e3ec;--chart-text:#465b70;--chart-axis:#a7b8c8;
  --chart-cursor:#677c90;--chart-up:#08806b;--chart-down:#ba3444;--chart-live:#126a84;
  --chart-ema-fast:#126a84;--chart-ema-slow:#684098;--chart-vwap:#895812;
- --chart-support:#684098;--chart-resistance:#895812;--chart-density-bid:#08704e;--chart-density-ask:#aa2d43;--chart-unconfirmed:#596b7e;
+ --chart-support:#684098;--chart-resistance:#895812;--chart-density-bid:#08704e;--chart-density-ask:#aa2d43;--chart-unconfirmed:#596b7e;--chart-alert:#8a4814;
 }
 .theme-toggle{align-self:center;flex:none;width:44px;min-height:44px;color:var(--text);border-color:var(--control-line);background:var(--control)}
 .theme-toggle .ui-icon{width:19px;height:19px}

@@ -54,6 +54,7 @@ jobs:
       - run: node tools/visual-check.cjs
       - run: node tools/test_assistant_ui.cjs
       - run: node tools/test_theme_strategy_ui.cjs
+      - run: node tools/test_alert_chart_ui.cjs
       - run: node tools/test_densities_ui.cjs
       - run: node tools/test_chart_grid_ui.cjs
       - run: node tools/test_chart_levels_ui.cjs

@@ -55,4 +55,5 @@
 .fresh-event[data-live="false"] .fresh-direction{color:var(--muted)}
 .fresh-event[data-live="false"] .fresh-invalidation{color:var(--muted)}
 .fresh-event-actions{display:flex;flex-wrap:wrap;gap:8px}
+.fresh-event-chart{display:inline-flex;align-items:center;gap:7px}
 .fresh-event-actions button[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
