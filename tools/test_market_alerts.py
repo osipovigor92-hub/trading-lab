@@ -61,6 +61,9 @@ class AlertTests(unittest.TestCase):
     def test_ready_and_level_use_original_sources_and_do_not_repeat(self):
         first=self.tick()
         self.assertCountEqual(self.kinds(first),['ready','near_level'])
+        self.assertTrue(all('recommendation' not in event for event in first['events']),
+                        'liquidity readiness and proximity cannot imply LONG or SHORT')
+        self.assertIsNone(first['rows'][0]['assistant']['recommendation'])
         self.assertEqual(first['events'][0]['sources']['book'],1000)
         self.assertEqual(first['events'][0]['sources']['candle'],980)
         second=self.tick(1002)

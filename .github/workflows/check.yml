@@ -38,7 +38,8 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python tools/check.py
   visual:
-    runs-on: ubuntu-latest
+    # The locked Chromium/Playwright release supports this runner image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -52,6 +53,16 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: node tools/visual-check.cjs
       - run: node tools/test_assistant_ui.cjs
+      - run: node tools/test_theme_strategy_ui.cjs
+      - run: node tools/test_alert_chart_ui.cjs
+      - run: node tools/test_densities_ui.cjs
+      - run: node tools/test_chart_grid_ui.cjs
+      - run: node tools/test_chart_levels_ui.cjs
+      - run: node tools/test_chart_stream_ui.cjs
+      - run: node tools/test_data_speed_ui.cjs
+      - run: node tools/test_screener_columns_ui.cjs
+      - run: node tools/test_grid_density_ui.cjs
+      - run: node tools/test_kronos_ui.cjs
       - run: node tools/test_fresh_alerts_ui.cjs
       - uses: actions/upload-artifact@v4
         if: always()

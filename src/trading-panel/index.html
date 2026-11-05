@@ -5,16 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#101418">
 <title>Trading Lab · Помощник трейдера</title>
+<script src="/theme.js"></script>
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/screener.css">
 <link rel="stylesheet" href="/alerts.css">
 <link rel="stylesheet" href="/positions.css">
 <link rel="stylesheet" href="/layout.css">
+<link rel="stylesheet" href="/chart-grid.css">
+<link rel="stylesheet" href="/densities.css">
+<link rel="stylesheet" href="/kronos.css">
+<link rel="stylesheet" href="/strategies.css">
+<link rel="stylesheet" href="/theme.css">
 <script src="/ui.js" defer></script>
 <script src="/data-client.js" defer></script>
 <script src="/app.js" defer></script>
 <script src="/fresh-alerts.js" defer></script>
+<script src="/strategies.js" defer></script>
 <script src="/screener.js" defer></script>
+<script src="/lightweight-charts-5.2.1.js" defer></script>
+<script src="/exchange-chart.js" defer></script>
+<script src="/chart-stream.js" defer></script>
+<script src="/density-signals.js" defer></script>
+<script src="/chart-levels.js" defer></script>
+<script src="/chart-grid.js" defer></script>
+<script src="/kronos.js" defer></script>
+<script src="/densities.js" defer></script>
 <script src="/positions.js" defer></script>
 <script src="/layout.js" defer></script>
 </head>
@@ -23,11 +38,14 @@
 <header class="lab-topbar">
   <div class="app-brand"><div><b>Trading<span>Lab</span></b><span>Помощник трейдера</span></div></div>
   <nav id="dashboard-tabs" aria-label="Разделы помощника"></nav>
-  <span class="market-source">Bybit · USDT perpetual</span>
+  <span class="market-source">USDT perpetual · публичные данные</span>
+  <button id="theme-toggle" class="icon-button theme-toggle" type="button" hidden></button>
 </header>
 <main id="app-main" tabindex="-1">
   <div id="page-market" class="dashboard-page" hidden></div>
+  <div id="page-densities" class="dashboard-page" hidden></div>
   <div id="page-alerts" class="dashboard-page" hidden></div>
+  <div id="page-strategies" class="dashboard-page" hidden></div>
   <div id="page-positions" class="dashboard-page" hidden></div>
   <div id="page-settings" class="dashboard-page" hidden></div>
   <footer>Сигналы и расчёт риска для ручного решения · время браузера · PAPER без реальных ордеров</footer>

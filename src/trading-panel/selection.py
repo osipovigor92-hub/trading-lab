@@ -1,4 +1,4 @@
-"""Eligibility filters and their measured inputs; no direction or order execution."""
+"""Eligibility and confirmed closed-candle setup direction; no order execution."""
 import math
 import re
 import ranking
@@ -124,8 +124,43 @@ def book_summary(books, now):
                 spread=max(b['spread'] for b in valid))
 
 
+def assistant_recommendation(value, filters):
+    """Expose only the direction of an already-confirmed closed-candle setup."""
+    directions = dict(breakout_up='LONG', breakout_down='SHORT',
+                      momentum_up='LONG', momentum_down='SHORT')
+    setup = value.get('setup')
+    if value.get('status') != 'ok' or value.get('eligible') is not True or setup not in directions:
+        return None
+    direction = directions[setup]
+    upward = direction == 'LONG'
+    indicators = value['indicators']
+    liquidity = ('оборот 24ч ниже ' + format(filters['turnover_min'], '.8g') +
+                 ' USDT или спред выше ' + format(filters['spread_max'], '.6g') + '%')
+    if setup.startswith('breakout_'):
+        level = value.get('breakout_level')
+        boundary = format(level, '.8g') if finite(level) else 'границы диапазона 20м'
+        reason = ('Закрытие 1м ' + format(indicators['close'], '.8g') +
+                  (' выше ' if upward else ' ниже ') + boundary +
+                  '; RVOL 5/20 ' + format(indicators['rvol5'], '.3g') + '×.')
+        invalidation = ('Новое закрытие 1м ' + ('на уровне или ниже ' if upward else 'на уровне или выше ') +
+                        boundary + '; удаление от исходной границы пробоя больше 1,5 ATR14; RVOL 5/20 ниже 1,5; ')
+    else:
+        ordering = 'close > EMA20 > EMA50 и close > VWAP60' if upward else 'close < EMA20 < EMA50 и close < VWAP60'
+        reason = (ordering + '; RVOL 5/20 ' + format(indicators['rvol5'], '.3g') +
+                  '×; изменение 5м ' + format(indicators['change5_pct'], '+.3g') + '%.')
+        invalidation = ('На новой закрытой свече 1м перестало выполняться ' + ordering +
+                        '; RVOL 5/20 ниже 1,5; диапазон 5м ниже 0,2%; изменение 5м ' +
+                        ('ниже +0,1%' if upward else 'выше −0,1%') +
+                        '; измеренное удаление от исходного пробоя больше 1,5 ATR14; ')
+    invalidation += liquidity + '; нет свежего подтверждения котировки или закрытых свечей.'
+    expires = min(value['sources'][key] + limit for key, limit in (('quote', 45), ('chart', 75), ('candle', 120)))
+    return dict(direction=direction, exchange='bybit', timeframe='1', setup=setup,
+                reason=reason, invalidation=invalidation, signal_id=value['signal_id'],
+                candle_end=value['candle_end'], expires=expires)
+
+
 def assistant(row, stamp, chart, now, quote_available=True, filters=None):
-    """Explain observed activity; no book dependency, prediction or order advice."""
+    """Explain activity and confirmed setup direction; no order execution."""
     chart = chart if isinstance(chart, dict) else {}
     filters = filters or DEFAULT_FILTERS
     sources = dict(quote=stamp, chart=chart.get('updated'), candle=chart.get('candle_end'))
@@ -159,13 +194,13 @@ def assistant(row, stamp, chart, now, quote_available=True, filters=None):
             any(indicators.get(key, -1) < 0 for key in ('atr14', 'atr14_pct', 'rvol5', 'range5_pct')) or
             not 0 <= indicators.get('rsi14', -1) <= 100):
         missing.append('Полное окно индикаторов и объём')
-    result = dict(status='pending' if missing else 'ok', timeframe='1',
+    result = dict(status='pending' if missing else 'ok', timeframe='1', exchange='bybit',
                   updated=chart.get('updated') if not missing else None,
                   candle_end=chart.get('candle_end') if not missing else None,
                   sources=sources, freshness=freshness, indicators={} if missing else dict(indicators),
                   trend='unknown', activity='unknown', setup='waiting', score=None,
                   eligible=None, score_components=[], reasons=[], missing=missing, version=1,
-                  signal_id=None, breakout_level=None, extension_atr=None,
+                  signal_id=None, breakout_level=None, extension_atr=None, recommendation=None,
                   note='Индекс активности 0–100; не вероятность прибыли')
     if missing:
         result['reasons'] = ['Ожидаем: ' + ', '.join(missing)]
@@ -230,6 +265,7 @@ def assistant(row, stamp, chart, now, quote_available=True, filters=None):
                   breakout_level=breakout_level, extension_atr=extension,
                   signal_id=':'.join((row['symbol'], setup, '1', format(chart['candle_end'], '.0f')))
                   if setup not in ('watch', 'waiting') else None)
+    result['recommendation'] = assistant_recommendation(result, filters)
     return result
 
 

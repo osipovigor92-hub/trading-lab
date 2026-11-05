@@ -1,6 +1,7 @@
 """Read-only Bybit screener. Bounded background cache; no trading or disk writes."""
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 import json
 import math
 import re
@@ -9,10 +10,19 @@ import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import selection
+from exchange_data import ExchangeData
 from market_alerts import ASSISTANT_KINDS, MarketAlerts
 
 SYMBOL = re.compile(r"^[A-Z0-9]{2,24}USDT$")
 INTERVALS = {"1": 60, "5": 300, "15": 900, "60": 3600}
+CLOSE_PUBLICATION_SECONDS = 10
+
+
+class _CandlePublicationPending(ValueError):
+    """A newly closed bar is absent during the exchange publication window."""
+    def __init__(self, candle_end):
+        super().__init__("Waiting for newly closed candle publication")
+        self.candle_end = candle_end
 
 
 def number(value):
@@ -24,17 +34,23 @@ def number(value):
     return result
 
 
-def public_api(endpoint, **params):
+def public_api(endpoint, _transport=None, **params):
     if endpoint not in ("tickers", "kline", "orderbook"):
         raise ValueError("Unsupported public endpoint")
-    query = urlencode(dict(category="linear", **params))
-    request = Request("https://api.bybit.com/v5/market/" + endpoint + "?" + query,
-                      headers={"User-Agent": "trading-lab-screener/1"})
-    with urlopen(request, timeout=6) as response:
-        body = response.read(2_000_001)
-    if len(body) > 2_000_000:
-        raise ValueError("Public response too large")
-    data = json.loads(body)
+    query = dict(category="linear", **params)
+    if _transport is not None:
+        # The owned adapter reuses two bounded, verified HTTPS connections and
+        # retains configured proxies. Only these fixed public routes are used.
+        data = _transport._json("bybit", "/v5/market/" + endpoint, query,
+                                max_bytes=2_000_000)
+    else:
+        request = Request("https://api.bybit.com/v5/market/" + endpoint + "?" + urlencode(query),
+                          headers={"User-Agent": "trading-lab-screener/1"})
+        with urlopen(request, timeout=6) as response:
+            body = response.read(2_000_001)
+        if len(body) > 2_000_000:
+            raise ValueError("Public response too large")
+        data = json.loads(body)
     if data.get("retCode") != 0:
         raise ValueError("Bybit: " + str(data.get("retMsg", "API error"))[:120])
     stamp = number(data["time"]) / 1000
@@ -109,6 +125,10 @@ def closed_candles(result, stamp, interval):
     if any(b["time"] - a["time"] != step for a, b in zip(bars, bars[1:])):
         raise ValueError("Candle gap or duplicate")
     if not 0 <= stamp - (bars[-1]["time"] + step) < step:
+        expected = int(stamp // step) * step
+        if (bars[-1]["time"] + step == expected - step and
+                0 <= stamp - expected <= CLOSE_PUBLICATION_SECONDS):
+            raise _CandlePublicationPending(expected)
         raise ValueError("Last closed candle is stale")
     return bars
 
@@ -315,37 +335,47 @@ class MarketData:
     """Two workers, bounded cache and an optional public screener prefetcher."""
     TTL = {"screener": 5, "chart": 25, "book": 2}
 
-    def __init__(self, api=public_api, clock=time.monotonic, background=False):
-        self.api, self.clock = api, clock
+    def __init__(self, api=public_api, clock=time.monotonic, background=False, wall_clock=None):
+        self._transport = ExchangeData() if api is public_api else None
+        self.api = api
+        if self._transport is not None:
+            self.api = lambda endpoint, **params: public_api(endpoint, _transport=self._transport, **params)
+        self.clock = clock
+        self.wall = wall_clock or (lambda: time.time())
         self.lock = threading.Lock()
         self.entries = OrderedDict()
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="public-market")
         self.selection_lock = threading.Lock()
         self.selection_watch = []
         self.selection_until = 0
-        self.selection_cursor = 0
+        self.selection_queue = OrderedDict()
         self.book_history = OrderedDict()
         self.alerts = MarketAlerts()
         self.stop_event = None
+        self.wake_event = threading.Event()
+        self._closed = False
         self.prefetcher = None
         if background:
             self.start_background()
 
     def start_background(self):
         """Keep the shared top-of-market snapshot warm without a browser tab."""
-        if self.prefetcher:
+        if self.prefetcher or self._closed:
             return
         self.stop_event = threading.Event()
 
         def refresh():
             while not self.stop_event.is_set():
+                self.wake_event.clear()
                 try:
                     self.get("screener")
                     self._selection_tick()
                     self._alerts_tick()
                 except Exception:
                     pass
-                self.stop_event.wait(1)
+                # Refill the existing two slots when work completes, without
+                # waiting for the next timer tick or creating another worker.
+                self.wake_event.wait(1)
 
         self.prefetcher = threading.Thread(target=refresh, name="public-screener-prefetch", daemon=True)
         self.prefetcher.start()
@@ -354,7 +384,7 @@ class MarketData:
         with self.lock:
             return self.entries.get(key, {}).get('data')
 
-    def _alert_cache(self):
+    def _alert_cache(self, now=None):
         """Copy verified cached packets, including failed-refresh flags, without scheduling jobs."""
         with self.lock:
             packets = {}
@@ -362,15 +392,27 @@ class MarketData:
                 packet = dict(entry.get('data') or dict(status='pending', updated=0))
                 if entry.get('error'):
                     packet['refresh_error'] = entry['error']
+                if self._chart_waiting_for_close(key, entry, now):
+                    packet['refresh_error'] = 'Waiting for newest closed candle'
+                if self._closed:
+                    packet['refresh_error'] = 'Market service closed'
                 packets[key] = packet
             return packets
 
+    def _chart_waiting_for_close(self, key, entry, now=None):
+        data = entry.get('data')
+        if key[0] != 'chart' or not data or not selection.finite(data.get('candle_end')):
+            return False
+        step = INTERVALS[key[2]]
+        now = self.wall() if now is None else now
+        return data['candle_end'] < int((now - 2) // step) * step
+
     def _alerts_tick(self, now=None):
-        now = time.time() if now is None else now
+        now = self.wall() if now is None else now
         active = self.alerts.active(now)
         if not active:
             return
-        packets = self._alert_cache()
+        packets = self._alert_cache(now)
         tickers = packets.get(('screener', '', ''), {})
         charts = {key[1]: value for key, value in packets.items() if key[0] == 'chart' and key[2] == '1'}
         books = {key[1]: value for key, value in packets.items() if key[0] == 'book'}
@@ -383,7 +425,7 @@ class MarketData:
         filters = selection.parse_filters(filters)
         # Reuse the same bounded shortlist and workers as smart selection.
         self.selection_snapshot(filters, search, now, watch, priority)
-        now = time.time() if now is None else now
+        now = self.wall() if now is None else now
         key = self.alerts.register(filters, search, now, watch, priority)
         self._alerts_tick(now)
         return self.alerts.snapshot(key, now)
@@ -405,7 +447,7 @@ class MarketData:
         watched = selection.parse_watch(watch)
         if not isinstance(search, str) or not re.fullmatch(r'[A-Z0-9]{0,24}', search):
             raise ValueError('Некорректный поиск монеты')
-        now = time.time() if now is None else now
+        now = self.wall() if now is None else now
         tickers = self.get('screener')
         stamp = tickers.get('updated', 0)
         if tickers.get('status') != 'ok' or not selection.fresh(stamp, now, 45):
@@ -414,11 +456,14 @@ class MarketData:
         shortlist = selection.assistant_shortlist if priority == 'activity' else selection.shortlist
         eligible = shortlist(tickers['rows'], stamp, filters, search, watched, now)
         with self.selection_lock:
+            changed = self.selection_watch != eligible[:selection.ANALYSIS_LIMIT]
             self.selection_watch = eligible[:selection.ANALYSIS_LIMIT]
             self.selection_until = self.clock() + 30
             histories = {symbol: list(values) for symbol, values in self.book_history.items()}
             watch = list(self.selection_watch)
-        packets = self._alert_cache()
+        if changed:
+            self.wake_event.set()
+        packets = self._alert_cache(now)
         quote_available = not tickers.get('error') and not tickers.get('refresh_error')
         rows = []
         for row in tickers['rows']:
@@ -429,6 +474,7 @@ class MarketData:
         counts = {state: sum(r['selection']['status'] == state for r in rows)
                   for state in ('passed', 'pending', 'rejected')}
         return dict(status='ok', source_time=stamp, rows=rows, filters=filters,
+                    quote_snapshot=deepcopy(tickers),
                     counts=counts, analyzing=watch, analysis_limit=selection.ANALYSIS_LIMIT,
                     priority=priority,
                     discovery_note='Наблюдение первым; min(|24ч|,20)/20 + min(диапазон24ч,30)/30; затем оборот'
@@ -441,11 +487,30 @@ class MarketData:
             self.selection_snapshot()
         with self.selection_lock:
             if not self.selection_watch:
+                self.selection_queue.clear()
                 return
-            symbol = self.selection_watch[self.selection_cursor % len(self.selection_watch)]
-            self.selection_cursor += 1
-        self.get('chart', symbol, '1')
-        self.get('book', symbol)
+            watch = list(self.selection_watch)
+            added = [symbol for symbol in watch if ('chart', symbol) not in self.selection_queue]
+            tasks = ([('chart', symbol) for symbol in added] +
+                     [task for task in self.selection_queue if task[1] in watch] +
+                     [('book', symbol) for symbol in added])
+            self.selection_queue = OrderedDict((task, None) for task in tasks)
+        # New charts warm first. Once attempted, both kinds share a persistent
+        # rotation. A full pool leaves the next due task at the front, rather
+        # than advancing on every timer/wakeup and skipping the same books.
+        blocked = False
+        for kind, symbol in tasks:
+            self.get(kind, symbol, '1', refresh=not blocked)
+            if blocked:
+                continue
+            with self.lock:
+                entry = self.entries.get((kind, symbol, '1' if kind == 'chart' else ''))
+                blocked = (not self._closed and entry is not None and entry['future'] is None and
+                           self._refresh_due((kind, symbol, '1'), entry, self.clock()))
+            if not blocked:
+                with self.selection_lock:
+                    if (kind, symbol) in self.selection_queue:
+                        self.selection_queue.move_to_end((kind, symbol))
         # Completed books are harvested by the shared cache on each background tick.
         # Record all watched symbols now rather than waiting a full shortlist rotation.
         with self.selection_lock:
@@ -453,7 +518,7 @@ class MarketData:
         for watched in watch:
             book = self._peek(('book', watched, ''))
             if book:
-                self._record_book(watched, book, time.time())
+                self._record_book(watched, book, self.wall())
 
     def _record_book(self, symbol, book, now):
         if (book.get('status') != 'ok' or book.get('symbol') != symbol or
@@ -483,7 +548,15 @@ class MarketData:
         result, stamp = self.api("orderbook", symbol=symbol, limit=200)
         return orderbook_analysis(symbol, result, stamp)
 
-    def get(self, kind, symbol="", interval="5"):
+    def _refresh_due(self, key, entry, now):
+        due = entry['until'] <= now
+        if key[0] == 'chart' and entry['data'] and not entry['error']:
+            step = INTERVALS[key[2]]
+            expected = int((self.wall() - 2) // step) * step
+            due = due or entry['data']['candle_end'] < expected
+        return due
+
+    def get(self, kind, symbol="", interval="5", *, refresh=True):
         if kind not in ("screener", "chart", "book"):
             raise ValueError("Unknown analysis")
         if kind != "screener" and (not SYMBOL.fullmatch(symbol) or interval not in INTERVALS):
@@ -500,9 +573,22 @@ class MarketData:
                     cached["data"] = job.result()
                     cached["error"] = ""
                     cached["until"] = now + self.TTL[cache_key[0]]
+                    cached["publication_end"] = None
+                    if cache_key[0] == 'chart':
+                        step = INTERVALS[cache_key[2]]
+                        next_close = cached['data']['candle_end'] + step + 2
+                        cached['until'] = min(cached['until'], now + max(0, next_close - self.wall()))
+                except _CandlePublicationPending as exc:
+                    # Preserve original proof and fail closed until the actual
+                    # newest closed bar arrives; a retry is admitted after 1s.
+                    publishing = -2 <= self.wall() - exc.candle_end <= CLOSE_PUBLICATION_SECONDS
+                    cached["error"] = str(exc) if publishing else 'Last closed candle is stale'
+                    cached["until"] = now + (1 if publishing else 20)
+                    cached["publication_end"] = exc.candle_end if publishing else None
                 except Exception as exc:
                     cached["error"] = type(exc).__name__ + ": " + str(exc)[:160]
                     cached["until"] = now + 20
+                    cached["publication_end"] = None
                 cached["future"] = None
             entry = self.entries.get(key)
             if entry is None:
@@ -511,13 +597,17 @@ class MarketData:
                     if victim is None:
                         return dict(status="pending", updated=0, error="Очередь анализа заполнена")
                     del self.entries[victim]
-                entry = dict(data=None, until=0, future=None, error="")
+                entry = dict(data=None, until=0, future=None, error="", publication_end=None)
                 self.entries[key] = entry
             self.entries.move_to_end(key)
-            if entry["until"] <= now and entry["future"] is None:
+            # Wall-clock boundary checks also cover direct detail-chart calls,
+            # including clock adjustment after the monotonic TTL was set.
+            due = self._refresh_due(key, entry, now)
+            if refresh and due and entry["future"] is None and not self._closed:
                 pending = sum(v["future"] is not None for v in self.entries.values())
                 if pending < 2:
                     entry["future"] = self.pool.submit(self._load, kind, symbol, interval)
+                    entry['future'].add_done_callback(lambda _job: self.wake_event.set())
             data = dict(entry["data"] or dict(status="pending", updated=0))
             data["refreshing"] = entry["future"] is not None
             if entry["error"]:
@@ -527,11 +617,25 @@ class MarketData:
                     data.update(status="error", error=entry["error"])
                 else:
                     data["refresh_error"] = entry["error"]
+            if entry.get('publication_end') is not None:
+                data['refresh_reason'] = 'awaiting_close'
+            if self._chart_waiting_for_close(key, entry):
+                data['refresh_error'] = 'Waiting for newest closed candle'
+                step = INTERVALS[interval]
+                boundary = int(self.wall() // step) * step
+                data['refresh_reason'] = 'awaiting_close' if 2 <= self.wall() - boundary <= CLOSE_PUBLICATION_SECONDS else None
+            if self._closed:
+                data.update(status='error', error='Market service closed', refreshing=False)
             return data
 
     def close(self):
+        with self.lock:
+            self._closed = True
         if self.stop_event:
             self.stop_event.set()
+        self.wake_event.set()
         if self.prefetcher:
             self.prefetcher.join(timeout=2)
         self.pool.shutdown(wait=True)
+        if self._transport is not None:
+            self._transport.close()
