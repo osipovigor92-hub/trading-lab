@@ -2,7 +2,7 @@
 const {chromium}=require('playwright');
 const {spawn}=require('node:child_process'),path=require('node:path'),fs=require('node:fs'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'..'),port=18788;
-const sections={market:'Скринер',densities:'Плотности',alerts:'Алерты',positions:'Позиции',settings:'Настройки'};
+const sections={market:'Скринер',densities:'Плотности',alerts:'Алерты',strategies:'Стратегии',positions:'Позиции',settings:'Настройки'};
 const until=async(check,label)=>{const end=Date.now()+15000;while(Date.now()<end){if(await check())return;await new Promise(resolve=>setTimeout(resolve,100));}throw Error(label);};
 async function navigate(page,key,width){
  const nav=page.locator(width<=760?'.mobile-nav':'#dashboard-tabs');
@@ -26,6 +26,7 @@ async function navigate(page,key,width){
     if(key==='market')await until(()=>page.locator('.chart-tile').evaluateAll(nodes=>nodes.length>0&&nodes.every(node=>node.dataset.status==='ok')),'Chart tiles not ready');
     if(key==='densities'){await page.locator('#densities-health[data-status="ok"],#densities-health[data-status="partial"]').waitFor({state:'attached'});await page.locator('.density-stable-card').first().waitFor();}
     if(key==='alerts')await page.locator('.fresh-alert-health[data-status="ok"]').waitFor({state:'attached'});
+    if(key==='strategies')await page.locator('.strategy-status[data-status="ok"]').waitFor({state:'attached'});
     if(key==='positions')await until(()=>page.locator('#manual-paper').textContent().then(text=>text.includes('Баланс')),'Manual PAPER not ready');
     await page.screenshot({path:path.join(root,'artifacts',`assistant-${key}-${width}.png`),fullPage:true});
     evidence.push({width,page:key,overflow:await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)});
@@ -53,6 +54,6 @@ async function navigate(page,key,width){
    assert.deepEqual(errors,[]);await page.close();
   }
   fs.writeFileSync(path.join(root,'artifacts','assistant-visual.json'),JSON.stringify(evidence,null,2));
-  console.log('Visual assistant check passed: 21 synthetic captures of five pages, table and expanded chart at 1280/390/320 px, no overflow or browser errors.');
+  console.log('Visual assistant check passed: 24 synthetic captures of six pages, table and expanded chart at 1280/390/320 px, no overflow or browser errors.');
  }catch(error){console.error(log);throw error;}finally{if(browser)await browser.close();server.kill('SIGTERM');}
 })().catch(error=>{console.error(error);process.exitCode=1;});
