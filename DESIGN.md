@@ -91,7 +91,7 @@ components:
 
 The approved concept is a dark working surface built around legible data, restrained cyan actions and clear selected states. Flat panels and fine dividers contain dense measurements without ornamental elevation. Green and rose indicate direction; muted text carries context and unavailable states.
 
-The implemented identity is shared by all five pages. A compact header keeps navigation quiet, and the screener's selected coin remains recognizable across its watch entry, table row and detail panel. Numbers change in place. The visual system makes observation and manual action easy to distinguish.
+The implemented identity is shared by the six pages. A compact header keeps navigation quiet, and the screener's selected coin remains recognizable across its watch entry, table row and detail panel. Numbers change in place. The visual system makes observation and manual action easy to distinguish.
 
 **Key Characteristics:**
 
@@ -103,7 +103,7 @@ The implemented identity is shared by all five pages. A compact header keeps nav
 
 ## Colors
 
-The frontmatter records the final cascade: `screener.css` overrides the global palette declared by `style.css` and is loaded on every page.
+The frontmatter records the default graphite palette. `theme.css` adds a light palette with pale blue-grey canvas, white panels, dark ink, teal actions and deeper green/rose direction colors. Both palettes share the same roles for controls, borders, text and chart colors. The persisted choice applies before styles paint; the header and Settings both switch it. Canvas charts recolor in place without clearing history, position or levels.
 
 Primary cyan identifies actions, focus and activity emphasis. Rising green and falling rose express observed direction. They do not grade safety or profitability. Graphite background, panel, control and border tones establish containment; near-white text and muted text establish reading priority. The chart uses its own fast EMA, slow EMA and VWAP colors, named in the legend.
 
@@ -145,7 +145,7 @@ Primary actions have a solid cyan background, dark text and a five-pixel radius.
 
 ### Navigation and counts
 
-Desktop labels occupy the header with a cyan underline and stronger text for the active page. Mobile navigation has five labeled icons and a subdued selected background. Alert counts use compact badges and represent fresh events, not the retained history total.
+Desktop labels occupy the header with an accent underline and stronger text for the active page. Mobile navigation has six labeled icons and a subdued selected background. Alert counts use compact badges and represent fresh events, not the retained history total.
 
 ### Panels and watch entries
 

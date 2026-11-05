@@ -3,12 +3,20 @@
   const PERIODS = {1:60, 5:300, 15:900, 60:3600, 240:14400, 1440:86400};
   const LABELS = {1:'1м',5:'5м',15:'15м',60:'1ч',240:'4ч',1440:'1д'};
   const finite = n => typeof n === 'number' && Number.isFinite(n);
-  const number = n => finite(n) ? (Math.abs(n) > 0 && Math.abs(n) < .00001
-    ? n.toLocaleString('ru-RU', {notation:'scientific', maximumSignificantDigits:6})
-    : n.toLocaleString('ru-RU', {maximumSignificantDigits:8})) : '—';
-  const utc = t => new Date(t * 1000).toLocaleString('ru-RU', {
+  const compact = new Intl.NumberFormat('ru-RU',{notation:'scientific',maximumSignificantDigits:6}), decimal=new Intl.NumberFormat('ru-RU',{maximumSignificantDigits:8});
+  const number = n => finite(n) ? (Math.abs(n) > 0 && Math.abs(n) < .00001 ? compact : decimal).format(n) : '—';
+  const utcDate = new Intl.DateTimeFormat('ru-RU',{
     timeZone:'UTC', day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'
-  }) + ' UTC';
+  }),utcTime=new Intl.DateTimeFormat('ru-RU',{timeZone:'UTC',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const utc = t => utcDate.format(t*1000)+' UTC';
+  const candlePoint = ({time,open,high,low,close})=>({time,open,high,low,close});
+  function palette(){
+    const style=scope.getComputedStyle?.(document.documentElement);
+    const tokens={bg:'#101214',text:'#a7b3be',grid:'#2a2d31',cursor:'#69737e',up:'#26a69a',down:'#ef5350',live:'#55cee9',
+      'ema-fast':'#4bd0f5','ema-slow':'#a78bcc',vwap:'#e9bc68',support:'#a78bcc',resistance:'#e9bc68',
+      'density-bid':'#59d5a1','density-ask':'#f1848b',unconfirmed:'#a7b3be'};
+    return Object.fromEntries(Object.entries(tokens).map(([key,fallback])=>[key,style?.getPropertyValue('--chart-'+key).trim()||fallback]));
+  }
   function barsFrom(packet, period) {
     if (!Array.isArray(packet?.candles) || !packet.candles.length || packet.candles.length > 180) return null;
     const result = [];
@@ -80,11 +88,17 @@
     const credit=element('a','exchange-chart-attribution','TradingView Lightweight Charts™ · Copyright (с) 2025 TradingView, Inc.');
     credit.href='https://www.tradingview.com/'; credit.target='_blank'; credit.rel='noopener noreferrer';
     host.replaceChildren(plot,readout,credit);
+    let colors=palette();
+    const colorOptions=()=>({
+      layout:{background:{type:L.ColorType.Solid,color:colors.bg},textColor:colors.text,fontFamily:'Inter, Segoe UI, sans-serif',fontSize:11,attributionLogo:true},
+      grid:{vertLines:{visible:false},horzLines:{color:colors.grid,style:L.LineStyle.Dotted}},
+      crosshair:{mode:L.CrosshairMode.Normal,vertLine:{color:colors.cursor,style:L.LineStyle.Dashed},horzLine:{color:colors.cursor,style:L.LineStyle.Dashed}}
+    });
+    const candleColors=()=>({upColor:colors.up,downColor:colors.down,wickUpColor:colors.up,wickDownColor:colors.down});
+    const lineColors=()=>[colors['ema-fast'],colors['ema-slow'],colors.vwap];
     const chart=L.createChart(plot, {
       autoSize:false,
-      layout:{background:{type:L.ColorType.Solid,color:'#101214'},textColor:'#a7b3be',fontFamily:'Inter, Segoe UI, sans-serif',fontSize:11,attributionLogo:true},
-      grid:{vertLines:{visible:false},horzLines:{color:'#2a2d31',style:L.LineStyle.Dotted}},
-      crosshair:{mode:L.CrosshairMode.Normal,vertLine:{color:'#69737e',style:L.LineStyle.Dashed},horzLine:{color:'#69737e',style:L.LineStyle.Dashed}},
+      ...colorOptions(),
       rightPriceScale:{borderVisible:false,scaleMargins:{top:.12,bottom:.08}},
       leftPriceScale:{visible:false},
       timeScale:{borderVisible:false,timeVisible:true,secondsVisible:false,rightOffset:3,barSpacing:5,minBarSpacing:2,shiftVisibleRangeOnNewBar:false,lockVisibleTimeRangeOnResize:true},
@@ -94,7 +108,7 @@
       kineticScroll:{mouse:false,touch:true}
     });
     const candles=chart.addSeries(L.CandlestickSeries, {
-      upColor:'#26a69a',downColor:'#ef5350',wickUpColor:'#26a69a',wickDownColor:'#ef5350',borderVisible:false,
+      ...candleColors(),borderVisible:false,
       priceLineVisible:true,lastValueVisible:true,priceLineStyle:L.LineStyle.Dashed,
       priceFormat:{type:'custom',formatter:number,minMove:.00000001}
     });
@@ -102,7 +116,7 @@
     let source='', period=PERIODS[String(options.interval)]||300, bars=[], byTime=new Map(), selectedTime=null;
     let volume=null, indicatorLines=[], disposed=false, confirmed=false, updating=false;
     let candleData=[],volumeData=[],indicatorValues={ema20:[],ema50:[],vwap60:[]},size={width:0,height:0},volumeHeight=0,precision=null;
-    let liveView=null,liveCandle=null,quoteLine=null;
+    let liveView=null,liveCandle=null,quoteLine=null,quoteKey='',levelSettings={};
     const priceLines=new Map();
     let initial={exchange:options.exchange||'',symbol:options.symbol||'',interval:String(options.interval||'5')};
     function getViewport() {
@@ -126,7 +140,7 @@
       sourceLabel.textContent=(initial.exchange ? initial.exchange.toUpperCase()+' · ' : '')+initial.symbol+' · '+(LABELS[initial.interval]||initial.interval)+(confirmed?'':updating?' · обновляем закрытую свечу':' · не подтверждено')+(isLive?(b.closed?' · закрылась · проверяем':' · формируется'):'');
       host.dataset.chartConfirmed=String(confirmed);
       host.classList.toggle('is-unconfirmed',!confirmed);
-      timeLabel.textContent=b?utc(b.time)+(isLive?' · обновление '+new Date((b.source_ts??b.received_at)*1000).toLocaleTimeString('ru-RU',{timeZone:'UTC'})+' UTC':''):'—';
+      timeLabel.textContent=b?utc(b.time)+(isLive?' · обновление '+utcTime.format((b.source_ts??b.received_at)*1000)+' UTC':''):'—';
       if (b) host.dataset.chartSelectedTime=String(b.time); else delete host.dataset.chartSelectedTime;
       for (const [key,label] of [['open','O'],['high','H'],['low','L'],['close','C'],['volume','V']]) {
         values[key].textContent=label+' '+(b?number(b[key]):'—');
@@ -153,35 +167,44 @@
       return view && view.exchange===initial.exchange && view.symbol===initial.symbol && String(view.interval)===initial.interval && view.status==='connected';
     }
     function updateLiveState() {
-      const now=Date.now()/1000,valid=liveMatches(liveView);
-      liveCandle=valid?liveFrom(liveView,now):null;
+      const now=Date.now()/1000,valid=liveMatches(liveView),previous=liveCandle,next=valid?liveFrom(liveView,now):null;
+      liveCandle=samePoint(next,previous)?previous:next;
       const quote=valid&&freshLive(liveView.quote,10,now)&&finite(liveView.quote.price)&&liveView.quote.price>0?liveView.quote:null;
-      if (quote) {
-        const options={price:quote.price,color:'#55cee9',lineWidth:1,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true,title:'Цена сейчас'};
+      const key=quote?[quote.price,quote.source_ts,quote.received_at,colors.live].join('|'):'',quoteChanged=key!==quoteKey;quoteKey=key;
+      if (quote&&quoteChanged) {
+        const options={price:quote.price,color:colors.live,lineWidth:1,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true,title:'Цена сейчас'};
         if (!quoteLine) quoteLine=candles.createPriceLine(options);
-        else if (quoteLine.options().price!==quote.price) quoteLine.applyOptions(options);
+        else if (quoteLine.options().price!==quote.price||quoteLine.options().color!==colors.live) quoteLine.applyOptions(options);
         host.dataset.chartLivePrice=String(quote.price);
         quoteLabel.hidden=false;
-        quoteLabel.textContent='Цена сейчас '+number(quote.price)+' · '+new Date((quote.source_ts??quote.received_at)*1000).toLocaleTimeString('ru-RU',{timeZone:'UTC'})+' UTC';
+        quoteLabel.textContent='Цена сейчас '+number(quote.price)+' · '+utcTime.format((quote.source_ts??quote.received_at)*1000)+' UTC';
         quoteLabel.title=(quote.source_ts===null?'Получено: ':'Данные биржи: ')+utc(quote.source_ts??quote.received_at);
-      } else {if(quoteLine)candles.removePriceLine(quoteLine);quoteLine=null;delete host.dataset.chartLivePrice;quoteLabel.hidden=true;quoteLabel.textContent='';quoteLabel.title='';}
-      host.dataset.chartLive=String(!!liveCandle);
-      host.dataset.chartLiveStatus=valid?'connected':liveView?.status==='connecting'?'connecting':'unavailable';
+      } else if (!quote&&(quoteChanged||quoteLine)) {if(quoteLine)candles.removePriceLine(quoteLine);quoteLine=null;delete host.dataset.chartLivePrice;quoteLabel.hidden=true;quoteLabel.textContent='';quoteLabel.title='';}
+      const hasLive=String(!!liveCandle),status=valid?'connected':liveView?.status==='connecting'?'connecting':'unavailable';
+      if(host.dataset.chartLive!==hasLive)host.dataset.chartLive=hasLive;
+      if(host.dataset.chartLiveStatus!==status)host.dataset.chartLiveStatus=status;
+      return previous!==liveCandle||quoteChanged;
     }
     function displayCandles() {
-      const data=bars.map(({time,open,high,low,close})=>({time,open,high,low,close}));
-      if (liveCandle) {const {time,open,high,low,close}=liveCandle;data.push({time,open,high,low,close});}
+      const data=bars.map(candlePoint);
+      if (liveCandle) data.push(candlePoint(liveCandle));
       return data;
     }
     function setLive(view) {
       if (disposed) return;
-      liveView=view;updateLiveState();
-      const range=chart.timeScale().getVisibleLogicalRange(),last=candleData.length-1,next=displayCandles();
-      const atLatest=range && range.to>=last-1.5;
-      const changed=syncSeries(candles,next,candleData);candleData=next;
-      if (changed && range && atLatest && next.length-1!==last) chart.timeScale().setVisibleLogicalRange({from:range.from+next.length-1-last,to:range.to+next.length-1-last});
-      else if (changed && range) chart.timeScale().setVisibleLogicalRange(range);
-      showReadout();publishViewport();
+      const prior=liveCandle;liveView=view;const readoutChanged=updateLiveState();
+      // Quotes and revisions of the forming candle never scan closed history.
+      if (prior!==liveCandle) {
+        const lengthChanged=!!prior!==!!liveCandle,last=candleData.length-1,range=lengthChanged?chart.timeScale().getVisibleLogicalRange():null;
+        if (liveCandle) {
+          const point=candlePoint(liveCandle);
+          if(!prior){candles.update(point);candleData.push(point);}
+          else if(!samePoint(candleData.at(-1),point)){candles.update(point);candleData[last]=point;}
+        } else if(prior){candleData=candleData.slice(0,-1);candles.setData(candleData);}
+        if(range){const shift=range.to>=last-1.5?candleData.length-1-last:0;chart.timeScale().setVisibleLogicalRange({from:range.from+shift,to:range.to+shift});}
+        if(lengthChanged)publishViewport();
+      }
+      if(readoutChanged)showReadout();
     }
     function updateVolumeHeight() {
       if (!volume || plot.clientHeight<=0) return;
@@ -216,12 +239,12 @@
       const wanted=new Map();
       for (const level of (settings.levels||[]).slice(0,12)) {
         if (!finite(level.price)||level.price<=0||!['support','resistance'].includes(level.type)) continue;
-        wanted.set('manual:'+level.id,{price:level.price,color:level.type==='support'?'#a78bcc':'#e9bc68',lineWidth:2,lineStyle:L.LineStyle.Solid,axisLabelVisible:true,title:level.type==='support'?'Подд.':'Сопр.'});
+        wanted.set('manual:'+level.id,{price:level.price,color:colors[level.type],lineWidth:2,lineStyle:L.LineStyle.Solid,axisLabelVisible:true,title:level.type==='support'?'Подд.':'Сопр.'});
       }
       for (const level of (settings.densities||[]).slice(0,6)) {
         if (!finite(level.price)||level.price<=0||!['bid','ask'].includes(level.side)) continue;
         const amount=finite(level.notional)?Math.round(level.notional/1000)+'к':'';
-        wanted.set('density:'+level.id,{price:level.price,color:level.confirmed?(level.side==='bid'?'#59d5a1':'#f1848b'):'#a7b3be',lineWidth:1,lineStyle:L.LineStyle.Dotted,axisLabelVisible:true,title:(level.confirmed?'':'? ')+(level.side==='bid'?'Пок. ':'Прод. ')+amount});
+        wanted.set('density:'+level.id,{price:level.price,color:level.confirmed?colors['density-'+level.side]:colors.unconfirmed,lineWidth:1,lineStyle:L.LineStyle.Dotted,axisLabelVisible:true,title:(level.confirmed?'':'? ')+(level.side==='bid'?'Пок. ':'Прод. ')+amount});
       }
       for (const [key,line] of priceLines) if (!wanted.has(key)) {candles.removePriceLine(line);priceLines.delete(key);}
       for (const [key,options] of wanted) {
@@ -250,7 +273,7 @@
       const changed=source!==nextSource;
       if (changed) {
         initial=identity; source=nextSource; period=PERIODS[identity.interval]||300;
-        liveView=null;liveCandle=null;if(quoteLine)candles.removePriceLine(quoteLine);quoteLine=null;
+        liveView=null;liveCandle=null;if(quoteLine)candles.removePriceLine(quoteLine);quoteLine=null;quoteLabel.hidden=true;quoteLabel.textContent='';quoteLabel.title='';quoteKey='';delete host.dataset.chartLivePrice;
         bars=[]; byTime.clear(); selectedTime=null; candleData=[]; precision=null; candles.setData([]);
         if (volume) volume.setData([]);volumeData=[];
         for (const s of indicatorLines) s.setData([]);indicatorValues={ema20:[],ema50:[],vwap60:[]};
@@ -270,7 +293,7 @@
       } else if (!wantedVolume && volume) {chart.removeSeries(volume); volume=null;volumeData=[];volumeHeight=0;}
       const wantIndicators=settings.indicators??options.indicators??false;
       if (wantIndicators && !indicatorLines.length) {
-        indicatorLines=['#4bd0f5','#a78bcc','#e9bc68'].map(color=>chart.addSeries(L.LineSeries,{color,lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}));
+        indicatorLines=lineColors().map(color=>chart.addSeries(L.LineSeries,{color,lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}));
         indicatorsCreated=true;
       } else if (!wantIndicators && indicatorLines.length) {for (const s of indicatorLines) chart.removeSeries(s); indicatorLines=[];indicatorValues={ema20:[],ema50:[],vwap60:[]};}
       const barsChanged=!!parsed && parsed!==bars;
@@ -291,12 +314,12 @@
           else if (nativeChanged && anchor) chart.timeScale().setVisibleLogicalRange({from:(anchor.from-bars[0].time)/period,to:(anchor.to-bars[0].time)/period});
       }
       if (volume && (barsChanged || volumeCreated)) {
-        const next=bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?'#26a69a80':'#ef535080'}));syncSeries(volume,next,volumeData);volumeData=next;
+        const next=volumePoints();syncSeries(volume,next,volumeData);volumeData=next;
       }
       if (indicatorLines.length && (barsChanged || indicatorsCreated)) {
         const all=indicatorData(bars); ['ema20','ema50','vwap60'].forEach((key,i)=>syncSeries(indicatorLines[i],all[key],indicatorValues[key]));indicatorValues=all;
       }
-      updateLevels(settings);
+      levelSettings={levels:settings.levels,densities:settings.densities};updateLevels(levelSettings);
       // The same REST candle window may be polled while a live sample expires.
       // Re-evaluate its own stamps without re-submitting closed auxiliary series.
       if (!barsChanged) setLive(liveView);
@@ -304,6 +327,14 @@
       empty.textContent=packet?.error?'Свечи недоступны · повторяем запрос':'Ожидаем свечи…';
       showReadout(); updateVolumeHeight(); publishViewport();
     }
+    function volumePoints(){return bars.map(b=>({time:b.time,value:b.volume,color:(b.close>=b.open?colors.up:colors.down)+'80'}));}
+    function themeChanged(){
+      colors=palette();chart.applyOptions(colorOptions());candles.applyOptions(candleColors());
+      const lines=lineColors();indicatorLines.forEach((line,i)=>line.applyOptions({color:lines[i]}));
+      if(volume){volumeData=volumePoints();volume.setData(volumeData);}
+      updateLevels(levelSettings);setLive(liveView);
+    }
+    document.addEventListener?.('lab-theme',themeChanged);
     const crosshair=event=>{if(disposed)return;selectedTime=typeof event.time==='number'&&(byTime.has(event.time)||liveCandle?.time===event.time)?event.time:null;showReadout();};
     const click=event=>{if(disposed||!bars.length||!event.point||event.paneIndex!==0)return;const value=candles.coordinateToPrice(event.point.y);if(finite(value)&&value>0)options.onPriceClick?.(value);};
     const keydown=event=>{
@@ -325,6 +356,7 @@
     function dispose() {
       if (disposed) return;
       observer.disconnect();
+      document.removeEventListener?.('lab-theme',themeChanged);
       chart.unsubscribeCrosshairMove(crosshair); chart.unsubscribeClick(click); chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishViewport);
       host.removeEventListener('keydown',keydown); plot.removeEventListener('pointerdown',focus);
       chart.remove(); disposed=true; host.replaceChildren(); delete host.labExchangeChart;

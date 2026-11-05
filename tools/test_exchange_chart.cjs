@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 // Count calls at the native chart boundary, rather than timing this machine.
 // Repeated snapshots must not resubmit all five visible series or resize them.
 function renderer() {
- const calls={resize:0,paneHeight:0,setData:0,update:0,range:0},series=[];
+ const calls={resize:0,paneHeight:0,setData:0,update:0,range:0,rangeRead:0},series=[];
  class Element {
   constructor(){this.dataset={};this.children=[];this.clientWidth=600;this.clientHeight=300;this.className='';this.classList={add(){},toggle(){}};}
   append(...nodes){this.children.push(...nodes);}
@@ -13,7 +13,7 @@ function renderer() {
   addEventListener(){} removeEventListener(){} focus(){}
  }
  let range=null,crosshair;
- const scale={getVisibleLogicalRange:()=>range,setVisibleLogicalRange:r=>{range=r;calls.range++;},subscribeVisibleLogicalRangeChange(){},unsubscribeVisibleLogicalRangeChange(){}};
+ const scale={getVisibleLogicalRange:()=>{calls.rangeRead++;return range;},setVisibleLogicalRange:r=>{range=r;calls.range++;},subscribeVisibleLogicalRangeChange(){},unsubscribeVisibleLogicalRangeChange(){}};
  const pane={setHeight(){calls.paneHeight++;}};
  const chart={
   resize(){calls.resize++;},panes:()=>[pane,pane],timeScale:()=>scale,
@@ -83,7 +83,7 @@ test('forming ticks update only their own candle, keep closed indicators and his
  const quoteSpan=readoutSpan(r,'exchange-chart-live-quote');assert.match(quoteSpan.textContent,/Цена сейчас .* UTC/);assert.equal(quoteSpan.hidden,false);assert.equal(Number(r.host.dataset.chartSelectedClose),p.candles[20].close,'latest quote leaves selected historical OHLC intact');
  r.crosshair(view.candle.t);assert.equal(r.host.dataset.chartSelectedVolume,undefined,'unknown base volume is not fabricated');assert.match(readoutSpan(r,'exchange-chart-source').textContent,/формируется/);
  assert.equal(readoutSpan(r,'exchange-chart-live-state').hidden,false);assert.equal(readoutSpan(r,'exchange-chart-live-state').textContent,'формируется');
- r.clear();for(let i=0;i<100;i++)r.api.setLive(clone(view));assert.equal(r.calls.setData,0);assert.equal(r.calls.update,0);assert.equal(r.calls.resize,0);
+ r.clear();for(let i=0;i<100;i++)r.api.setLive(clone(view));assert.equal(r.calls.setData,0);assert.equal(r.calls.update,0);assert.equal(r.calls.resize,0);assert.equal(r.calls.rangeRead,0,'duplicate ticks never recompute the viewport');
  view.candle.close+=.25;r.api.setLive(view);assert.equal(r.calls.update,1);assert.equal(r.calls.setData,0);assert.equal(r.series[2].data.at(-1).time,p.candles.at(-1).t,'EMA proof excludes the forming candle');
  r.api.dispose();
 });

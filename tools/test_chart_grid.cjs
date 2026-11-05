@@ -1,5 +1,13 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {validChart,awaitingClose,refreshDue,natr,metricValue,rankRows,formatPrice}=require('../src/trading-panel/chart-grid.js');
+
+test('an admitted chart is read again in one second; unknown work and errors keep their backoff',()=>{
+ const t=1800000000,source=['bybit','BTCUSDT','5'],pending={status:'pending',queued:true};
+ assert.equal(refreshDue(pending,...source,t,t+.95),false);
+ assert.equal(refreshDue(pending,...source,t,t+1),true);
+ assert.equal(refreshDue({...pending,queued:false},...source,t,t+1),false);
+ assert.equal(refreshDue({...pending,error:'HTTP 429'},...source,t,t+1),false);
+});
 test('tiny contract prices stay nonzero and distinct in chart labels',()=>{
  assert.notEqual(formatPrice(2.345e-8),formatPrice(0));assert.notEqual(formatPrice(2.345e-8),formatPrice(3.345e-8));assert.match(formatPrice(2.345e-8),/2,345E-8/);assert.equal(formatPrice(NaN),'—');
 });
